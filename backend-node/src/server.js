@@ -80,6 +80,24 @@ app.post('/config', (req, res) => {
     }
 });
 
+// 获取配置状态（不暴露敏感信息）
+app.get('/config/status', (req, res) => {
+    try {
+        const hasApiKey = !!aiGirlfriend.apiKey;
+        const hasEmbeddingKey = !!aiGirlfriend.embeddingApiKey;
+
+        res.json({
+            isConfigured: hasApiKey,
+            hasEmbeddingConfig: hasEmbeddingKey,
+            currentModel: aiGirlfriend.modelName || null,
+            baseUrl: aiGirlfriend.baseUrl || null
+        });
+    } catch (e) {
+        console.error("[Config Status Error]", e);
+        res.status(500).json({ detail: e.message });
+    }
+});
+
 app.get('/chat/proactive', (req, res) => {
     try {
         if (!proactiveEngine) {

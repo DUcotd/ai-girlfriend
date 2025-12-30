@@ -37,6 +37,7 @@ import SettingsDialog from "./components/SettingsDialog";
 import MemoryDialog from "./components/MemoryDialog";
 import TaskDialog from "./components/TaskDialog";
 import WelcomeMessage from "./components/WelcomeMessage";
+import FirstRunWizard from "./components/FirstRunWizard";
 
 interface Message {
   role: "user" | "assistant" | "system";
@@ -62,6 +63,7 @@ export default function Home() {
   const [ttsEngine, setTtsEngine] = useState<"openai" | "local">("openai");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); // For mobile
   const [currentActivity, setCurrentActivity] = useState<{ activity: string; emoji: string } | null>(null); // 生活状态
+  const [isFirstRun, setIsFirstRun] = useState<boolean | null>(null); // 首次运行检测，null表示正在检测
 
   // Voice State
   const [isRecording, setIsRecording] = useState(false);
@@ -80,6 +82,19 @@ export default function Home() {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
   // Effects
+  // 首次运行检测
+  useEffect(() => {
+    const savedApiKey = localStorage.getItem("apiKey");
+    const hasCompletedSetup = localStorage.getItem("hasCompletedSetup");
+
+    // 如果没有 API Key 或没有完成过初始化，则认为是首次运行
+    if (!savedApiKey || !hasCompletedSetup) {
+      setIsFirstRun(true);
+    } else {
+      setIsFirstRun(false);
+    }
+  }, []);
+
   useEffect(() => {
     // 请求通知权限
     if ("Notification" in window) {
@@ -533,6 +548,55 @@ export default function Home() {
       setIsLoading(false);
     }
   };
+
+  // 首次运行向导完成后的回调
+  const handleFirstRunComplete = () => {
+    localStorage.setItem("hasCompletedSetup", "true");
+    setIsFirstRun(false);
+    // 重新加载配置
+    const savedKey = localStorage.getItem("apiKey");
+    if (savedKey) setApiKey(savedKey);
+    const savedBase = localStorage.getItem("baseUrl");
+    if (savedBase) setBaseUrl(savedBase);
+    const savedModel = localStorage.getItem("modelName");
+    if (savedModel) setModelName(savedModel);
+    // 同步到后端
+    if (savedKey) {
+      fetch(`${backendUrl}/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_key: savedKey,
+          base_url: savedBase || "https://api.openai.com/v1",
+          model_name: savedModel || "gpt-3.5-turbo",
+        }),
+      }).catch((err) => console.error("Config sync failed:", err));
+    }
+  };
+
+  // 加载中状态（正在检测是否首次运行）
+  if (isFirstRun === null) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-pink-100 via-purple-50 to-blue-100">
+        <div className="text-center">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-br from-pink-400 to-purple-500 flex items-center justify-center animate-pulse">
+            <Heart className="w-8 h-8 text-white" />
+          </div>
+          <p className="text-gray-500">加载中...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 首次运行显示向导
+  if (isFirstRun) {
+    return (
+      <FirstRunWizard
+        backendUrl={backendUrl}
+        onComplete={handleFirstRunComplete}
+      />
+    );
+  }
 
   return (
     <main className="flex h-screen overflow-hidden relative">
