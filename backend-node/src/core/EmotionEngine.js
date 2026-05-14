@@ -1,5 +1,5 @@
 /**
- * EmotionEngine - PAD三维情感模型 + 情绪惯性系统
+ * EmotionEngine - PAD三维情感模型 + 情绪惯性系统 + 好感度驱动基准
  * 
  * PAD模型维度:
  * - P (Pleasure): 愉悦度 [-1, 1] 开心/痛苦
@@ -11,55 +11,80 @@ import fs from 'fs';
 import path from 'path';
 
 class EmotionEngine {
+    static AFFINITY_TIERS = [
+        { min: 0,  max: 20, stage: 'stranger',     label: '陌生/疏离', P: 0.0,  A: 0.0,  D: 0.1  },
+        { min: 21, max: 40, stage: 'acquaintance', label: '认识/礼貌', P: 0.1,  A: 0.05, D: 0.05 },
+        { min: 41, max: 60, stage: 'friend',       label: '朋友/好感', P: 0.25, A: 0.1,  D: 0.0  },
+        { min: 61, max: 80, stage: 'close',        label: '亲密/暧昧', P: 0.4,  A: 0.15, D: -0.1 },
+        { min: 81, max: 100,stage: 'lover',        label: '恋人/深爱', P: 0.55, A: 0.2,  D: -0.2 },
+    ];
+
     constructor(statePath = null) {
-        // 持久化路径
         this.statePath = statePath || path.resolve(process.cwd(), '..', 'memory_db', 'emotion_state.json');
 
-        // 基准性格 - AI的"本性"，情绪会向此回归
-        this.baseline = {
-            P: 0.3,   // 天性略乐观
-            A: 0.1,   // 天性略活跃
-            D: -0.1   // 天性略顺从/可爱
-        };
+        this.baseline = { P: 0.3, A: 0.1, D: -0.1 };
+        this.state = { P: 0.3, A: 0.1, D: -0.1 };
 
-        // 当前情绪状态
-        this.state = {
-            P: 0.3,
-            A: 0.1,
-            D: -0.1
-        };
-
-        // 情绪历史（用于分析趋势）
         this.history = [];
         this.maxHistory = 50;
+        this.relationshipStage = null;
+        this.relationshipLabel = '未知';
 
-        // 加载持久化状态
         this._loadState();
+    }
+
+    // ==================== 好感度驱动基准 ====================
+
+    /**
+     * 根据亲和度动态更新 PAD 基准值
+     * - 设置 this.baseline 为目标阶段的 PAD 值
+     * - 存储 this.relationshipStage 供 prompt 使用
+     * - 阶段跨越时对当前状态施加轻推（nudge），使情绪平滑过渡
+     */
+    updateBaselineForAffinity(affinity) {
+        const tier = EmotionEngine.AFFINITY_TIERS.find(t => affinity >= t.min && affinity <= t.max);
+        if (!tier) return { baseline: { ...this.baseline }, stage: this.relationshipStage };
+
+        const oldStage = this.relationshipStage;
+        const newBaseline = { P: tier.P, A: tier.A, D: tier.D };
+
+        const tierChanged = oldStage !== tier.stage;
+        this.baseline = newBaseline;
+        this.relationshipStage = tier.stage;
+        this.relationshipLabel = tier.label;
+
+        if (tierChanged && oldStage !== null) {
+            const nudge = 0.15;
+            this.state.P = this._clamp(this.state.P + (newBaseline.P - this.state.P) * nudge);
+            this.state.A = this._clamp(this.state.A + (newBaseline.A - this.state.A) * nudge);
+            this.state.D = this._clamp(this.state.D + (newBaseline.D - this.state.D) * nudge);
+            console.log(`[Emotion] Tier changed: ${oldStage} → ${tier.stage}, nudge applied. New state: P=${this.state.P.toFixed(2)} A=${this.state.A.toFixed(2)} D=${this.state.D.toFixed(2)}`);
+        }
+
+        this._saveState();
+        return { baseline: { ...this.baseline }, stage: tier.stage, label: tier.label, tierChanged };
+    }
+
+    getRelationshipContext(affinity) {
+        const tier = EmotionEngine.AFFINITY_TIERS.find(t => affinity >= t.min && affinity <= t.max);
+        return { stage: tier?.stage || 'unknown', label: tier?.label || '未知', affinity, baseline: { ...this.baseline } };
     }
 
     // ==================== 核心方法 ====================
 
-    /**
-     * 应用情绪变化（使用惯性叠加公式）
-     * Current = Old * inertia + Delta * (1 - inertia)
-     * @param {Object} delta - { P, A, D } 变化值
-     * @param {number} inertia - 惯性系数 (0-1)，越高越难改变
-     */
     applyDelta(delta, inertia = 0.7) {
         const oldState = { ...this.state };
 
-        // 情绪叠加公式
         if (typeof delta.P === 'number') {
-            this.state.P = this._clamp(this.state.P * inertia + delta.P * (1 - inertia));
+            this.state.P = this._clamp(this.state.P + delta.P * (1 - inertia));
         }
         if (typeof delta.A === 'number') {
-            this.state.A = this._clamp(this.state.A * inertia + delta.A * (1 - inertia));
+            this.state.A = this._clamp(this.state.A + delta.A * (1 - inertia));
         }
         if (typeof delta.D === 'number') {
-            this.state.D = this._clamp(this.state.D * inertia + delta.D * (1 - inertia));
+            this.state.D = this._clamp(this.state.D + delta.D * (1 - inertia));
         }
 
-        // 记录历史
         this.history.push({
             timestamp: Date.now(),
             before: oldState,
@@ -79,22 +104,13 @@ class EmotionEngine {
         return this.state;
     }
 
-    /**
-     * 情绪衰减 - 向基准性格回归
-     * 模拟情绪的"半衰期"效应
-     * @param {number} rate - 衰减率 (0.05-0.15)
-     */
     decay(rate = 0.08) {
         this.state.P += (this.baseline.P - this.state.P) * rate;
         this.state.A += (this.baseline.A - this.state.A) * rate;
-        this.state.D += (this.baseline.D - this.state.D) * rate * 0.5; // D衰减更慢
-
+        this.state.D += (this.baseline.D - this.state.D) * rate * 0.5;
         this._saveState();
     }
 
-    /**
-     * 直接设置情绪状态（用于特殊事件）
-     */
     setState(newState) {
         if (typeof newState.P === 'number') this.state.P = this._clamp(newState.P);
         if (typeof newState.A === 'number') this.state.A = this._clamp(newState.A);
@@ -104,13 +120,9 @@ class EmotionEngine {
 
     // ==================== 情绪解读 ====================
 
-    /**
-     * 获取当前情绪标签
-     */
     getEmotionLabel() {
         const { P, A, D } = this.state;
 
-        // 复合情绪判断（优先级从高到低）
         if (P < -0.6 && A > 0.4) return "愤怒";
         if (P < -0.5 && A > 0.2 && D > 0.3) return "暴躁";
         if (P < -0.4 && A < -0.2) return "抑郁";
@@ -133,9 +145,6 @@ class EmotionEngine {
         return "平静";
     }
 
-    /**
-     * 获取情绪描述（用于Prompt注入）
-     */
     getEmotionDescription() {
         const label = this.getEmotionLabel();
         const { P, A, D } = this.state;
@@ -144,20 +153,12 @@ class EmotionEngine {
         const aDesc = A > 0.3 ? "活跃" : A < -0.3 ? "低迷" : "稳定";
         const dDesc = D > 0.3 ? "强势" : D < -0.3 ? "顺从" : "中性";
 
-        return {
-            label,
-            description: `${pDesc}、${aDesc}、${dDesc}`,
-            P, A, D
-        };
+        return { label, description: `${pDesc}、${aDesc}、${dDesc}`, P, A, D };
     }
 
-    /**
-     * 获取文本风格指导
-     */
     getStyleGuide() {
         const { P, A, D } = this.state;
 
-        // P高 + A高 = 兴奋活泼
         if (P > 0.4 && A > 0.4) {
             return {
                 style: "excited",
@@ -167,7 +168,6 @@ class EmotionEngine {
             };
         }
 
-        // P高 + A低 = 满足温柔
         if (P > 0.3 && A < 0) {
             return {
                 style: "content",
@@ -177,7 +177,6 @@ class EmotionEngine {
             };
         }
 
-        // P低 + A低 = 抑郁低落
         if (P < -0.3 && A < -0.2) {
             return {
                 style: "depressed",
@@ -187,7 +186,6 @@ class EmotionEngine {
             };
         }
 
-        // P低 + A高 = 愤怒烦躁
         if (P < -0.3 && A > 0.3) {
             return {
                 style: "angry",
@@ -197,7 +195,6 @@ class EmotionEngine {
             };
         }
 
-        // D高 = 傲娇模式
         if (D > 0.4) {
             return {
                 style: "tsundere",
@@ -207,7 +204,6 @@ class EmotionEngine {
             };
         }
 
-        // D低 = 黏人模式
         if (D < -0.4) {
             return {
                 style: "clingy",
@@ -225,16 +221,10 @@ class EmotionEngine {
         };
     }
 
-    /**
-     * 检查是否应该触发Ghosting（已读不回）
-     */
     shouldGhost() {
         return this.state.P < -0.75;
     }
 
-    /**
-     * 生成Prompt注入文本
-     */
     getPromptInjection() {
         const emotion = this.getEmotionDescription();
         const style = this.getStyleGuide();
@@ -250,59 +240,102 @@ ${style.guide}
 - Emoji使用: ${style.emojiFrequency === 'high' ? '频繁使用' : style.emojiFrequency === 'none' ? '禁止使用' : '适度使用'}`;
     }
 
-    // ==================== 辅助方法 ====================
+    // ==================== 话题 × 好感度情感矩阵 ====================
 
     /**
-     * 根据用户输入分析情绪影响
+     * 根据用户输入 + 当前好感度分析情绪变化
+     * 同一话题在不同关系阶段产生不同的情绪反应
      */
     analyzeInput(userInput, affinity) {
         const delta = { P: 0, A: 0, D: 0 };
-
-        // 正面词汇
-        const positiveWords = ['爱', '喜欢', '开心', '谢谢', '好棒', '厉害', '可爱', '漂亮', '想你', '抱抱'];
-        const negativeWords = ['讨厌', '滚', '烦', '傻', '笨', '丑', '恶心', '闭嘴', '走开'];
-        const excitingWords = ['惊喜', '太棒了', '哇', '好激动', '天啊'];
-        const calmingWords = ['晚安', '休息', '慢慢', '别急', '放松'];
-
         const input = userInput.toLowerCase();
 
-        // 分析P值变化
-        positiveWords.forEach(w => { if (input.includes(w)) delta.P += 0.15; });
-        negativeWords.forEach(w => { if (input.includes(w)) delta.P -= 0.25; });
+        const intimacyWords  = ['爱', '喜欢', '想你', '抱抱', '亲亲', '么么', '老婆', '老公', '宝贝', '亲爱的'];
+        const praiseWords    = ['好棒', '厉害', '可爱', '漂亮', '聪明', '温柔', '最喜欢', '真好', '谢谢', '感谢'];
+        const criticismWords = ['讨厌', '烦', '丑', '恶心', '走开', '别烦我', '无语'];
+        const teasingWords   = ['笨蛋', '傻瓜', '猪头', '小傻瓜', '大笨蛋', '呆子', '哼'];
+        const excitingWords  = ['惊喜', '太棒了', '哇', '好激动', '天啊', '啊啊', '居然', '没想到'];
+        const calmingWords   = ['晚安', '休息', '慢慢', '别急', '放松', '累了', '困了'];
+        const sadWords       = ['难过', '伤心', '哭', '不开心', '失望', '孤独', '寂寞', '想哭'];
+        const questionWords  = ['?', '？', '怎么', '为什么', '什么', '谁', '哪里', '什么时候'];
 
-        // 分析A值变化
-        excitingWords.forEach(w => { if (input.includes(w)) delta.A += 0.2; });
-        calmingWords.forEach(w => { if (input.includes(w)) delta.A -= 0.15; });
-        if (input.includes('!') || input.includes('！')) delta.A += 0.1;
+        const hasTeasing    = teasingWords.some(w => input.includes(w));
+        const hasIntimacy   = intimacyWords.some(w => input.includes(w));
+        const hasPraise     = !hasIntimacy && praiseWords.some(w => input.includes(w));
+        const hasCriticism  = !hasTeasing && criticismWords.some(w => input.includes(w));
+        const hasExciting   = excitingWords.some(w => input.includes(w));
+        const hasCalming    = calmingWords.some(w => input.includes(w));
+        const hasSad        = sadWords.some(w => input.includes(w));
+        const hasQuestion   = questionWords.some(w => input.includes(w));
+        const hasExclamation = input.includes('!') || input.includes('！');
 
-        // 好感度影响解读
-        if (affinity < 30) {
-            // 低好感度时，亲密词汇反而让AI不适
-            if (positiveWords.some(w => ['爱', '喜欢', '想你', '抱抱'].includes(w) && input.includes(w))) {
-                delta.P -= 0.1;
-                delta.A += 0.15; // 紧张
-                delta.D -= 0.1; // 感到被压迫
-            }
+        // 亲密话题 × 好感度
+        if (hasIntimacy) {
+            if (affinity <= 20)        { delta.P -= 0.30; delta.A += 0.20; delta.D -= 0.15; }
+            else if (affinity <= 40)   { delta.P -= 0.05; delta.A += 0.10; delta.D -= 0.05; }
+            else if (affinity <= 60)   { delta.P += 0.08; delta.A += 0.05; }
+            else if (affinity <= 80)   { delta.P += 0.20; delta.A += 0.10; delta.D -= 0.10; }
+            else                       { delta.P += 0.30; delta.A += 0.12; delta.D -= 0.15; }
         }
 
-        // 限制单次变化幅度
+        // 批评 × 好感度
+        if (hasCriticism) {
+            if (affinity <= 20)        { delta.P -= 0.10; delta.A += 0.05; }
+            else if (affinity <= 60)   { delta.P -= 0.20; delta.A += 0.08; }
+            else                       { delta.P -= 0.30; delta.A += 0.10; delta.D += 0.10; }
+        }
+
+        // 夸奖 × 好感度
+        if (hasPraise) {
+            if (affinity <= 20)        { delta.P += 0.10; }
+            else if (affinity <= 60)   { delta.P += 0.15; delta.A += 0.05; }
+            else                       { delta.P += 0.25; delta.A += 0.08; delta.D -= 0.05; }
+        }
+
+        // 调戏 × 好感度
+        if (hasTeasing) {
+            if (affinity <= 30)        { delta.P -= 0.15; delta.A += 0.15; delta.D += 0.10; }
+            else if (affinity <= 60)   { delta.P -= 0.03; delta.A += 0.05; }
+            else                       { delta.P += 0.10; delta.A += 0.08; delta.D += 0.15; }
+        }
+
+        // 悲伤 × 好感度
+        if (hasSad) {
+            delta.P -= 0.15; delta.A -= 0.10;
+            if (affinity > 50) { delta.P -= 0.05; delta.D -= 0.10; }
+        }
+
+        // 兴奋
+        if (hasExciting || hasExclamation) {
+            delta.A += 0.15;
+            if (affinity > 40) delta.P += 0.05;
+        }
+
+        // 平静
+        if (hasCalming) {
+            delta.A -= 0.12;
+            if (affinity > 50) delta.P += 0.05;
+        }
+
+        // 疑问
+        if (hasQuestion) {
+            delta.A += 0.05;
+            if (affinity <= 20 && userInput.trim().length < 5) delta.D += 0.08;
+        }
+
         delta.P = Math.max(-0.5, Math.min(0.5, delta.P));
         delta.A = Math.max(-0.4, Math.min(0.4, delta.A));
         delta.D = Math.max(-0.3, Math.min(0.3, delta.D));
 
+        console.log(`[Emotion] analyzeInput (affinity=${affinity}): intimacy=${hasIntimacy} praise=${hasPraise} criticism=${hasCriticism} teasing=${hasTeasing} → delta P:${delta.P.toFixed(2)} A:${delta.A.toFixed(2)} D:${delta.D.toFixed(2)}`);
+
         return delta;
     }
 
-    /**
-     * 获取当前状态快照（用于记忆存储）
-     */
     getSnapshot() {
         return { ...this.state, timestamp: Date.now() };
     }
 
-    /**
-     * 获取完整状态
-     */
     getFullState() {
         return {
             current: { ...this.state },
@@ -322,6 +355,8 @@ ${style.guide}
                 if (data.state) this.state = data.state;
                 if (data.baseline) this.baseline = data.baseline;
                 if (data.history) this.history = data.history.slice(-this.maxHistory);
+                if (data.relationshipStage) this.relationshipStage = data.relationshipStage;
+                if (data.relationshipLabel) this.relationshipLabel = data.relationshipLabel;
                 console.log(`[Emotion] Loaded state: ${this.getEmotionLabel()}`);
             }
         } catch (e) {
@@ -339,6 +374,8 @@ ${style.guide}
                 state: this.state,
                 baseline: this.baseline,
                 history: this.history,
+                relationshipStage: this.relationshipStage,
+                relationshipLabel: this.relationshipLabel,
                 lastUpdated: new Date().toISOString()
             }, null, 2));
         } catch (e) {

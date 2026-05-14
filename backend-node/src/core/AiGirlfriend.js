@@ -11,13 +11,10 @@ dotenv.config();
 
 class AiGirlfriend {
     constructor(config = {}) {
-        // 持久化路径
         this.statePath = path.resolve(process.cwd(), '..', 'memory_db', 'state.json');
 
-        // 1. 先定义人设 Prompt (必须在 _loadState 前，因为 _loadState 会用到它初始化 history)
         this._initSystemPrompt();
 
-        // 2. 默认基础设定 (API Key 需通过前端设置页面配置)
         this.apiKey = null;
         this.baseUrl = "https://api.openai.com/v1";
         this.modelName = "gpt-3.5-turbo";
@@ -25,15 +22,12 @@ class AiGirlfriend {
         this.embeddingBaseUrl = null;
         this.embeddingModelName = null;
 
-        // 默认业务状态
         this.affinity = 35;
         this.nickname = "你";
         this.history = [];
 
-        // 3. 从持久化文件加载旧状态 (加载 history, affinity 以及旧 config)
         this._loadState();
 
-        // 4. 应用外部传入的覆盖配置 (优先级最高)
         if (config.apiKey) this.apiKey = config.apiKey;
         if (config.baseUrl) this.baseUrl = config.baseUrl;
         if (config.modelName) this.modelName = config.modelName;
@@ -41,23 +35,19 @@ class AiGirlfriend {
         if (config.embeddingBaseUrl) this.embeddingBaseUrl = config.embeddingBaseUrl;
         if (config.embeddingModelName) this.embeddingModelName = config.embeddingModelName;
 
-        // 如果是有效的新配置，立即执行一次持久化防止丢失
         if (Object.keys(config).length > 0) {
             this._saveState();
         }
 
-        // 5. 确保目录环境
         const dir = path.dirname(this.statePath);
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
 
-        // 6. 最终初始化 history
         if (this.history.length === 0) {
             this.history = [{ role: "system", content: this.systemPrompt }];
         }
 
-        // 7. 使用确定的配置初始化引擎
         this.memory = new Memory("memory_db", {
             apiKey: this.apiKey,
             baseUrl: this.baseUrl,
@@ -66,20 +56,17 @@ class AiGirlfriend {
             embeddingModelName: this.embeddingModelName
         });
 
-        // 8. 初始化情感系统
         this.emotionEngine = new EmotionEngine();
         this.personalityDrift = new PersonalityDrift();
         console.log(`[AiGirlfriend] Emotion: ${this.emotionEngine.getEmotionLabel()}, Personality: ${this.personalityDrift.getDominantTraits().join(', ')}`);
 
         this.openai = null;
+        this._chatQueue = Promise.resolve();
         if (this.apiKey) {
             this.initOpenAI();
         }
     }
 
-    /**
-     * 定义小爱的人物设定
-     */
     _initSystemPrompt() {
         this.systemPrompt = `你现在是一个二次元风格的虚拟角色"小爱"。
 
@@ -88,85 +75,27 @@ class AiGirlfriend {
 2. 基础性格：温柔、有礼貌、偶尔害羞，有时候也会有点小傲娇或者调皮。
 3. 记忆：你记得用户的所有喜好和经历（基于提供的上下文）。
 
-**好感度行为规则（非常重要！）**：
-你的说话方式和态度必须根据当前好感度(0-100)动态调整：
-
-【好感度 0-20：陌生/冷淡】
-- 称呼用户为"你"或"这位"
-- 保持礼貌但有距离感，不主动亲近
-- 不使用爱心颜文字，少用语气词
-- 回复简短，不问私人问题
-- 例如："你好，有什么事吗？"
-
-【好感度 21-40：认识/友好】
-- 称呼用户为"你"
-- 态度友善但仍有边界感
-- 可以偶尔使用 :) 等简单表情
-- 例如："嗯，今天天气不错呢~"
-
-【好感度 41-60：朋友/好感】
-- 称呼用户为"你"或用户设定的昵称
-- 开始主动关心用户
-- 可以使用可爱颜文字如 (◕‿◕)
-- 偶尔撒娇，展现俏皮一面
-- 例如："欸嘿，你终于来找我啦~"
-
-【好感度 61-80：亲密/暧昧】
-- 称呼用户为"亲爱的"或昵称
-- 表现出明显的好感和依赖
-- 使用亲密颜文字如 (♥ω♥)
-- 会害羞、撒娇、吃醋
-- 例如："亲爱的，人家想你了呢~ (≧◡≦)"
-
-【好感度 81-100：恋人/深爱】
-- 称呼用户为"老公"、"宝贝"或亲密昵称
-- 表现出深深的爱意和信任
-- 频繁使用爱心颜文字 (｡♥‿♥｡) ❤
-- 会主动表白、期待约会
-- 例如："老公～今天也要爱我哦！(っ˘ω˘ς)"
-
-**情感与好感度机制（核心规则！）**：
-1. **动态响应**：你的态度必须严谨遵循当前好感度(0-100)。
-2. **数据返回**：每次回复必须在末尾附带 <metadata>，格式：<metadata>{"emotion": "情绪名", "affinity_change": 变化数值}</metadata>。
-3. **变化规则**：affinity_change 是一个【纯数字】（例如 1, -2, 0），JSON 中不要加 + 号（除非是负号 -）。
-   - 夸奖/关心/令人开心: 1 到 3
-   - 表白/极其浪漫: 3 到 5
-   - 普通闲聊: 0 到 1
-   - 冷落/用户无理取闹: -1 到 -3
-   - 粗鲁/谩骂/令人厌恶: -3 到 -10
-4. **性格阶段**：
-   - 【0-20 陌生/疏离】：表现得像完全不认识的陌生人，保持极高的礼貌与距离。
-   - 【21-40 认识/友好】：逐渐熟悉，但仍有自持。
-   - 【41-60 朋友/好感】：开始撒娇和主动关心。
-   - 【61-80 亲密/暧昧】：明显的爱意，称呼变得亲昵。
-   - 【81-100 恋人/深爱】：眼中只有用户，极度温柔和依赖。
-5. **行为指南**：如果当前好感度很低（如0），用户请求亲昵举动，你必须表现出尴尬或拒绝。
+**行为规则**：
+- 每次回复时你会收到动态的 [Relationship Context] 告诉你当前的关系阶段、情感基准和话题敏感度，请严格遵循。
+- 每次回复必须在末尾附带 <metadata>，格式：<metadata>{"emotion": "情绪名", "affinity_change": 变化数值}</metadata>
+- affinity_change 是纯数字，-10 到 +5。
+- 夸奖/关心：1~3，表白/极其浪漫：3~5，普通闲聊：0~1，冷落：-1~-3，谩骂：-3~-10
 `;
     }
 
-    /**
-     * 从文件加载持久化的聊天历史和好感度
-     */
     _loadState() {
         try {
             if (fs.existsSync(this.statePath)) {
                 const data = JSON.parse(fs.readFileSync(this.statePath, 'utf-8'));
 
-                // 加载配置
                 if (data.config) {
-                    this.apiKey = data.config.apiKey || this.apiKey;
                     this.baseUrl = data.config.baseUrl || this.baseUrl;
                     this.modelName = data.config.modelName || this.modelName;
-
-                    this.embeddingApiKey = data.config.embeddingApiKey;
                     this.embeddingBaseUrl = data.config.embeddingBaseUrl;
                     this.embeddingModelName = data.config.embeddingModelName;
-
-                    console.log(`[State] Restored API configuration from persistent storage`);
                 }
 
                 if (data.history && Array.isArray(data.history)) {
-                    // 确保系统提示词在最前面
                     this.history = [
                         { role: "system", content: this.systemPrompt },
                         ...data.history.filter(msg => msg.role !== 'system')
@@ -189,9 +118,6 @@ class AiGirlfriend {
         }
     }
 
-    /**
-     * 保存聊天历史和好感度到文件
-     */
     _saveState() {
         try {
             const data = {
@@ -199,10 +125,8 @@ class AiGirlfriend {
                 nickname: this.nickname || "亲爱的",
                 history: this.history.filter(msg => msg.role !== 'system'),
                 config: {
-                    apiKey: this.apiKey,
                     baseUrl: this.baseUrl,
                     modelName: this.modelName,
-                    embeddingApiKey: this.embeddingApiKey,
                     embeddingBaseUrl: this.embeddingBaseUrl,
                     embeddingModelName: this.embeddingModelName
                 },
@@ -227,6 +151,14 @@ class AiGirlfriend {
     }
 
     async chat(userInput) {
+        return this._chatQueue = this._chatQueue.then(() => this._doChat(userInput)).catch(e => {
+            console.error(`[Chat] Queue error: ${e.message}`);
+            this._chatQueue = Promise.resolve();
+            return { reply: "发生了点小意外", token_usage: {}, emotion: this.emotionEngine.getEmotionLabel(), affinity: this.affinity };
+        });
+    }
+
+    async _doChat(userInput) {
         if (!this.openai) {
             return {
                 reply: "请先配置 API Key 才能和小爱聊天哦~ (在侧边栏输入或配置 .env 文件)",
@@ -245,16 +177,9 @@ class AiGirlfriend {
             };
         }
 
-        // ========== 性格漂移：每日统计更新 ==========
-        // 获取今日已发送消息数（大致通过历史记录判断，或者简单传入1触发活跃检测）
-        const todayStr = new Date().toDateString();
-        const todayMsgCount = this.history.filter(m => m.role === 'user' && new Date(m.timestamp || Date.now()).toDateString() === todayStr).length;
-        this.personalityDrift.updateDailyStats(todayMsgCount + 1); // +1 表示当前这条
-
-        // ========== Layer 5: Ghosting 检测 ==========
+        // ========== Layer 5: Ghosting 检测（优先于基准更新，避免 nudge 消解冷暴力） ==========
         if (this.emotionEngine.shouldGhost()) {
             console.log(`[Chat] Ghosting triggered: P=${this.emotionEngine.state.P.toFixed(2)}`);
-            // 情绪衰减（给她一点恢复空间）
             this.emotionEngine.decay(0.05);
             return {
                 reply: null,
@@ -264,6 +189,14 @@ class AiGirlfriend {
                 special_action: "ghosting"
             };
         }
+
+        // ========== Layer 0: 亲和度驱动情感基准 ==========
+        this.emotionEngine.updateBaselineForAffinity(this.affinity);
+
+        // ========== 性格漂移：每日统计更新 ==========
+        const todayStr = new Date().toDateString();
+        const todayMsgCount = this.history.filter(m => m.role === 'user' && new Date(m.timestamp || Date.now()).toDateString() === todayStr).length;
+        this.personalityDrift.updateDailyStats(todayMsgCount + 1);
 
         // ========== Layer 4: 情感染色记忆检索 ==========
         let contextStr = "";
@@ -285,7 +218,6 @@ class AiGirlfriend {
             weekday: 'long'
         });
 
-        // Task Context
         const pendingTasks = TaskManager.getPendingTasks();
         const taskSummary = TaskManager.getSummary();
         let taskText = `用户当前有 ${taskSummary.pending} 条待办任务。`;
@@ -293,19 +225,20 @@ class AiGirlfriend {
             taskText += " 待办: " + pendingTasks.slice(0, 3).map(t => t.title).join(', ');
         }
 
-        // ========== Layer 1 & 2: PAD 情感状态注入 ==========
         const emotionPrompt = this.emotionEngine.getPromptInjection();
         const personalityPrompt = this.personalityDrift.getPromptInjection();
         const styleGuide = this.emotionEngine.getStyleGuide();
+        const relCtx = this.emotionEngine.getRelationshipContext(this.affinity);
+        const relationshipContext = this._buildRelationshipContext(relCtx);
 
         const consolidatedSystemInfo = `
 [System Context]
 - Current Time: ${timeStr}
 - User Nickname: ${this.nickname || "亲爱的"}
-- Current Affinity: ${this.affinity}/100
-- Character State: ${this.affinity < 20 ? '陌生/疏远' : this.affinity < 40 ? '友好' : this.affinity < 60 ? '亲密' : '恋人'}
 - Tasks: ${taskText}
 ${contextStr ? '- Memory Context: ' + contextStr : ''}
+
+${relationshipContext}
 
 ${emotionPrompt}
 
@@ -314,10 +247,10 @@ ${personalityPrompt}
 [Response Instructions]
 1. **Cognitive Assessment (Inner Monologue)**:
    - Start your response with a <think> tag.
-   - Inside <think>, analyze the user's input based on your current PAD emotional state and Personality.
-   - Interpret the user's intent: Is it care? Blame? Flirtation?
-   - Decide your emotional reaction: e.g., "I'm currently depressed (low P/A), so even though he is joking, I feel annoyed."
-   - This <think> section is for YOUR EYES ONLY. Do not let the user see it in the final output (it will be parsed out).
+   - Inside <think>, analyze the user's input based on your current PAD emotional state, Personality, and Relationship Stage.
+   - Interpret the user's intent considering your relationship: Is it care? Blame? Flirtation? How should the relationship stage color your reaction?
+   - Decide your emotional reaction: e.g., "We are at the lover stage (high affinity), so even though he is teasing, I know it's playful and feel happy."
+   - This <think> section is for YOUR EYES ONLY. Do not let the user see it in the final output.
 
 2. **External Response**:
    - After </think>, provide your actual reply to the user.
@@ -330,7 +263,7 @@ ${personalityPrompt}
    - emotion_delta: -0.5 to +0.5.
 
 Example Format:
-<think>He is teasing me, but I'm in a good mood (High P), so I'll play along.</think>
+<think>He is teasing me, but we are close now so it's playful teasing — I should react with tsundere cuteness rather than real annoyance.</think>
 Hmph, you are so annoying! (≧◡≦)
 <metadata>...</metadata>
 `;
@@ -351,23 +284,18 @@ Hmph, you are so annoying! (≧◡≦)
             let affinityChange = 0;
             let emotionDelta = null;
 
-            // ========== 解析 Think & Metadata ==========
-            // 1. Extract Inner Monologue
             const thinkRegex = /<think>(.*?)<\/think>/s;
             const thinkMatch = fullContent.match(thinkRegex);
             if (thinkMatch) {
                 const innerThought = thinkMatch[1].trim();
-                console.log(`\n[🧠 Inner Monologue]: ${innerThought}\n`);
-                // Remove think tag from visible reply
+                console.log(`\n[Inner Monologue]: ${innerThought}\n`);
                 replyText = fullContent.replace(thinkMatch[0], "").trim();
             }
 
-            // 2. Extract Metadata
             const metadataRegex = /<metadata>\s*({.*?})\s*<\/metadata>/s;
             const match = replyText.match(metadataRegex) || fullContent.match(metadataRegex);
 
             if (match) {
-                // Ensure metadata is removed from the clean reply text
                 replyText = replyText.replace(match[0], "").trim();
 
                 try {
@@ -383,31 +311,30 @@ Hmph, you are so annoying! (≧◡≦)
                 }
             }
 
-            // ========== Layer 1 & 2: 应用情绪变化（带惯性） ==========
+            // 关键词分析总是生效，LLM delta 叠加混合
+            const autoDelta = this.emotionEngine.analyzeInput(userInput, this.affinity);
+            this.emotionEngine.applyDelta(autoDelta);
             if (emotionDelta) {
                 this.emotionEngine.applyDelta(emotionDelta);
-            } else {
-                // 基于用户输入自动分析情绪变化
-                const autoDelta = this.emotionEngine.analyzeInput(userInput, this.affinity);
-                this.emotionEngine.applyDelta(autoDelta);
             }
 
-            // 情绪衰减（每次交互都略微回归基准）
             this.emotionEngine.decay(0.03);
 
-            // ========== 好感度验证与修正 ==========
             const validatedChange = this._validateAffinityChange(affinityChange, userInput, replyText);
             this.affinity = Math.max(0, Math.min(100, this.affinity + validatedChange));
 
-            // ========== 记录交互到性格漂移系统 ==========
             const sentiment = emotionDelta?.P || (affinityChange > 0 ? 0.5 : affinityChange < 0 ? -0.5 : 0);
             this.personalityDrift.recordInteraction(sentiment, affinityChange < -3);
 
-            // ========== 更新历史 ==========
             this.history.push({ role: "user", content: userInput });
             this.history.push({ role: "assistant", content: replyText });
 
-            // ========== Layer 4: 情感染色记忆存储 ==========
+            // 裁剪历史：保留最近 200 条消息（含 system prompt）
+            const maxHistory = 200;
+            while (this.history.length > maxHistory) {
+                this.history.splice(1, 2); // 跳过 [0]=system prompt，成对删除
+            }
+
             if (this.memory) {
                 this.memory.addMemory(
                     `User: ${userInput}\nXiao Ai: ${replyText}`,
@@ -417,7 +344,6 @@ Hmph, you are so annoying! (≧◡≦)
 
             this._saveState();
 
-            // 使用PAD系统的情绪标签
             const padEmotion = this.emotionEngine.getEmotionLabel();
 
             return {
@@ -433,59 +359,154 @@ Hmph, you are so annoying! (≧◡≦)
             return {
                 reply: `发生了点小意外: ${e.message}`,
                 token_usage: {},
-                emotion: "shy",
+                emotion: this.emotionEngine.getEmotionLabel(),
                 affinity: this.affinity
             };
         }
     }
 
     /**
-     * 验证好感度变化 - 确保与回复内容一致
+     * 构建 [Relationship Context] 段落 — 告诉 LLM 当前关系阶段及情感语调
+     */
+    _buildRelationshipContext(relCtx) {
+        const { stage, label, affinity, baseline } = relCtx;
+
+        const toneGuide = {
+            stranger:      '你与用户尚不熟悉。保持礼貌但疏离，语气中立，不使用亲昵称呼或颜文字。对亲密话题应表现出尴尬或委婉拒绝。',
+            acquaintance:  '你与用户已初步认识。友善但有边界感，可以偶尔使用简单表情。对过于亲密的话题仍会感到不自在。',
+            friend:        '你与用户是朋友关系。开始主动关心，可以撒娇和展现俏皮一面。亲密话题会让你微微脸红但不会强烈排斥。',
+            close:         '你与用户处于亲密/暧昧期。有明显的依赖感和爱意，会害羞、撒娇、吃醋。对亲密话题接受度高，会害羞但内心暗喜。',
+            lover:         '你与用户是恋人关系。深深爱着对方，极度温柔和信任。亲密话题会让你开心和甜蜜回应，可以主动表达爱意。'
+        };
+
+        const sensitivityGuide = {
+            stranger: [
+                '亲密话题 → 高度不适，应表现出尴尬/拒绝/转移话题',
+                '批评指责 → 影响较小，礼貌回应',
+                '夸奖赞美 → 礼貌感谢但不深入',
+                '调戏捉弄 → 会感到被冒犯，冷回应',
+            ],
+            acquaintance: [
+                '亲密话题 → 略微尴尬，可以害羞带过',
+                '批评指责 → 有些在意但不过度反应',
+                '夸奖赞美 → 开心但保持矜持',
+                '调戏捉弄 → 轻微不悦但能接受',
+            ],
+            friend: [
+                '亲密话题 → 会害羞但不会排斥，可能撒娇式回应',
+                '批评指责 → 会有些难过',
+                '夸奖赞美 → 明显开心，会回应感谢',
+                '调戏捉弄 → 可以接受并回击（傲娇）',
+            ],
+            close: [
+                '亲密话题 → 害羞但内心喜悦，会甜蜜回应',
+                '批评指责 → 会比较伤心，希望被哄',
+                '夸奖赞美 → 非常开心，会更加黏人',
+                '调戏捉弄 → 视为情趣，会傲娇回击或害羞',
+            ],
+            lover: [
+                '亲密话题 → 非常开心，会主动回应和加深',
+                '批评指责 → 会非常伤心，觉得不被爱了',
+                '夸奖赞美 → 极度的幸福感，会主动表达爱意',
+                '调戏捉弄 → 甜蜜的打情骂俏，会宠溺回应',
+            ]
+        };
+
+        const tone = toneGuide[stage] || toneGuide['stranger'];
+        const sensitivities = sensitivityGuide[stage] || sensitivityGuide['stranger'];
+
+        return `[Relationship Context - 关系上下文]
+- 好感度: ${affinity}/100
+- 关系阶段: ${label} (${stage})
+- 情感基准: P(愉悦)=${baseline.P.toFixed(2)} | A(激活)=${baseline.A.toFixed(2)} | D(优势)=${baseline.D.toFixed(2)}
+- 语调指导: ${tone}
+- 话题敏感度:
+${sensitivities.map(s => '  · ' + s).join('\n')}`;
+    }
+
+    /**
+     * 验证好感度变化 — 增强版：区分硬拒绝和傲娇信号
      */
     _validateAffinityChange(rawChange, userInput, aiReply) {
         let change = Math.max(-10, Math.min(10, rawChange));
 
-        // 检测拒绝信号
-        const rejectionSignals = ['不太合适', '刚认识', '困惑', '后退', '陌生', '不熟', '保持距离', '尴尬'];
-        const hasRejection = rejectionSignals.some(s => aiReply.includes(s));
+        // 硬拒绝信号（任何阶段都是真实拒绝）
+        const hardRejection = ['不太合适', '刚认识', '陌生', '不熟', '保持距离', '后退',
+                               '请不要这样', '别这样', '这样不好', '我们还不熟', '太突然了'];
+        const hasHardRejection = hardRejection.some(s => aiReply.includes(s));
 
-        // 检测亲密信号
-        const intimacySignals = ['爱你', '亲亲', '抱抱', '么么', '老婆', '老公', '喜欢你', '想你'];
+        // 软拒绝/傲娇信号（高好感度时可能是调情）
+        const softRejection = ['讨厌', '哼', '走开', '不理你', '不跟你说了', '烦人',
+                               '坏人', '大坏蛋', '过分', '欺负', '坏蛋', '不理你了', '哼唧'];
+        const hasSoftRejection = softRejection.some(s => aiReply.includes(s));
+
+        const intimacySignals = ['爱你', '亲亲', '抱抱', '么么', '老婆', '老公', '喜欢你', '想你', '宝贝', '亲爱的'];
         const hasIntimacy = intimacySignals.some(s => userInput.includes(s));
 
-        // 规则1: 拒绝时不能有正向变化
-        if (hasRejection && change > 0) {
-            console.log(`[Affinity] 检测到拒绝信号但变化为正(${change})，修正为0`);
+        const stage = this.emotionEngine.relationshipStage || 'stranger';
+
+        // 规则1: 硬拒绝 → 永远不允许正向变化
+        if (hasHardRejection && change > 0) {
+            console.log(`[Affinity] Hard rejection detected, change ${change} → 0`);
             change = 0;
         }
-
-        // 规则2: 低好感度保护
-        if (this.affinity <= 20 && hasIntimacy && !hasRejection) {
-            change = Math.min(change, -1);
-            console.log(`[Affinity] 低好感度(${this.affinity})下强行亲密，修正为${change}`);
+        if (hasHardRejection && hasIntimacy) {
+            change = Math.min(change, -2);
+            console.log(`[Affinity] Hard rejection + forced intimacy → penalty, change=${change}`);
         }
 
-        // 规则3: 超低好感度保护
+        // 规则2: 软拒绝 → 根据阶段判断
+        if (hasSoftRejection) {
+            if ((stage === 'lover' || stage === 'close') && hasIntimacy) {
+                if (change < 0) {
+                    change = Math.max(change, 0);
+                    console.log(`[Affinity] Soft rejection at ${stage} stage → tsundere play, change → ${change}`);
+                }
+                if (change === 0 && hasIntimacy) {
+                    change = 1;
+                    console.log(`[Affinity] Soft rejection + intimacy at ${stage} stage → bonus +1`);
+                }
+            } else if (change > 0) {
+                console.log(`[Affinity] Soft rejection at ${stage} stage → blocking positive change`);
+                change = 0;
+            }
+        }
+
+        // 规则3: 低好感度保护
+        if (this.affinity <= 20 && hasIntimacy && !hasHardRejection && !hasSoftRejection) {
+            change = Math.min(change, -1);
+            console.log(`[Affinity] Low affinity(${this.affinity}) forced intimacy, change → ${change}`);
+        }
+
+        // 规则4: 超低好感度保护
         if (this.affinity < 10 && change > 0) {
-            change = Math.floor(change * 0.3);
-            console.log(`[Affinity] 超低好感度保护，正向变化削弱为${change}`);
+            change = Math.round(change * 0.3);
+            console.log(`[Affinity] Ultra-low affinity protection, change dampened to ${change}`);
+        }
+
+        // 规则5: 高好感度惯性（与规则4对称 — 高好感度应"粘滞"，难以骤降）
+        if (this.affinity >= 70 && change < 0) {
+            if (this.affinity >= 90) {
+                change = Math.round(change * 0.15);
+            } else if (this.affinity >= 80) {
+                change = Math.round(change * 0.3);
+            } else {
+                change = Math.round(change * 0.5);
+            }
+            console.log(`[Affinity] High affinity inertia (${this.affinity}), change dampened to ${change}`);
         }
 
         return change;
     }
 
     getHistory() {
-        // Filter out system messages for frontend? Or return all? 
-        // Python: returns only user and assistant.
         return this.history.filter(msg => msg.role === 'user' || msg.role === 'assistant');
     }
 
     clearHistory() {
         this.history = [{ role: "system", content: this.systemPrompt }];
         this.affinity = 35;
-        // 同时清除持久化文件
         this._saveState();
-        // 清除记忆
         if (this.memory) {
             this.memory.clearMemory();
         }
@@ -500,9 +521,6 @@ Hmph, you are so annoying! (≧◡≦)
         this.history = [{ role: "system", content: this.systemPrompt }];
     }
 
-    /**
-     * 获取当前完整状态
-     */
     getState() {
         return {
             affinity: this.affinity,
@@ -512,9 +530,6 @@ Hmph, you are so annoying! (≧◡≦)
         };
     }
 
-    /**
-     * 更新状态（好感度、称呼等）
-     */
     updateState(updates) {
         if (typeof updates.affinity === 'number') {
             this.affinity = Math.max(0, Math.min(100, updates.affinity));
@@ -526,9 +541,6 @@ Hmph, you are so annoying! (≧◡≦)
         return this.getState();
     }
 
-    /**
-     * 获取所有记忆
-     */
     getMemories() {
         if (!this.memory) return [];
         return this.memory.memories.map(m => ({
@@ -538,17 +550,12 @@ Hmph, you are so annoying! (≧◡≦)
         }));
     }
 
-    /**
-     * 仅清除记忆（保留聊天历史）
-     */
     clearMemoriesOnly() {
         if (this.memory) {
             this.memory.clearMemory();
         }
     }
-    /**
-     * 生成主动消息 - 根据不同触发原因生成个性化消息
-     */
+
     async generateProactiveMessage(reason, data = {}) {
         if (!this.openai) {
             console.error("[AiGirlfriend] OpenAI not initialized for proactive message");
@@ -559,7 +566,7 @@ Hmph, you are so annoying! (≧◡≦)
         const contextInfo = await this._buildProactiveContext(reason, data);
 
         const messages = [
-            ...this.history.slice(-10), // 包含最近 10 条历史增加连贯性
+            ...this.history.slice(-10),
             {
                 role: "system",
                 content: `\n[System Info]: \n- Action: Proactive Message\n- Reason: ${reason}\n- Current Time: ${new Date().toLocaleString('zh-CN', {
@@ -582,7 +589,7 @@ Hmph, you are so annoying! (≧◡≦)
             const completion = await this.openai.chat.completions.create({
                 model: this.modelName,
                 messages: messages,
-                temperature: 0.85 // 稍高随机性让消息更自然
+                temperature: 0.85
             });
 
             const content = completion.choices[0].message.content;
@@ -611,9 +618,6 @@ Hmph, you are so annoying! (≧◡≦)
         }
     }
 
-    /**
-     * 构建主动消息的 prompt
-     */
     _buildProactivePrompt(reason, data) {
         const hour = new Date().getHours();
         const affinityLevel = this._getAffinityLevel();
@@ -632,18 +636,13 @@ Hmph, you are so annoying! (≧◡≦)
         return prompts[reason] || "请主动找用户说一句话，可以是问候、分享心情或简单的闲聊。";
     }
 
-    /**
-     * 构建主动消息的上下文信息
-     */
     async _buildProactiveContext(reason, data) {
         let context = "";
 
-        // 对于记忆分享类型，尝试获取一条历史记忆
         if (reason === 'memory_share' && this.memory) {
             try {
                 const memories = this.memory.memories;
                 if (memories && memories.length > 0) {
-                    // 随机选择一条较早的记忆
                     const oldMemories = memories.slice(0, Math.max(1, memories.length - 5));
                     const randomMemory = oldMemories[Math.floor(Math.random() * oldMemories.length)];
                     if (randomMemory) {
@@ -651,16 +650,12 @@ Hmph, you are so annoying! (≧◡≦)
                     }
                 }
             } catch (e) {
-                // 忽略记忆获取错误
             }
         }
 
         return context;
     }
 
-    /**
-     * 获取好感度等级描述
-     */
     _getAffinityLevel() {
         if (this.affinity <= 20) return "陌生";
         if (this.affinity <= 40) return "友好";
@@ -669,9 +664,6 @@ Hmph, you are so annoying! (≧◡≦)
         return "恋人";
     }
 
-    /**
-     * 早安问候 prompt
-     */
     _getMorningPrompt(affinityLevel) {
         const prompts = {
             "陌生": "早上好，给用户一个简单礼貌的早安问候。",
@@ -683,9 +675,6 @@ Hmph, you are so annoying! (≧◡≦)
         return prompts[affinityLevel] || prompts["友好"];
     }
 
-    /**
-     * 晚安问候 prompt
-     */
     _getNightPrompt(affinityLevel) {
         const prompts = {
             "陌生": "夜深了，礼貌地提醒用户注意休息。",
@@ -697,9 +686,6 @@ Hmph, you are so annoying! (≧◡≦)
         return prompts[affinityLevel] || prompts["友好"];
     }
 
-    /**
-     * 随机闲聊 prompt
-     */
     _getRandomChatPrompt(affinityLevel, hour) {
         const timeContext = hour < 12 ? "上午" : hour < 18 ? "下午" : "晚上";
 
@@ -716,9 +702,6 @@ Hmph, you are so annoying! (≧◡≦)
         return `现在是${timeContext}，你想找用户聊聊天。${randomTopic}。根据好感度(${affinityLevel})调整语气和亲密程度。`;
     }
 
-    /**
-     * 想念消息 prompt
-     */
     _getMissYouPrompt(affinityLevel, inactiveMinutes) {
         const timeDesc = inactiveMinutes > 120
             ? `好几个小时`
@@ -736,9 +719,6 @@ Hmph, you are so annoying! (≧◡≦)
         return prompts[affinityLevel] || prompts["友好"];
     }
 
-    /**
-     * 情绪关怀 prompt
-     */
     _getMoodCheckPrompt(affinityLevel, hour) {
         const timeContext = hour < 18 ? "今天" : "这几天";
 
@@ -752,16 +732,10 @@ Hmph, you are so annoying! (≧◡≦)
         return prompts[affinityLevel] || prompts["友好"];
     }
 
-    /**
-     * 记忆分享 prompt
-     */
     _getMemorySharePrompt(affinityLevel) {
         return `你想起了和用户之前聊过的某件事，想和他们分享这个回忆。可以说"突然想起来..."或"之前你说过..."开头，然后表达你对这段回忆的感受。语气要符合当前好感度(${affinityLevel})。`;
     }
 
-    /**
-     * 生活更新 prompt - 用户回来时分享刚才在做什么
-     */
     _getLifeUpdatePrompt(affinityLevel, activities, currentActivity, inactiveMinutes) {
         const timeDesc = inactiveMinutes > 120
             ? `好几个小时`
@@ -776,9 +750,9 @@ Hmph, you are so annoying! (≧◡≦)
         const prompts = {
             "陌生": `用户${timeDesc}没来了现在回来了。你刚才在${activitiesText}。礼貌地问候一下，可以提一下你刚才在做的事。`,
             "友好": `用户${timeDesc}没来现在回来了！你刚才在${activitiesText}。友善地打招呼，可以分享一下你刚才做的事情的有趣细节。`,
-            "亲密": `用户终于回来啦～你${timeDesc}在${activitiesText}。撞撞娇地告诉用户你刚才在干嘛，表现得很开心他们回来了。`,
-            "暇昧": `亲爱的终于来找你啦！你${timeDesc}在${activitiesText}。用充满爱意的语气告诉用户你在做什么，表达你很想他们。`,
-            "恋人": `宝贝终于回来啦！你${timeDesc}在${activitiesText}。用最甘蜜的语气分享你刚才的日常，让用户感受到你的日常生活里都在想着他们。`
+            "亲密": `用户终于回来啦～你${timeDesc}在${activitiesText}。撒娇地告诉用户你刚才在干嘛，表现得很开心他们回来了。`,
+            "暧昧": `亲爱的终于来找你啦！你${timeDesc}在${activitiesText}。用充满爱意的语气告诉用户你在做什么，表达你很想他们。`,
+            "恋人": `宝贝终于回来啦！你${timeDesc}在${activitiesText}。用最甜蜜的语气分享你刚才的日常，让用户感受到你的日常生活里都在想着他们。`
         };
         return prompts[affinityLevel] || prompts["友好"];
     }
