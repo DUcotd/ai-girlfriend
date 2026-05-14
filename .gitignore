@@ -40,6 +40,7 @@ logs/
 # IDE / OS
 .vscode/
 .idea/
+.commandcode/
 .DS_Store
 Thumbs.db
 *.swp
