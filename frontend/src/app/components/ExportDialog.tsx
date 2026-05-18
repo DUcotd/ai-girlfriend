@@ -104,7 +104,7 @@ export default function ExportDialog({ messages, onClose }: ExportDialogProps) {
                             : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                             }`}
                     >
-                        📝 纯文本 (.txt)
+                        📝 纯文本
                     </button>
                     <button
                         onClick={() => setExportFormat("json")}
@@ -113,7 +113,7 @@ export default function ExportDialog({ messages, onClose }: ExportDialogProps) {
                             : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                             }`}
                     >
-                        📊 JSON (.json)
+                        📊 JSON 格式
                     </button>
                 </div>
             </div>

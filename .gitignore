@@ -51,3 +51,6 @@ coverage/
 # Misc
 temp/
 tmp/
+
+# Local scan / audit reports
+bug-vulnerability-scan-report.md

@@ -123,6 +123,9 @@ export default function Home() {
           setAffinity(data.affinity);
           localStorage.setItem("affinity", data.affinity.toString());
         }
+        if (data.emotionalState) {
+          setEmotionalState(data.emotionalState);
+        }
       })
       .catch(() => {});
 
@@ -225,7 +228,7 @@ export default function Home() {
       if (data.special_action === "ghosting") {
         if (data.affinity) setAffinity(data.affinity);
         if (data.emotionalState) setEmotionalState(data.emotionalState);
-        const ghostingMsg = { role: "system" as const, content: "\ud83d\udc94 Message read, no response..." };
+        const ghostingMsg = { role: "system" as const, content: "\ud83d\udc94 已读不回..." };
         setMessages((prev) => [...prev, ghostingMsg]);
         return;
       }
@@ -242,9 +245,9 @@ export default function Home() {
       if (voiceMode) speakText(data.reply);
     } catch (error: any) {
       if (error.name === "AbortError") {
-        setMessages((prev) => [...prev, { role: "assistant", content: "\u23f0 Taking longer than expected... please try again." }]);
+        setMessages((prev) => [...prev, { role: "assistant", content: "\u23f0 响应时间过长，请重试..." }]);
       } else {
-        setMessages((prev) => [...prev, { role: "assistant", content: "\u26a0\ufe0f Sorry, connection lost..." }]);
+        setMessages((prev) => [...prev, { role: "assistant", content: "\u26a0\ufe0f 连接中断..." }]);
       }
     } finally {
       setIsLoading(false);
@@ -409,7 +412,7 @@ export default function Home() {
         mediaRecorder.start();
         setIsRecording(true);
       } catch (e) {
-        alert("Microphone access denied");
+        alert("麦克风权限被拒绝");
       }
     }
   };
@@ -474,7 +477,7 @@ export default function Home() {
           <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-br from-pink-400 to-purple-500 flex items-center justify-center animate-pulse">
             <Heart className="w-8 h-8 text-white" />
           </div>
-          <p className="text-gray-500">Loading...</p>
+          <p className="text-gray-500">加载中...</p>
         </div>
       </div>
     );
@@ -513,22 +516,22 @@ export default function Home() {
         <header className="h-16 flex items-center justify-between px-6 border-b border-white/20 backdrop-blur-sm">
           <div />
           <div className="flex gap-2">
-            <button onClick={clearChat} className="p-2 rounded-full hover:bg-white/50 text-gray-600 transition-colors" title="New Chat">
+            <button onClick={clearChat} className="p-2 rounded-full hover:bg-white/50 text-gray-600 transition-colors" title="新对话">
               <MessageSquarePlus size={20} />
             </button>
-            <button onClick={() => setShowMemoryDialog(true)} className="p-2 rounded-full hover:bg-white/50 text-gray-600 transition-colors" title="Memories">
+            <button onClick={() => setShowMemoryDialog(true)} className="p-2 rounded-full hover:bg-white/50 text-gray-600 transition-colors" title="记忆">
               <Brain size={20} />
             </button>
-            <button onClick={() => setShowThemeSwitcher(true)} className="p-2 rounded-full hover:bg-white/50 text-gray-600 transition-colors" title="Theme">
+            <button onClick={() => setShowThemeSwitcher(true)} className="p-2 rounded-full hover:bg-white/50 text-gray-600 transition-colors" title="主题">
               <Palette size={20} />
             </button>
-            <button onClick={() => setShowTaskDialog(true)} className="p-2 rounded-full hover:bg-white/50 text-gray-600 transition-colors" title="Tasks">
+            <button onClick={() => setShowTaskDialog(true)} className="p-2 rounded-full hover:bg-white/50 text-gray-600 transition-colors" title="任务">
               <ClipboardList size={20} />
             </button>
-            <button onClick={() => setShowExportDialog(true)} className="p-2 rounded-full hover:bg-white/50 text-gray-600 transition-colors" title="Export">
+            <button onClick={() => setShowExportDialog(true)} className="p-2 rounded-full hover:bg-white/50 text-gray-600 transition-colors" title="导出">
               <Download size={20} />
             </button>
-            <button onClick={() => setShowSettings(!showSettings)} className="p-2 rounded-full hover:bg-white/50 text-gray-600 transition-colors" title="Settings">
+            <button onClick={() => setShowSettings(!showSettings)} className="p-2 rounded-full hover:bg-white/50 text-gray-600 transition-colors" title="设置">
               <Settings size={20} />
             </button>
           </div>
@@ -570,7 +573,7 @@ export default function Home() {
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex justify-start w-full">
                 <div className="bg-gradient-to-r from-pink-50 to-purple-50 p-4 rounded-2xl rounded-tl-none border border-pink-200 shadow-sm flex items-center gap-3">
                   <Heart className="w-4 h-4 text-pink-400 animate-pulse" />
-                  <span className="text-pink-500 text-sm">Xiao Ai is thinking...</span>
+                  <span className="text-pink-500 text-sm">小爱正在思考...</span>
                   <span className="w-2 h-2 bg-pink-400 rounded-full animate-bounce" />
                   <span className="w-2 h-2 bg-pink-400 rounded-full animate-bounce delay-75" />
                   <span className="w-2 h-2 bg-pink-400 rounded-full animate-bounce delay-150" />
@@ -586,12 +589,12 @@ export default function Home() {
             <QuickReplies onSend={sendMessage} disabled={isLoading} />
             <div className="flex items-center gap-2 px-2 pb-2">
               <button className={`p-3 rounded-xl transition-all ${voiceMode ? "bg-pink-100 text-pink-500" : "text-gray-400 hover:bg-gray-100"}`}
-                onClick={() => setVoiceMode(!voiceMode)} title="Voice mode">
+                onClick={() => setVoiceMode(!voiceMode)} title="语音模式">
                 <Volume2 size={20} />
               </button>
               <button className={`p-2 rounded-xl transition-all text-xs whitespace-nowrap ${autoSendVoice ? "bg-green-100 text-green-600" : "text-gray-400 hover:bg-gray-100"}`}
-                onClick={() => setAutoSendVoice(!autoSendVoice)} title="Auto send voice">
-                {autoSendVoice ? "Auto" : "Manual"}
+                onClick={() => setAutoSendVoice(!autoSendVoice)} title="自动发送语音">
+                {autoSendVoice ? "自动" : "手动"}
               </button>
               <div className="relative">
                 <button className={`p-3 rounded-xl transition-all ${showEmojiPicker ? "bg-pink-100 text-pink-500" : "text-gray-400 hover:bg-gray-100"}`}
@@ -607,12 +610,12 @@ export default function Home() {
               <input type="text" value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage()}
-                placeholder="Say something..."
+                placeholder="说点什么..."
                 className="flex-1 input-cute bg-transparent border-transparent focus:bg-white focus:border-pink-200"
                 disabled={isLoading} />
               <button className={`p-3 rounded-xl transition-all relative flex items-center gap-1 ${isRecording ? "text-red-500 bg-red-50" : "text-gray-400 hover:bg-gray-100"}`}
                 onClick={handleVoiceRecording}
-                title={isRecording ? "Stop" : "Record"}>
+                title={isRecording ? "停止" : "录音"}>
                 {isRecording && <span className="absolute inset-0 rounded-xl border border-red-500 pulse-ring" />}
                 {isRecording ? <StopCircle size={20} /> : <Mic size={20} />}
                 {isRecording && (

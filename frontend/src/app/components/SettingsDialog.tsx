@@ -196,7 +196,7 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
                     </div>
 
                     {/* Content Area */}
-                    <div className="flex-1 overflow-y-auto p-6 bg-white/20 custom-scrollbar">
+                    <div className="flex-1 overflow-y-auto p-6 bg-white/20 custom-scrollbar h-[420px]">
                         <AnimatePresence mode="wait">
                             <motion.div
                                 key={activeTab}
@@ -209,7 +209,7 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
                                 {activeTab === "general" && (
                                     <>
                                         <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">API Key</label>
+                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">API 密钥</label>
                                             <input
                                                 type="password"
                                                 value={apiKey}
@@ -219,7 +219,7 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
                                             />
                                         </div>
                                         <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">Base URL</label>
+                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">基础 URL</label>
                                             <input
                                                 type="text"
                                                 value={baseUrl}
@@ -269,7 +269,7 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
                                                 className="space-y-1"
                                             >
                                                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">
-                                                    TTS API Key <span className="text-pink-300 normal-case">(仅支持 OpenAI 官方 Key)</span>
+                                                    TTS API 密钥 <span className="text-pink-300 normal-case">(仅支持 OpenAI 官方 Key)</span>
                                                 </label>
                                                 <input
                                                     type="password"
@@ -289,7 +289,7 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
                                 {activeTab === "memory" && (
                                     <>
                                         <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">Embedding API Key</label>
+                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">嵌入 API 密钥</label>
                                             <input
                                                 type="password"
                                                 value={embApiKey}
@@ -299,7 +299,7 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
                                             />
                                         </div>
                                         <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">Embedding Base URL</label>
+                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">嵌入基础 URL</label>
                                             <input
                                                 type="text"
                                                 value={embBaseUrl}
@@ -309,7 +309,7 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
                                             />
                                         </div>
                                         <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">Embedding 模型名称</label>
+                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">嵌入模型名称</label>
                                             <input
                                                 type="text"
                                                 value={embModelName}
@@ -448,8 +448,8 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
                                         </div>
 
                                         <div className="p-4 bg-gray-50/50 rounded-2xl border border-gray-100 space-y-2 text-[11px] text-gray-500 italic">
-                                            <p>后端 API 版本: v1.2.0-stable</p>
-                                            <p>前端核心版本: Next.js 15 (Turbopack)</p>
+                                            <p>后端 API 版本: v1.2.0</p>
+                                            <p>前端版本: Next.js 15</p>
                                         </div>
                                     </div>
                                 )}

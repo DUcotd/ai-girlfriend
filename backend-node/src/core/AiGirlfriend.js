@@ -526,15 +526,62 @@ ${sensitivities.map(s => '  · ' + s).join('\n')}`;
             affinity: this.affinity,
             nickname: this.nickname || "亲爱的",
             historyCount: this.history.filter(m => m.role !== 'system').length,
-            memoryCount: this.memory ? this.memory.memories.length : 0
+            memoryCount: this.memory ? this.memory.memories.length : 0,
+            emotionalState: this.emotionEngine ? this.emotionEngine.getFullState() : null
         };
+    }
+
+    updateConfig(config) {
+        let changed = false;
+
+        if (config.apiKey && config.apiKey !== this.apiKey) {
+            this.apiKey = config.apiKey;
+            changed = true;
+        }
+        if (config.baseUrl && config.baseUrl !== this.baseUrl) {
+            this.baseUrl = config.baseUrl;
+            changed = true;
+        }
+        if (config.modelName && config.modelName !== this.modelName) {
+            this.modelName = config.modelName;
+            changed = true;
+        }
+        if (config.embeddingApiKey !== undefined && config.embeddingApiKey !== this.embeddingApiKey) {
+            this.embeddingApiKey = config.embeddingApiKey;
+            changed = true;
+        }
+        if (config.embeddingBaseUrl !== undefined && config.embeddingBaseUrl !== this.embeddingBaseUrl) {
+            this.embeddingBaseUrl = config.embeddingBaseUrl;
+            changed = true;
+        }
+        if (config.embeddingModelName !== undefined && config.embeddingModelName !== this.embeddingModelName) {
+            this.embeddingModelName = config.embeddingModelName;
+            changed = true;
+        }
+
+        if (changed) {
+            if (this.apiKey) this.initOpenAI();
+            if (this.memory) {
+                this.memory.updateConfig({
+                    apiKey: this.apiKey,
+                    baseUrl: this.baseUrl,
+                    embeddingApiKey: this.embeddingApiKey,
+                    embeddingBaseUrl: this.embeddingBaseUrl,
+                    embeddingModelName: this.embeddingModelName
+                });
+            }
+            this._saveState();
+            console.log(`[Config] Updated: model=${this.modelName}, baseUrl=${this.baseUrl}`);
+        }
+
+        return { modelName: this.modelName, baseUrl: this.baseUrl };
     }
 
     updateState(updates) {
         if (typeof updates.affinity === 'number') {
             this.affinity = Math.max(0, Math.min(100, updates.affinity));
         }
-        if (updates.nickname) {
+        if (updates.nickname !== undefined) {
             this.nickname = updates.nickname;
         }
         this._saveState();

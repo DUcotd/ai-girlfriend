@@ -56,27 +56,24 @@ export default function MemoryDialog({ onClose, backendUrl, onStateChange }: Mem
         try {
             await fetch(`${backendUrl}/memories`, { method: "DELETE" });
             setMemories([]);
-            showToast("Memories cleared!", "success");
+            showToast("记忆已清除！", "success");
         } catch (e) {
-            showToast("Clear failed", "error");
+            showToast("清除失败", "error");
         }
         setShowClearConfirm(false);
     };
 
     const handleSaveSettings = async () => {
+        if (onStateChange) onStateChange({ affinity, nickname });
+        onClose();
         try {
-            const res = await fetch(`${backendUrl}/state`, {
+            await fetch(`${backendUrl}/state`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ affinity, nickname }),
             });
-            if (res.ok) {
-                if (onStateChange) onStateChange({ affinity, nickname });
-                showToast("Saved!", "success");
-                setTimeout(() => onClose(), 800);
-            }
         } catch (e) {
-            showToast("Save failed", "error");
+            console.error("Save failed", e);
         }
     };
 
@@ -89,31 +86,31 @@ export default function MemoryDialog({ onClose, backendUrl, onStateChange }: Mem
             <div className="modal-glass p-6 w-[450px] max-h-[80vh] flex flex-col">
                 <div className="flex justify-between items-center mb-4">
                     <h3 className="font-bold text-lg flex items-center gap-2">
-                        <Brain size={20} className="text-pink-500" /> Memories
+                        <Brain size={20} className="text-pink-500" /> 记忆
                     </h3>
-                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">X</button>
+                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">✕</button>
                 </div>
 
                 <div className="flex gap-2 mb-4">
                     <button onClick={() => setActiveTab("memories")}
                         className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${activeTab === "memories" ? "bg-pink-100 text-pink-600" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
-                        Memories
+                        记忆
                     </button>
                     <button onClick={() => setActiveTab("settings")}
                         className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${activeTab === "settings" ? "bg-pink-100 text-pink-600" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
-                        Settings
+                        设置
                     </button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto">
                     {isLoading ? (
                         <div className="flex items-center justify-center py-8 text-gray-500">
-                            <Loader2 className="animate-spin mr-2" size={20} /> Loading...
+                            <Loader2 className="animate-spin mr-2" size={20} /> 加载中...
                         </div>
                     ) : activeTab === "memories" ? (
                         <div className="space-y-3">
                             {memories.length === 0 ? (
-                                <div className="text-center text-gray-500 py-8">No memories yet</div>
+                                <div className="text-center text-gray-500 py-8">暂无记忆</div>
                             ) : (
                                 memories.map((mem) => (
                                     <div key={mem.id} className="bg-pink-50/50 rounded-xl p-3 text-sm">
@@ -127,27 +124,27 @@ export default function MemoryDialog({ onClose, backendUrl, onStateChange }: Mem
                         <div className="space-y-4">
                             <div className="bg-pink-50/50 rounded-xl p-4">
                                 <label className="flex items-center gap-2 text-sm font-medium mb-3">
-                                    <Heart size={16} className="text-pink-500" /> Affinity: {affinity}
+                                    <Heart size={16} className="text-pink-500" /> 好感度: {affinity}
                                 </label>
                                 <input type="range" min="0" max="100" value={affinity}
                                     onChange={(e) => setAffinity(Number(e.target.value))}
                                     className="w-full accent-pink-500" />
                                 <div className="flex justify-between text-xs text-gray-400 mt-1">
-                                    <span>Stranger</span><span>Lover</span>
+                                    <span>陌生</span><span>恋人</span>
                                 </div>
                             </div>
 
                             <div className="bg-pink-50/50 rounded-xl p-4">
                                 <label className="flex items-center gap-2 text-sm font-medium mb-3">
-                                    <User size={16} className="text-pink-500" /> Nickname
+                                    <User size={16} className="text-pink-500" /> 昵称
                                 </label>
                                 <input type="text" value={nickname}
                                     onChange={(e) => setNickname(e.target.value)}
-                                    className="input-cute py-2 text-sm" placeholder="e.g. darling, honey..." />
+                                    className="input-cute py-2 text-sm" placeholder="例如：宝贝、亲爱的..." />
                             </div>
 
                             <button onClick={handleSaveSettings} className="btn-cute w-full py-2.5">
-                                Save Settings
+                                保存设置
                             </button>
                         </div>
                     )}
@@ -156,7 +153,7 @@ export default function MemoryDialog({ onClose, backendUrl, onStateChange }: Mem
                 <div className="mt-4 pt-4 border-t border-pink-100">
                     <button onClick={() => setShowClearConfirm(true)}
                         className="w-full py-2 text-sm text-orange-500 hover:bg-orange-50 rounded-xl transition-colors flex items-center justify-center gap-2">
-                        <Trash2 size={16} /> Clear memories (keep chat history)
+                        <Trash2 size={16} /> 清除记忆（保留聊天记录）
                     </button>
                 </div>
             </div>
@@ -165,10 +162,10 @@ export default function MemoryDialog({ onClose, backendUrl, onStateChange }: Mem
 
             <ConfirmDialog
                 isOpen={showClearConfirm}
-                title="Clear Memories"
-                message="Clear all memories? Chat history will be kept."
-                confirmText="Confirm"
-                cancelText="Cancel"
+                title="清除记忆"
+                message="确定清除所有记忆？聊天记录将保留。"
+                confirmText="确认"
+                cancelText="取消"
                 type="warning"
                 onConfirm={handleClearMemories}
                 onCancel={() => setShowClearConfirm(false)}

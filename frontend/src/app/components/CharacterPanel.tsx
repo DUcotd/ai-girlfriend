@@ -90,7 +90,7 @@ export default function CharacterPanel({ emotion, affinity, currentActivity, emo
     return (
         <div className="card-cute p-6 h-full flex flex-col">
             <div className="text-center mb-4">
-                <h2 className="text-2xl font-bold gradient-text">小爱 Xiao Ai</h2>
+                <h2 className="text-2xl font-bold gradient-text">小爱</h2>
                 <p className="text-sm text-gray-500 mt-1">
                     {getAffinityTitle()} · {emotionLabels[currentEmotion]}
                 </p>
@@ -176,8 +176,8 @@ export default function CharacterPanel({ emotion, affinity, currentActivity, emo
             {emotionalState && (
                 <div className="mt-6 bg-gray-50/80 rounded-xl p-3 text-xs border border-gray-100">
                     <div className="text-gray-400 mb-2 font-medium flex justify-between">
-                        <span>🧠 心理状态 (PAD Model)</span>
-                        <span className="text-[10px] opacity-70">P/A/D System</span>
+                        <span>🧠 心理状态</span>
+                        <span className="text-[10px] opacity-70">P/A/D 三维情绪模型</span>
                     </div>
 
                     <div className="space-y-2">

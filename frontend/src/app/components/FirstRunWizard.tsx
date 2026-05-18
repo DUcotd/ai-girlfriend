@@ -21,7 +21,7 @@ export default function FirstRunWizard({ backendUrl, onComplete }: FirstRunWizar
 
     const handleSaveConfig = async () => {
         if (!apiKey.trim()) {
-            setError("请填写 API Key");
+            setError("请填写 API 密钥");
             return;
         }
 
@@ -96,7 +96,7 @@ export default function FirstRunWizard({ backendUrl, onComplete }: FirstRunWizar
                                 transition={{ delay: 0.3 }}
                                 className="text-3xl font-bold bg-gradient-to-r from-pink-500 to-purple-600 bg-clip-text text-transparent mb-3"
                             >
-                                欢迎使用 AI-GirlFriend
+                                欢迎使用 AI 女友
                             </motion.h1>
 
                             <motion.p
@@ -163,7 +163,7 @@ export default function FirstRunWizard({ backendUrl, onComplete }: FirstRunWizar
                             <div className="space-y-4">
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">
-                                        API Key <span className="text-red-400">*</span>
+                                        API 密钥 <span className="text-red-400">*</span>
                                     </label>
                                     <input
                                         type="password"
@@ -176,7 +176,7 @@ export default function FirstRunWizard({ backendUrl, onComplete }: FirstRunWizar
 
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">
-                                        Base URL
+                                        基础 URL
                                     </label>
                                     <input
                                         type="text"
@@ -215,7 +215,7 @@ export default function FirstRunWizard({ backendUrl, onComplete }: FirstRunWizar
 
                                 <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100">
                                     <p className="text-[11px] text-blue-500 leading-relaxed">
-                                        💡 <strong>提示</strong>：API Key 仅保存在本地浏览器中，不会上传到任何服务器。
+                                        💡 <strong>提示</strong>：API 密钥仅保存在本地浏览器中，不会上传到任何服务器。
                                         你可以在设置中随时修改这些配置。
                                     </p>
                                 </div>

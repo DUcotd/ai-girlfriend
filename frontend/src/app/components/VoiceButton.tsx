@@ -89,7 +89,7 @@ export default function VoiceButton({ text, backendUrl, size = 16, engine = "ope
                 const isAuthError = lowerMsg.includes("api key") || lowerMsg.includes("401") || lowerMsg.includes("not configured") || lowerMsg.includes("invalid");
 
                 if (isAuthError) {
-                    alert("语音功能需要 OpenAI 官方 API Key，请在设置中配置有效且有额度的 TTS API Key ✨");
+                    alert("语音功能需要 OpenAI 官方 API 密钥，请在设置中配置有效且有额度的 TTS API 密钥 ✨");
                 } else {
                     console.error("TTS Error:", errorMsg);
                 }

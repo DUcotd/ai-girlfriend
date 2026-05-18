@@ -47,21 +47,19 @@ app.get('/', (req, res) => {
 app.post('/config', (req, res) => {
     try {
         const { api_key, base_url, model_name, tts_api_key, embedding_api_key, embedding_base_url, embedding_model_name } = req.body;
-        if (api_key || base_url || model_name || embedding_api_key || embedding_base_url || embedding_model_name) {
-            aiGirlfriend = new AiGirlfriend({
-                apiKey: api_key,
-                baseUrl: base_url,
-                modelName: model_name,
-                embeddingApiKey: embedding_api_key,
-                embeddingBaseUrl: embedding_base_url,
-                embeddingModelName: embedding_model_name
-            });
+        const result = aiGirlfriend.updateConfig({
+            apiKey: api_key,
+            baseUrl: base_url,
+            modelName: model_name,
+            embeddingApiKey: embedding_api_key,
+            embeddingBaseUrl: embedding_base_url,
+            embeddingModelName: embedding_model_name
+        });
+        if (tts_api_key || api_key) {
             const ttsKey = tts_api_key || api_key;
             voiceEngine = new VoiceEngine({ apiKey: ttsKey });
-            if (proactiveEngine) proactiveEngine.stop();
-            proactiveEngine = new ProactiveEngine(aiGirlfriend);
         }
-        res.json({ status: "updated", current_model: aiGirlfriend.modelName });
+        res.json({ status: "updated", current_model: result.modelName || aiGirlfriend.modelName });
     } catch (e) {
         console.error("[Config Error]", e.message || e);
         res.status(500).json({ detail: "Internal server error" });
