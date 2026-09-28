@@ -36,8 +36,24 @@ page.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`));
 page.on('pageerror', (e) => errors.push(`[pageerror] ${e.message}`));
 page.on('requestfailed', (r) => errors.push(`[requestfailed] ${r.url()} ${r.failure()?.errorText}`));
 
-await page.goto(URL, { waitUntil: 'networkidle', timeout: 30000 });
-// 跳过首次运行引导（localStorage 在无头浏览器里是空的）
+// ---- 场景 1：全新用户（localStorage 为空）----
+await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+const firstPaint = await page.evaluate(() => ({
+  hasLoadingText: document.body.innerText.includes('加载中'),
+  bodyText: document.body.innerText.slice(0, 40).replace(/\s+/g, ' '),
+}));
+console.log('--- 首屏（SSR 首帧，未执行 effect）---');
+console.log(`  出现「加载中」白屏: ${firstPaint.hasLoadingText ? '❌ 有' : '✅ 无'}`);
+console.log(`  首帧文本: ${JSON.stringify(firstPaint.bodyText)}`);
+
+await page.waitForTimeout(2000);
+const firstRun = await page.evaluate(() => ({
+  wizardVisible: document.body.innerText.includes('欢迎使用 AI 女友'),
+  hasHeader: !!document.querySelector('header'),
+}));
+console.log(`  引导层可见: ${firstRun.wizardVisible ? '✅' : '❌'}  主界面已铺底: ${firstRun.hasHeader ? '✅' : '❌'}`);
+
+// ---- 场景 2：回访用户 ----
 await page.evaluate(() => {
   localStorage.setItem('hasCompletedSetup', 'true');
   localStorage.setItem('baseUrl', 'https://api.openai.com/v1');
@@ -53,20 +69,23 @@ console.log(logs.length ? logs.join('\n') : '(无)');
 console.log('\n=== 页面错误 ===');
 console.log(errors.length ? errors.join('\n') : '(无)');
 
-const info = await page.evaluate(() => {
-  const bubbles = document.querySelectorAll('.message-bubble');
-  const icons = document.querySelectorAll('[aria-label="查看小爱的内心独白"]');
-  return {
-    bubbleCount: bubbles.length,
-    thoughtIconCount: icons.length,
-    bubbleTexts: Array.from(bubbles).map((b) => b.textContent?.slice(0, 40)),
-  };
-});
+  const info = await page.evaluate(() => {
+    const bubbles = document.querySelectorAll('.message-bubble');
+    const icons = document.querySelectorAll('[aria-label="查看小爱的内心独白"]');
+    const img = document.querySelector('img[src*="/characters/"]');
+    return {
+      bubbleCount: bubbles.length,
+      thoughtIconCount: icons.length,
+      bubbleTexts: Array.from(bubbles).map((b) => b.textContent?.slice(0, 40)),
+      characterImg: img ? { src: img.getAttribute('src'), loaded: img.complete && img.naturalWidth > 0 } : null,
+    };
+  });
 
 console.log('\n=== DOM 检查 ===');
 console.log(`  气泡数: ${info.bubbleCount}`);
 console.log(`  内心独白图标数: ${info.thoughtIconCount}`);
 console.log(`  气泡内容: ${JSON.stringify(info.bubbleTexts)}`);
+console.log(`  角色立绘: ${JSON.stringify(info.characterImg)}`);
 
 // hover 第一个图标，验证心声卡片会展开
 if (info.thoughtIconCount > 0) {
