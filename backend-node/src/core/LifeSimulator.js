@@ -1,9 +1,10 @@
-import fs from 'fs';
-import path from 'path';
+import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+
+const LOG_FILE = 'life_log.json';
 
 /**
  * 生活模拟器 - 模拟AI女友的日常活动
- * 
+ *
  * 功能特点：
  * - 基于时间段的活动调度
  * - 活动历史记录（最近24小时）
@@ -12,7 +13,7 @@ import path from 'path';
  */
 class LifeSimulator {
     constructor() {
-        this.logPath = path.resolve(process.cwd(), '..', 'memory_db', 'life_log.json');
+        this.logPath = dataPath(LOG_FILE);
 
         // 当前活动状态
         this.currentActivity = null;
@@ -96,12 +97,6 @@ class LifeSimulator {
     }
 
     init() {
-        // 确保目录存在
-        const dir = path.dirname(this.logPath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-
         // 加载历史记录
         this.loadState();
 
@@ -117,43 +112,36 @@ class LifeSimulator {
     }
 
     loadState() {
-        try {
-            if (fs.existsSync(this.logPath)) {
-                const data = JSON.parse(fs.readFileSync(this.logPath, 'utf8'));
-                this.activityHistory = data.history || [];
-
-                // 恢复当前活动（如果还在有效期内）
-                if (data.current && data.currentEnd) {
-                    const endTime = new Date(data.currentEnd).getTime();
-                    if (Date.now() < endTime) {
-                        this.currentActivity = data.current;
-                        this.activityStartTime = new Date(data.currentStart);
-                        this.activityEndTime = new Date(data.currentEnd);
-                    }
-                }
-
-                // 清理超过24小时的历史
-                this.cleanOldHistory();
-            }
-        } catch (e) {
-            console.error('[LifeSimulator] Failed to load state:', e);
+        const data = readJson(LOG_FILE, null);
+        if (!data) {
             this.activityHistory = [];
+            return;
         }
+
+        this.activityHistory = data.history || [];
+
+        // 恢复当前活动（如果还在有效期内）
+        if (data.current && data.currentEnd) {
+            const endTime = new Date(data.currentEnd).getTime();
+            if (Date.now() < endTime) {
+                this.currentActivity = data.current;
+                this.activityStartTime = new Date(data.currentStart);
+                this.activityEndTime = new Date(data.currentEnd);
+            }
+        }
+
+        // 清理超过24小时的历史
+        this.cleanOldHistory();
     }
 
     saveState() {
-        try {
-            const data = {
-                current: this.currentActivity,
-                currentStart: this.activityStartTime?.toISOString(),
-                currentEnd: this.activityEndTime?.toISOString(),
-                history: this.activityHistory,
-                lastUpdated: new Date().toISOString()
-            };
-            fs.writeFileSync(this.logPath, JSON.stringify(data, null, 2));
-        } catch (e) {
-            console.error('[LifeSimulator] Failed to save state:', e);
-        }
+        writeJson(LOG_FILE, {
+            current: this.currentActivity,
+            currentStart: this.activityStartTime?.toISOString(),
+            currentEnd: this.activityEndTime?.toISOString(),
+            history: this.activityHistory,
+            lastUpdated: new Date().toISOString()
+        });
     }
 
     cleanOldHistory() {

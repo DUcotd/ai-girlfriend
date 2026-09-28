@@ -7,8 +7,9 @@
  * - D (Dominance): 优势度 [-1, 1] 掌控/顺从
  */
 
-import fs from 'fs';
-import path from 'path';
+import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+
+const STATE_FILE = 'emotion_state.json';
 
 class EmotionEngine {
     static AFFINITY_TIERS = [
@@ -20,7 +21,7 @@ class EmotionEngine {
     ];
 
     constructor(statePath = null) {
-        this.statePath = statePath || path.resolve(process.cwd(), '..', 'memory_db', 'emotion_state.json');
+        this.statePath = statePath || dataPath(STATE_FILE);
 
         this.baseline = { P: 0.3, A: 0.1, D: -0.1 };
         this.state = { P: 0.3, A: 0.1, D: -0.1 };
@@ -349,38 +350,25 @@ ${style.guide}
     // ==================== 持久化 ====================
 
     _loadState() {
-        try {
-            if (fs.existsSync(this.statePath)) {
-                const data = JSON.parse(fs.readFileSync(this.statePath, 'utf-8'));
-                if (data.state) this.state = data.state;
-                if (data.baseline) this.baseline = data.baseline;
-                if (data.history) this.history = data.history.slice(-this.maxHistory);
-                if (data.relationshipStage) this.relationshipStage = data.relationshipStage;
-                if (data.relationshipLabel) this.relationshipLabel = data.relationshipLabel;
-                console.log(`[Emotion] Loaded state: ${this.getEmotionLabel()}`);
-            }
-        } catch (e) {
-            console.error('[Emotion] Load error:', e.message);
-        }
+        const data = readJson(STATE_FILE, null);
+        if (!data) return;
+        if (data.state) this.state = data.state;
+        if (data.baseline) this.baseline = data.baseline;
+        if (data.history) this.history = data.history.slice(-this.maxHistory);
+        if (data.relationshipStage) this.relationshipStage = data.relationshipStage;
+        if (data.relationshipLabel) this.relationshipLabel = data.relationshipLabel;
+        console.log(`[Emotion] Loaded state: ${this.getEmotionLabel()}`);
     }
 
     _saveState() {
-        try {
-            const dir = path.dirname(this.statePath);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-            fs.writeFileSync(this.statePath, JSON.stringify({
-                state: this.state,
-                baseline: this.baseline,
-                history: this.history,
-                relationshipStage: this.relationshipStage,
-                relationshipLabel: this.relationshipLabel,
-                lastUpdated: new Date().toISOString()
-            }, null, 2));
-        } catch (e) {
-            console.error('[Emotion] Save error:', e.message);
-        }
+        writeJson(STATE_FILE, {
+            state: this.state,
+            baseline: this.baseline,
+            history: this.history,
+            relationshipStage: this.relationshipStage,
+            relationshipLabel: this.relationshipLabel,
+            lastUpdated: new Date().toISOString()
+        });
     }
 
     _clamp(v) {

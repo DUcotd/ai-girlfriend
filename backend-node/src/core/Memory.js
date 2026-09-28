@@ -1,22 +1,16 @@
-import fs from 'fs';
-import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
+import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
 
 dotenv.config();
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DB_FILE = 'memory.json';
 
 class Memory {
     constructor(persistDirectory = "memory_db", config = {}) {
-        this.dbPath = path.resolve(process.cwd(), '..', persistDirectory, 'memory.json');
-
-        const dir = path.dirname(this.dbPath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
+        // persistDirectory 仅为兼容保留；实际存储统一在 backend-node/data/memory.json
+        this.dbPath = dataPath(DB_FILE);
 
         this.apiKey = config.embeddingApiKey || config.apiKey || null;
         this.baseUrl = config.embeddingBaseUrl || config.baseUrl || "https://api.openai.com/v1";
@@ -58,21 +52,11 @@ class Memory {
     }
 
     _load() {
-        if (!fs.existsSync(this.dbPath)) return [];
-        try {
-            return JSON.parse(fs.readFileSync(this.dbPath, 'utf-8'));
-        } catch (e) {
-            console.error(`Memory Load Error: ${e}`);
-            return [];
-        }
+        return readJson(DB_FILE, []);
     }
 
     _save() {
-        try {
-            fs.writeFileSync(this.dbPath, JSON.stringify(this.memories, null, 2), 'utf-8');
-        } catch (e) {
-            console.error(`Memory Save Error: ${e}`);
-        }
+        writeJson(DB_FILE, this.memories);
     }
 
     async getEmbedding(text) {

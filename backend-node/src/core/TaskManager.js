@@ -1,40 +1,20 @@
-import fs from 'fs';
-import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+
+const TASKS_FILE = 'tasks.json';
 
 class TaskManager {
     constructor() {
-        this.tasksPath = path.resolve(process.cwd(), 'data', 'tasks.json');
-        this.tasks = [];
-        this.init();
+        this.tasksPath = dataPath(TASKS_FILE);
+        this.tasks = this._load();
     }
 
-    init() {
-        // Ensure data directory exists
-        const dir = path.dirname(this.tasksPath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-
-        // Load tasks if file exists
-        if (fs.existsSync(this.tasksPath)) {
-            try {
-                this.tasks = JSON.parse(fs.readFileSync(this.tasksPath, 'utf8'));
-            } catch (e) {
-                console.error("Failed to load tasks:", e);
-                this.tasks = [];
-            }
-        } else {
-            this.saveTasks();
-        }
+    _load() {
+        return readJson(TASKS_FILE, []);
     }
 
     saveTasks() {
-        try {
-            fs.writeFileSync(this.tasksPath, JSON.stringify(this.tasks, null, 2));
-        } catch (e) {
-            console.error("Failed to save tasks:", e);
-        }
+        writeJson(TASKS_FILE, this.tasks);
     }
 
     getTasks() {

@@ -8,12 +8,13 @@
  * - 稳定关爱 → 安全感↑
  */
 
-import fs from 'fs';
-import path from 'path';
+import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+
+const STATE_FILE = 'personality_state.json';
 
 class PersonalityDrift {
     constructor(statePath = null) {
-        this.statePath = statePath || path.resolve(process.cwd(), '..', 'memory_db', 'personality_state.json');
+        this.statePath = statePath || dataPath(STATE_FILE);
 
         // 性格维度 (0-100)
         this.traits = {
@@ -265,32 +266,19 @@ ${descriptions.map(d => `- ${d}`).join('\n')}
     // ==================== 持久化 ====================
 
     _loadState() {
-        try {
-            if (fs.existsSync(this.statePath)) {
-                const data = JSON.parse(fs.readFileSync(this.statePath, 'utf-8'));
-                if (data.traits) this.traits = { ...this.traits, ...data.traits };
-                if (data.stats) this.stats = { ...this.stats, ...data.stats };
-                console.log(`[Personality] Loaded: ${this.getDominantTraits().join(', ')}`);
-            }
-        } catch (e) {
-            console.error('[Personality] Load error:', e.message);
-        }
+        const data = readJson(STATE_FILE, null);
+        if (!data) return;
+        if (data.traits) this.traits = { ...this.traits, ...data.traits };
+        if (data.stats) this.stats = { ...this.stats, ...data.stats };
+        console.log(`[Personality] Loaded: ${this.getDominantTraits().join(', ')}`);
     }
 
     _saveState() {
-        try {
-            const dir = path.dirname(this.statePath);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-            fs.writeFileSync(this.statePath, JSON.stringify({
-                traits: this.traits,
-                stats: this.stats,
-                lastUpdated: new Date().toISOString()
-            }, null, 2));
-        } catch (e) {
-            console.error('[Personality] Save error:', e.message);
-        }
+        writeJson(STATE_FILE, {
+            traits: this.traits,
+            stats: this.stats,
+            lastUpdated: new Date().toISOString()
+        });
     }
 }
 

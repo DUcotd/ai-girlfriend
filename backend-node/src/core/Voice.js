@@ -3,11 +3,9 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
-import { fileURLToPath } from 'url';
+import { BACKEND_ROOT } from '../config.js';
 
 dotenv.config();
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 class VoiceEngine {
     constructor(config = {}) {
@@ -29,7 +27,7 @@ class VoiceEngine {
     async textToSpeech(text) {
         if (!this.openai) throw new Error("OpenAI API Key not configured");
 
-        const speechFile = path.resolve(process.cwd(), 'static', 'audio', `${uuidv4()}.mp3`);
+        const speechFile = path.join(BACKEND_ROOT, 'static', 'audio', `${uuidv4()}.mp3`);
 
         // Ensure static/audio exists
         const dir = path.dirname(speechFile);
