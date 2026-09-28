@@ -31,9 +31,11 @@ class AiGirlfriend {
         this.statePath = dataPath(STATE_FILE);
         this.systemPrompt = PERSONA_SYSTEM_PROMPT;
 
+        // 默认值与前端 lib/providers.ts 的 DEFAULT_PROVIDER 保持一致（商汤 Sensenova）。
+        // 改这里就要同步改前端，否则前后端默认服务商会打架。
         this.apiKey = null;
-        this.baseUrl = "https://api.openai.com/v1";
-        this.modelName = "gpt-3.5-turbo";
+        this.baseUrl = "https://token.sensenova.cn/v1";
+        this.modelName = "sensenova-6.8-flash-lite";
         this.embeddingApiKey = null;
         this.embeddingBaseUrl = null;
         this.embeddingModelName = null;

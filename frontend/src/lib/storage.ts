@@ -2,6 +2,8 @@
  * localStorage 集中管理 —— 所有读写集中在此，避免 key 字符串散落在组件里。
  */
 
+import { DEFAULT_PROVIDER } from "./providers";
+
 /**
  * localStorage 在服务端渲染阶段不存在，所有访问都走这层保护，
  * 便于组件在 useState 惰性初始化里直接读取（避免 useEffect 中 setState）。
@@ -52,8 +54,8 @@ export function isSetupComplete(): boolean {
 export function getChatConfig() {
   return {
     apiKey: read(KEYS.apiKey) || "",
-    baseUrl: read(KEYS.baseUrl) || "https://api.openai.com/v1",
-    modelName: read(KEYS.modelName) || "gpt-3.5-turbo",
+    baseUrl: read(KEYS.baseUrl) || DEFAULT_PROVIDER.baseUrl,
+    modelName: read(KEYS.modelName) || DEFAULT_PROVIDER.modelName,
     ttsApiKey: read(KEYS.ttsApiKey) || undefined,
     embApiKey: read(KEYS.embApiKey) || undefined,
     embBaseUrl: read(KEYS.embBaseUrl) || undefined,

@@ -8,6 +8,7 @@ import { useToast } from "./Toast";
 import ConfirmDialog from "./ConfirmDialog";
 import { api } from "@/lib/api";
 import { get, remove, set } from "@/lib/storage";
+import { PROVIDER_PRESETS, matchPreset, DEFAULT_PROVIDER } from "@/lib/providers";
 import type { ProactiveTypeInfo, TtsEngine } from "@/types";
 import SettingsProactiveTab from "./settings/SettingsProactiveTab";
 
@@ -21,8 +22,8 @@ type SettingsTab = "general" | "voice" | "memory" | "proactive" | "advanced";
 export default function SettingsDialog({ onClose, onConfigChange }: SettingsDialogProps) {
     // 初始值直接从 localStorage 惰性读取（storage 层已做 SSR 保护）
     const [apiKey, setApiKey] = useState(() => get("apiKey") || "");
-    const [baseUrl, setBaseUrl] = useState(() => get("baseUrl") || "https://api.openai.com/v1");
-    const [modelName, setModelName] = useState(() => get("modelName") || "gpt-3.5-turbo");
+    const [baseUrl, setBaseUrl] = useState(() => get("baseUrl") || DEFAULT_PROVIDER.baseUrl);
+    const [modelName, setModelName] = useState(() => get("modelName") || DEFAULT_PROVIDER.modelName);
     const [ttsApiKey, setTtsApiKey] = useState(() => get("ttsApiKey") || "");
     const [ttsEngine, setTtsEngine] = useState<TtsEngine>(() => (get("ttsEngine") as TtsEngine) || "openai");
     const [embApiKey, setEmbApiKey] = useState(() => get("embApiKey") || "");
@@ -142,6 +143,10 @@ export default function SettingsDialog({ onClose, onConfigChange }: SettingsDial
         setShowResetConfirm(false);
     };
 
+    // 从当前填写值反推命中的预设（值被手改过就自动落到「自定义」）
+    const activePreset = matchPreset(baseUrl, modelName);
+    const activePresetNote = PROVIDER_PRESETS.find((p) => p.id === activePreset)?.note;
+
     const tabs: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
         { id: "general", label: "通用", icon: MessageSquare },
         { id: "voice", label: "语音", icon: Mic },
@@ -197,6 +202,31 @@ export default function SettingsDialog({ onClose, onConfigChange }: SettingsDial
                             >
                                 {activeTab === "general" && (
                                     <>
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">服务商</label>
+                                            <div className="flex gap-2 p-1 bg-gray-100/50 rounded-2xl border border-gray-100">
+                                                {PROVIDER_PRESETS.map((preset) => (
+                                                    <button
+                                                        key={preset.id}
+                                                        type="button"
+                                                        onClick={() => { setBaseUrl(preset.baseUrl); setModelName(preset.modelName); }}
+                                                        className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${activePreset === preset.id ? "bg-white text-pink-600 shadow-sm" : "text-gray-400 hover:text-gray-500"}`}
+                                                    >
+                                                        {preset.label}
+                                                    </button>
+                                                ))}
+                                                <div
+                                                    className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${activePreset === "custom" ? "bg-white text-pink-600 shadow-sm" : "text-gray-400"}`}
+                                                >
+                                                    自定义
+                                                </div>
+                                            </div>
+                                            {activePresetNote && (
+                                                <p className="text-[10px] text-amber-500 pl-1 leading-relaxed">
+                                                    ⚠️ {activePresetNote}
+                                                </p>
+                                            )}
+                                        </div>
                                         <div className="space-y-1">
                                             <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">API 密钥</label>
                                             <input

@@ -6,6 +6,7 @@ import { Settings, Key, Sparkles, ArrowRight, Check, Heart, Zap } from "lucide-r
 import { useToast } from "./Toast";
 import { api } from "@/lib/api";
 import { set } from "@/lib/storage";
+import { DEFAULT_PROVIDER } from "@/lib/providers";
 
 interface FirstRunWizardProps {
     onComplete: () => void;
@@ -14,8 +15,8 @@ interface FirstRunWizardProps {
 export default function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
     const [step, setStep] = useState(0); // 0: Welcome, 1: API Config, 2: Complete
     const [apiKey, setApiKey] = useState("");
-    const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
-    const [modelName, setModelName] = useState("gpt-3.5-turbo");
+    const [baseUrl, setBaseUrl] = useState(DEFAULT_PROVIDER.baseUrl);
+    const [modelName, setModelName] = useState(DEFAULT_PROVIDER.modelName);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
     const { showToast, ToastContainer } = useToast();

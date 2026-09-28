@@ -31,9 +31,10 @@ await page.evaluate(() => {
     // isSetupComplete() 要求 apiKey 与 hasCompletedSetup 同时存在
     localStorage.setItem("hasCompletedSetup", "true");
     localStorage.setItem("apiKey", "headless-test");
-    localStorage.setItem("baseUrl", "https://api.openai.com/v1");
-    localStorage.setItem("modelName", "gpt-4o-mini");
     localStorage.setItem("notificationAsked", "true");
+    // 刻意不写 baseUrl / modelName：要验的是「没存过值时表单是否被默认服务商预填」
+    localStorage.removeItem("baseUrl");
+    localStorage.removeItem("modelName");
 });
 await page.reload({ waitUntil: "networkidle" });
 await page.waitForTimeout(800);
@@ -74,6 +75,37 @@ for (const name of ["通用", "语音", "记忆", "主动", "系统"]) {
         return Math.max(0, ...panels.map((t) => t.replace(/\s+/g, " ").trim().length));
     });
     console.log(`  页签「${name}」内容长度: ${len} ${len > 20 ? "✅" : "❌"}`);
+}
+
+// ---- 服务商预设 ----
+// 先确认「没有任何本地值」时表单被默认服务商预填(open 之前不点任何按钮)
+await page.locator('button:has-text("通用")').first().click();
+await page.waitForTimeout(350);
+const prefilled = await page.evaluate(() => {
+    const inputs = [...document.querySelectorAll("input")];
+    return inputs.map((i) => i.value);
+});
+const prefilledOk =
+    prefilled.includes("https://token.sensenova.cn/v1") &&
+    prefilled.includes("sensenova-6.8-flash-lite");
+console.log("\n=== 默认预填 ===");
+console.log("  表单初始值:", JSON.stringify(prefilled));
+console.log("  开箱即用(URL+模型已填好):", prefilledOk ? "✅" : "❌");
+const sensenovaBtn = page.locator('button:has-text("商汤 Sensenova")').first();
+const hasPreset = (await sensenovaBtn.count()) > 0;
+console.log("\n=== 服务商预设 ===");
+console.log("  预设按钮存在:", hasPreset ? "✅" : "❌");
+if (hasPreset) {
+    await sensenovaBtn.click();
+    await page.waitForTimeout(300);
+    const after = await page.evaluate(() => {
+        const inputs = [...document.querySelectorAll("input")];
+        return inputs.map((i) => i.value);
+    });
+    console.log("  点击后填入:", JSON.stringify(after));
+    const ok = after.includes("https://token.sensenova.cn/v1") && after.includes("sensenova-6.8-flash-lite");
+    console.log("  预设生效:", ok ? "✅" : "❌");
+    if (!ok) console.log("  点击前:", JSON.stringify(prefilled));
 }
 
 // ---- 主动消息页签专项 ----
