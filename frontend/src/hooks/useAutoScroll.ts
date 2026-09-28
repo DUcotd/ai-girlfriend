@@ -25,11 +25,16 @@ export function useAutoScroll() {
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  // 自动跟随：贴底时才滚。流式输出中用 auto（逐字追加时 smooth 会互相打断、抖动）
+  // 自动跟随：贴底时才滚。流式输出中用 auto（逐字追加时 smooth 会互相打断、抖动）；
+  // 用户开启「减少动态效果」时同样退化为瞬时跳转
   useEffect(() => {
     const el = listRef.current;
     if (!el || !atBottomRef.current) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: isLoading ? "auto" : "smooth" });
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: isLoading || reduceMotion ? "auto" : "smooth",
+    });
   }, [messages, isLoading]);
 
   return {

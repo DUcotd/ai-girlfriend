@@ -19,3 +19,12 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
 }
+
+/* 主题/模式切换过渡（300ms）：文本色与可过渡的表面色平滑切换；
+   body 背景是渐变无法过渡属预期，各表面组件自身的 transition 会接住颜色变化。 */
+@media (prefers-reduced-motion: no-preference) {
+  body {
+    transition: color var(--duration-slow) ease,
+      background-color var(--duration-slow) ease;
+  }
+}

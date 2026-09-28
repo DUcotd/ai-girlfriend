@@ -49,13 +49,35 @@ const config: Config = {
                 accent: "var(--shadow-accent)",
                 "accent-hover": "var(--shadow-accent-hover)",
             },
+            /* 动效规范（token 真源在 tokens.css）：微交互 duration-fast(120ms)、
+               功能过渡 duration-normal(200ms)、弹窗/主题 duration-slow(300ms) */
+            transitionDuration: {
+                fast: "var(--duration-fast)",
+                normal: "var(--duration-normal)",
+                slow: "var(--duration-slow)",
+            },
+            transitionTimingFunction: {
+                "out-expo": "var(--ease-out)",
+            },
             keyframes: {
                 "spin-slow": {
                     to: { transform: "rotate(360deg)" },
                 },
+                /* 立绘呼吸：与外层 hover scale 分层使用（内层元素），避免 transform 冲突 */
+                breathe: {
+                    "0%, 100%": { transform: "scale(1)" },
+                    "50%": { transform: "scale(1.035)" },
+                },
+                /* 情绪切换 crossfade：旧立绘作为覆盖层渐隐，露出底层新立绘 */
+                "avatar-fade-out": {
+                    from: { opacity: "1" },
+                    to: { opacity: "0" },
+                },
             },
             animation: {
                 "spin-slow": "spin-slow 8s linear infinite",
+                breathe: "breathe 4s ease-in-out infinite",
+                "avatar-fade-out": "avatar-fade-out var(--duration-slow) var(--ease-out) forwards",
             },
         },
     },

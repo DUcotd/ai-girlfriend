@@ -1,6 +1,9 @@
 "use client";
 
+import { useState } from "react";
+import { ChevronDown } from "lucide-react";
 import ProgressBar from "../ui/ProgressBar";
+import { cn } from "@/lib/cn";
 import type { EmotionalState } from "@/types";
 
 interface PadStateBarsProps {
@@ -8,10 +11,11 @@ interface PadStateBarsProps {
 }
 
 /**
- * PAD 三维情绪面板（Pleasure/Arousal/Dominance）。
+ * PAD 三维情绪面板（Pleasure/Arousal/Dominance）。默认折叠，点击标题行展开。
  * 轴向配色是数据可视化语义（正/负极），不随主题色相变化；轨道吃 token。
  */
 export default function PadStateBars({ emotionalState }: PadStateBarsProps) {
+    const [expanded, setExpanded] = useState(false);
     const { P, A, D } = emotionalState.current;
 
     const axes = [
@@ -38,28 +42,44 @@ export default function PadStateBars({ emotionalState }: PadStateBarsProps) {
 
     return (
         <div className="mt-6 rounded-xl border border-line-subtle bg-surface-2/60 p-3 text-xs">
-            <div className="mb-2 flex justify-between font-medium text-content-muted">
+            <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                aria-expanded={expanded}
+                className="flex w-full items-center justify-between font-medium text-content-muted transition-colors duration-fast hover:text-content-secondary"
+            >
                 <span>🧠 心理状态</span>
-                <span className="text-[10px] opacity-70">P/A/D 三维情绪模型</span>
-            </div>
+                <span className="flex items-center gap-1 text-[10px] opacity-70">
+                    P/A/D 三维情绪模型
+                    <ChevronDown
+                        size={14}
+                        className={cn(
+                            "transition-transform duration-normal ease-out-expo",
+                            expanded && "rotate-180"
+                        )}
+                    />
+                </span>
+            </button>
 
-            <div className="space-y-2">
-                {axes.map((axis, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                        <span className="w-4 text-center">{axis.emoji}</span>
-                        <ProgressBar
-                            value={Math.abs(axis.value) * 100}
-                            gradient={false}
-                            className="h-1.5 flex-1 bg-content-muted/15"
-                            fillClassName={axis.fill}
-                            fillStyle={axis.style}
-                        />
-                        <span className="w-8 text-right font-mono text-content-secondary">
-                            {axis.value.toFixed(1)}
-                        </span>
-                    </div>
-                ))}
-            </div>
+            {expanded && (
+                <div className="mt-2 space-y-2">
+                    {axes.map((axis, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                            <span className="w-4 text-center">{axis.emoji}</span>
+                            <ProgressBar
+                                value={Math.abs(axis.value) * 100}
+                                gradient={false}
+                                className="h-1.5 flex-1 bg-content-muted/15"
+                                fillClassName={axis.fill}
+                                fillStyle={axis.style}
+                            />
+                            <span className="w-8 text-right font-mono text-content-secondary">
+                                {axis.value.toFixed(1)}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

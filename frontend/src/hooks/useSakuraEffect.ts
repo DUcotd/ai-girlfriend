@@ -16,7 +16,9 @@ export function useSakuraEffect(): void {
       petal.classList.add("sakura-petal");
       petal.style.left = `${Math.random() * 100}vw`;
       petal.style.animationDuration = `${Math.random() * 3 + 4}s`;
-      petal.style.opacity = (Math.random() * 0.5 + 0.3).toString();
+      // 个体随机透明度用变量承载（不直接写 opacity）：最终视觉 = 模式系数 × 随机系数，
+      // 由 CSS 里的 calc 相乘，明暗模式（0.7/0.4）与随机感同时生效
+      petal.style.setProperty("--petal-opacity", (Math.random() * 0.5 + 0.3).toFixed(3));
       document.body.appendChild(petal);
       setTimeout(() => petal.remove(), PETAL_LIFETIME_MS);
     };

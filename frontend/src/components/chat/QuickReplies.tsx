@@ -18,7 +18,7 @@ const quickReplies = [
 
 export default function QuickReplies({ onSend, disabled }: QuickRepliesProps) {
     return (
-        <div className="flex gap-2 flex-wrap justify-center py-3 px-4">
+        <div className="flex gap-2 flex-wrap justify-center px-4 pb-3 pt-1">
             {quickReplies.map((reply, idx) => (
                 <button
                     key={idx}

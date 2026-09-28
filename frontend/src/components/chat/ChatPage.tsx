@@ -94,11 +94,11 @@ export default function ChatPage() {
         <Menu size={24} />
       </button>
 
-      {/* 侧边栏：角色面板 */}
+      {/* 侧边栏：角色面板（玻璃卡片悬浮，桌面 360px） */}
       <div
-        className={`fixed md:static inset-y-0 left-0 z-40 w-full md:w-[400px] bg-surface-1/80 md:bg-transparent backdrop-blur-xl md:backdrop-blur-none transition-transform duration-300 transform ${
+        className={`fixed md:static inset-y-0 left-0 z-40 w-full md:w-[360px] md:shrink-0 bg-surface-1/80 md:bg-transparent backdrop-blur-xl md:backdrop-blur-none transition-transform duration-300 transform ${
           isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
-        } p-4 md:p-6 flex flex-col`}
+        } p-4 md:p-6 md:pr-0 flex flex-col`}
       >
         <CharacterPanel currentActivity={currentActivity} />
         {isSidebarOpen && (
@@ -111,29 +111,32 @@ export default function ChatPage() {
         )}
       </div>
 
-      <div className="flex-1 flex flex-col h-full relative z-10 max-w-5xl mx-auto w-full">
+      {/* 主区：工具栏全宽；消息流与输入 dock 收窄 max-w-3xl 居中，视线聚焦 */}
+      <div className="flex-1 flex flex-col h-full relative z-10 min-w-0">
         <ChatToolbar />
 
-        <div ref={listRef} className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
-          {messages.length === 0 && !isLoading && (
-            <WelcomeMessage onQuickStart={sendMessage} />
-          )}
-
-          <AnimatePresence>
-            {messages.map((msg) =>
-              // 流式占位的空气泡不渲染：等待期由下方打字指示器单独代表「在输入」，
-              // 否则会出现「🔊 空气泡 + ··· 」两个气泡并存的怪相
-              msg.role === "assistant" && !msg.content.trim() ? null : (
-                <ChatMessage key={msg.id} message={msg} ttsEngine={ttsEngine} />
-              )
+        <div ref={listRef} className="flex-1 overflow-y-auto p-4 md:p-6">
+          <div className="mx-auto w-full max-w-3xl space-y-6">
+            {messages.length === 0 && !isLoading && (
+              <WelcomeMessage onQuickStart={sendMessage} />
             )}
-            {/* 正文开始流出后由气泡接管，打字指示器退场 */}
-            {isLoading && !isStreamingVisible && <TypingIndicator />}
-            {isTypingProactive && !isLoading && <ProactiveTypingIndicator />}
-          </AnimatePresence>
+
+            <AnimatePresence>
+              {messages.map((msg) =>
+                // 流式占位的空气泡不渲染：等待期由下方打字指示器单独代表「在输入」，
+                // 否则会出现「🔊 空气泡 + ··· 」两个气泡并存的怪相
+                msg.role === "assistant" && !msg.content.trim() ? null : (
+                  <ChatMessage key={msg.id} message={msg} ttsEngine={ttsEngine} />
+                )
+              )}
+              {/* 正文开始流出后由气泡接管，打字指示器退场 */}
+              {isLoading && !isStreamingVisible && <TypingIndicator />}
+              {isTypingProactive && !isLoading && <ProactiveTypingIndicator />}
+            </AnimatePresence>
+          </div>
         </div>
 
-        <div className="p-4 md:p-6 pb-6">
+        <div className="px-4 pb-4 pt-2 md:px-6 md:pb-6">
           <ChatInput
             input={input}
             onInputChange={setInput}

@@ -4,7 +4,6 @@ import { Image as ImageIcon, Send } from "lucide-react";
 import AudioVisualizer from "../voice/AudioVisualizer";
 import QuickReplies from "./QuickReplies";
 import Button from "../ui/Button";
-import Card from "../ui/Card";
 import IconButton from "../ui/IconButton";
 import EmojiPickerButton from "./input/EmojiPickerButton";
 import RecordButton from "./input/RecordButton";
@@ -24,7 +23,9 @@ interface ChatInputProps {
 }
 
 /**
- * 输入区：快捷回复 + 语音/表情/录音/发送。
+ * 输入区：浮动胶囊 dock —— 快捷回复浮在 dock 上方独立成行；
+ * dock 本体是单行玻璃胶囊（语音/表情/输入/录音/发送），
+ * 聚焦时外壳描边与光晕同步高亮（focus-within）。
  * isLoading 直接从 chatStore 订阅；voiceMode/autoSendVoice 由 VoiceModeControls 自管。
  */
 export default function ChatInput({
@@ -38,10 +39,17 @@ export default function ChatInput({
     const { isRecording, recordingTime, mediaStream, toggleRecording } = recorder;
 
     return (
-        <Card className="mx-auto max-w-4xl p-2">
+        <div className="mx-auto w-full max-w-3xl">
             <QuickReplies onSend={onQuickSend} disabled={isLoading} />
 
-            <div className="flex items-center gap-2 px-2 pb-2">
+            <div className="relative flex items-center gap-1.5 rounded-full border border-accent-1/15 bg-surface-1/85 p-2 pl-3 shadow-modal backdrop-blur-xl transition-[border-color,box-shadow] duration-normal focus-within:border-accent-1/40 focus-within:shadow-accent">
+                {/* 录音波形：浮在 dock 上方，不挤占胶囊布局 */}
+                {isRecording && (
+                    <div className="absolute bottom-full left-1/2 mb-3 -translate-x-1/2 rounded-full border border-accent-1/15 bg-surface-1/90 p-1.5 shadow-card backdrop-blur-xl">
+                        <AudioVisualizer stream={mediaStream} isRecording={isRecording} />
+                    </div>
+                )}
+
                 <VoiceModeControls />
 
                 <EmojiPickerButton onSelect={(emoji) => onInputChange(input + emoji)} />
@@ -52,7 +60,7 @@ export default function ChatInput({
                     onChange={(e) => onInputChange(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && onSend()}
                     placeholder="说点什么..."
-                    className="flex-1 rounded-2xl border-2 border-transparent bg-transparent px-4 py-3 text-content-primary transition-all placeholder:text-content-muted focus:border-accent-1/30 focus:bg-surface-1 focus:outline-none"
+                    className="min-w-0 flex-1 bg-transparent px-2 py-2 text-content-primary transition-colors duration-fast placeholder:text-content-muted focus:outline-none disabled:opacity-60"
                     disabled={isLoading}
                 />
 
@@ -62,8 +70,6 @@ export default function ChatInput({
                     onToggle={toggleRecording}
                 />
 
-                {isRecording && <AudioVisualizer stream={mediaStream} isRecording={isRecording} />}
-
                 <IconButton title="发送图片">
                     <ImageIcon size={20} />
                 </IconButton>
@@ -71,12 +77,12 @@ export default function ChatInput({
                 <Button
                     onClick={onSend}
                     disabled={!input.trim() || isLoading}
-                    className="rounded-xl p-3"
+                    className="rounded-full p-3"
                     title="发送"
                 >
                     <Send size={20} />
                 </Button>
             </div>
-        </Card>
+        </div>
     );
 }

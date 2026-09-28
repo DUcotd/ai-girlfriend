@@ -5,10 +5,14 @@
    ====================================== */
 
 /* ---------- 樱花飘落 ---------- */
+/* 注意：这里的 opacity 一律用 calc(模式系数 × 花瓣随机系数)——
+   ① 元素级 opacity 会被动画完全覆盖，keyframes 里也必须写同一表达式；
+   ② 内联 style 里只允许设 --petal-opacity 变量（见 useSakuraEffect），
+      直接写内联 opacity 会把明暗模式微调压掉（Phase 4 踩过）。 */
 @keyframes sakuraFall {
   0% {
     transform: translateY(-10vh) translateX(0) rotate(0deg);
-    opacity: 1;
+    opacity: calc(var(--sakura-opacity, 0.7) * var(--petal-opacity, 1));
   }
   25% {
     transform: translateY(25vh) translateX(15px) rotate(90deg);
@@ -31,7 +35,8 @@
   height: 12px;
   background: linear-gradient(135deg, hsl(var(--accent-1)), hsl(var(--accent-1) / 0.6));
   border-radius: 50% 0 50% 50%;
-  opacity: 0.7;
+  /* 最终不透明度 = 模式系数（浅 0.7/暗 0.4）× 花瓣个体随机系数 */
+  opacity: calc(var(--sakura-opacity, 0.7) * var(--petal-opacity, 1));
   pointer-events: none;
   z-index: 1;
   animation: sakuraFall linear infinite;
@@ -119,4 +124,29 @@
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+/* ---------- 动效偏好：用户系统开启「减少动态效果」时 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  /* 装饰动画直接禁：樱花 / 星星 / 录音脉冲 / 立绘呼吸与渐隐 */
+  .sakura-petal,
+  .star,
+  .pulse-ring,
+  .animate-breathe,
+  .animate-avatar-fade-out {
+    animation: none !important;
+  }
+
+  /* 功能动画压到瞬时（保留状态切换的可感知性） */
+  .message-bubble {
+    animation-duration: 0.01ms !important;
+  }
+
+  /* 全量过渡压到瞬时（主题切换、hover 等一并包含） */
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
