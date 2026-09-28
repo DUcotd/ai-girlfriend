@@ -37,12 +37,13 @@ export default function CharacterPanel({ currentActivity }: CharacterPanelProps)
 
     const currentEmotion = override ?? normalizeEmotion(emotion);
 
+    // 称号阈值与后端 relationshipStages.js 的阶段边界一致
     const getAffinityTitle = () => {
-        if (affinity >= 80) return "最爱的人";
-        if (affinity >= 60) return "亲密恋人";
-        if (affinity >= 40) return "甜蜜约会";
-        if (affinity >= 20) return "好感上升";
-        return "初次相识";
+        if (affinity >= 85) return "亲密恋人";
+        if (affinity >= 60) return "挚友";
+        if (affinity >= 35) return "朋友";
+        if (affinity >= 16) return "初识";
+        return "陌生";
     };
 
     return (
