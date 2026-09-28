@@ -14,14 +14,17 @@ interface CharacterPanelProps {
     emotionalState?: EmotionalState | null;
 }
 
+/**
+ * 立绘原图是 1024x1024 的 PNG（单张 600~800KB），而实际显示只有 192px 见方，
+ * 已统一转成 512x512 的 WebP（单张 26~54KB，总体积 -95%）。
+ * 缺失的情绪不列入此表，直接走 emoji 回退，避免发出无谓的 404 请求。
+ */
 const emotionImages: Record<string, string> = {
-    default: "/characters/default.png",
-    happy: "/characters/happy.png",
-    shy: "/characters/shy.png",
-    thinking: "/characters/thinking.png",
-    sleepy: "/characters/sleepy.png",
-    sad: "/characters/sad.png",
-    angry: "/characters/angry.png",
+    default: "/characters/default.webp",
+    happy: "/characters/happy.webp",
+    shy: "/characters/shy.webp",
+    thinking: "/characters/thinking.webp",
+    sleepy: "/characters/sleepy.webp",
 };
 
 const emotionEmojis: Record<string, string> = {
@@ -152,7 +155,7 @@ export default function CharacterPanel({ emotion, affinity, currentActivity, emo
                             setImageError(false);
                         }}
                     >
-                        {imageError ? (
+                        {imageError || !emotionImages[currentEmotion] ? (
                             <span className="text-6xl">{emotionEmojis[currentEmotion]}</span>
                         ) : (
                             <img
