@@ -1,16 +1,19 @@
 "use client";
 
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { X, AlertCircle, CheckCircle, Info } from "lucide-react";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect } from "react";
+import { useUiStore } from "@/stores/uiStore";
+import type { ToastType } from "@/stores/uiStore";
 
 interface ToastProps {
     message: string;
-    type: "success" | "error" | "info";
+    type: ToastType;
     onClose: () => void;
     duration?: number;
 }
 
+/** 单条 toast（纯展示）。渲染容器是 layout 里的 ToastViewport（全局唯一）。 */
 export default function Toast({ message, type, onClose, duration = 3000 }: ToastProps) {
     useEffect(() => {
         const timer = setTimeout(onClose, duration);
@@ -48,42 +51,11 @@ export default function Toast({ message, type, onClose, duration = 3000 }: Toast
     );
 }
 
-// Toast Manager Hook
-interface ToastState {
-    message: string;
-    type: "success" | "error" | "info";
-    id: number;
-}
-
-let toastId = 0;
-
+/**
+ * 全局 toast 入口：返回 pushToast（uiStore action，引用稳定）。
+ * 组件不再各自渲染 ToastContainer——统一由 ToastViewport 渲染，
+ * 弹窗内的 toast 也不会再被 Modal 遮罩盖住。
+ */
 export function useToast() {
-    const [toasts, setToasts] = useState<ToastState[]>([]);
-
-    const showToast = useCallback((message: string, type: "success" | "error" | "info" = "info") => {
-        const id = ++toastId;
-        setToasts((prev) => [...prev, { message, type, id }]);
-    }, []);
-
-    const removeToast = useCallback((id: number) => {
-        setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, []);
-
-    // 直接返回 JSX 元素（而非在 useMemo 里新建组件）：
-    // 避免每次 toasts 变化产生新的组件类型导致整棵子树 remount
-    const ToastContainer = (
-        <AnimatePresence>
-            {toasts.map((toast, idx) => (
-                <div key={toast.id} style={{ top: `${1 + idx * 4.5}rem` }} className="fixed right-4 z-[100]">
-                    <Toast
-                        message={toast.message}
-                        type={toast.type}
-                        onClose={() => removeToast(toast.id)}
-                    />
-                </div>
-            ))}
-        </AnimatePresence>
-    );
-
-    return { showToast, ToastContainer };
+    return useUiStore((s) => s.pushToast);
 }

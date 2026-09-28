@@ -6,51 +6,38 @@ import MemoryDialog from "./MemoryDialog";
 import SettingsDialog from "./SettingsDialog";
 import TaskDialog from "./TaskDialog";
 import ThemeDialog from "./theme/ThemeDialog";
-import type { DialogName } from "@/app/dialogs";
-import type { Message, TtsEngine } from "@/types";
-
-interface DialogLayerProps {
-  dialog: DialogName | null;
-  onClose: () => void;
-  messages: Message[];
-  onAffinityChange: (affinity: number) => void;
-  onTtsEngineChange: (engine: TtsEngine) => void;
-}
+import { useChatStore } from "@/stores/chatStore";
+import { useUiStore } from "@/stores/uiStore";
 
 /**
- * 弹窗注册表：原先 page.tsx 里堆了 5 个 <Modal>，各自绑一遍开关状态。
- * 这里按名称集中渲染，page 只需要维护一个 dialog 状态。
+ * 弹窗注册表：按名称集中渲染，开关状态在 uiStore。
+ * 各弹窗需要的状态自行从 store 订阅，不再由 page 透传。
  */
-export default function DialogLayer({
-  dialog,
-  onClose,
-  messages,
-  onAffinityChange,
-  onTtsEngineChange,
-}: DialogLayerProps) {
+export default function DialogLayer() {
+  const dialog = useUiStore((s) => s.dialog);
+  const closeDialog = useUiStore((s) => s.closeDialog);
+  const messages = useChatStore((s) => s.messages);
+
   return (
     <>
-      <Modal isOpen={dialog === "theme"} onClose={onClose}>
-        <ThemeDialog onClose={onClose} />
+      <Modal isOpen={dialog === "theme"} onClose={closeDialog}>
+        <ThemeDialog onClose={closeDialog} />
       </Modal>
 
-      <Modal isOpen={dialog === "export"} onClose={onClose}>
-        <ExportDialog messages={messages} onClose={onClose} />
+      <Modal isOpen={dialog === "export"} onClose={closeDialog}>
+        <ExportDialog messages={messages} onClose={closeDialog} />
       </Modal>
 
-      <Modal isOpen={dialog === "settings"} onClose={onClose}>
-        <SettingsDialog
-          onClose={onClose}
-          onConfigChange={(c) => onTtsEngineChange(c.ttsEngine)}
-        />
+      <Modal isOpen={dialog === "settings"} onClose={closeDialog}>
+        <SettingsDialog onClose={closeDialog} />
       </Modal>
 
-      <Modal isOpen={dialog === "memory"} onClose={onClose}>
-        <MemoryDialog onClose={onClose} onStateChange={(state) => onAffinityChange(state.affinity)} />
+      <Modal isOpen={dialog === "memory"} onClose={closeDialog}>
+        <MemoryDialog onClose={closeDialog} />
       </Modal>
 
-      <Modal isOpen={dialog === "task"} onClose={onClose}>
-        <TaskDialog onClose={onClose} />
+      <Modal isOpen={dialog === "task"} onClose={closeDialog}>
+        <TaskDialog onClose={closeDialog} />
       </Modal>
     </>
   );

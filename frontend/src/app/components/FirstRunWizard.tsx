@@ -19,7 +19,7 @@ export default function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
     const [modelName, setModelName] = useState(DEFAULT_PROVIDER.modelName);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
-    const { showToast, ToastContainer } = useToast();
+    const showToast = useToast();
 
     const handleSaveConfig = async () => {
         if (!apiKey.trim()) {
@@ -282,7 +282,6 @@ export default function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
                     )}
                 </AnimatePresence>
             </div>
-            {ToastContainer}
         </>
     );
 }

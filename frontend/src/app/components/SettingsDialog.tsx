@@ -9,17 +9,17 @@ import ConfirmDialog from "./ConfirmDialog";
 import { api } from "@/lib/api";
 import { get, remove, set } from "@/lib/storage";
 import { PROVIDER_PRESETS, matchPreset, DEFAULT_PROVIDER } from "@/lib/providers";
+import { useSettingsStore } from "@/stores/settingsStore";
 import type { ProactiveTypeInfo, TtsEngine } from "@/types";
 import SettingsProactiveTab from "./settings/SettingsProactiveTab";
 
 interface SettingsDialogProps {
     onClose: () => void;
-    onConfigChange?: (config: { ttsEngine: TtsEngine }) => void;
 }
 
 type SettingsTab = "general" | "voice" | "memory" | "proactive" | "advanced";
 
-export default function SettingsDialog({ onClose, onConfigChange }: SettingsDialogProps) {
+export default function SettingsDialog({ onClose }: SettingsDialogProps) {
     // 初始值直接从 localStorage 惰性读取（storage 层已做 SSR 保护）
     const [apiKey, setApiKey] = useState(() => get("apiKey") || "");
     const [baseUrl, setBaseUrl] = useState(() => get("baseUrl") || DEFAULT_PROVIDER.baseUrl);
@@ -54,7 +54,7 @@ export default function SettingsDialog({ onClose, onConfigChange }: SettingsDial
     });
     const [availableTypes, setAvailableTypes] = useState<ProactiveTypeInfo[]>([]);
 
-    const { showToast, ToastContainer } = useToast();
+    const showToast = useToast();
 
     // 挂载后用服务端配置覆盖本地值。
     // setState 放在异步回调里，避免 effect 同步体内 setState 造成级联渲染。
@@ -118,9 +118,8 @@ export default function SettingsDialog({ onClose, onConfigChange }: SettingsDial
                 enabledTypes,
             });
 
-            if (onConfigChange) {
-                onConfigChange({ ttsEngine });
-            }
+            // 通知运行时（useSpeech 等订阅方）引擎已切换
+            useSettingsStore.getState().setTtsEngine(ttsEngine);
 
             showToast("设置已保存并同步! ✨", "success");
             onClose();
@@ -395,9 +394,6 @@ export default function SettingsDialog({ onClose, onConfigChange }: SettingsDial
                     </button>
                 </div>
             </div>
-
-            {/* Toast 通知 */}
-            {ToastContainer}
 
             {/* 确认对话框 */}
             <ConfirmDialog

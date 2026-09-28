@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import ToastViewport from "./components/ui/ToastViewport";
 import "./globals.css";
 import "../styles/tokens.css";
 import "../styles/themes.css";
@@ -26,7 +27,10 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        {children}
+        <ToastViewport />
+      </body>
     </html>
   );
 }

@@ -3,11 +3,8 @@
 import { Brain, ClipboardList, Download, Palette, MessageSquarePlus, Settings } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { DialogName } from "@/app/dialogs";
-
-interface ChatToolbarProps {
-  onOpen: (dialog: DialogName) => void;
-  onNewChat: () => void;
-}
+import { useChatStore } from "@/stores/chatStore";
+import { useUiStore } from "@/stores/uiStore";
 
 /** 顶部操作栏：新对话 / 记忆 / 主题 / 任务 / 导出 / 设置 */
 const ACTIONS: { dialog?: DialogName; icon: LucideIcon; label: string }[] = [
@@ -19,7 +16,10 @@ const ACTIONS: { dialog?: DialogName; icon: LucideIcon; label: string }[] = [
   { dialog: "settings", icon: Settings, label: "设置" },
 ];
 
-export default function ChatToolbar({ onOpen, onNewChat }: ChatToolbarProps) {
+export default function ChatToolbar() {
+  const openDialog = useUiStore((s) => s.openDialog);
+  const clearChat = useChatStore((s) => s.clearChat);
+
   return (
     <header className="h-16 flex items-center justify-between px-6 border-b border-white/20 backdrop-blur-sm">
       <div />
@@ -30,7 +30,7 @@ export default function ChatToolbar({ onOpen, onNewChat }: ChatToolbarProps) {
             type="button"
             aria-label={label}
             title={label}
-            onClick={() => (dialog ? onOpen(dialog) : onNewChat())}
+            onClick={() => (dialog ? openDialog(dialog) : void clearChat())}
             className="p-2 rounded-full text-gray-500 hover:text-pink-600 hover:bg-white/70 active:scale-95 transition-all"
           >
             <Icon size={20} />

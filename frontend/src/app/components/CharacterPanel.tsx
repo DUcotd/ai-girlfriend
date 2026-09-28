@@ -5,13 +5,11 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useState } from "react";
-import type { CurrentActivity, EmotionalState } from "@/types";
+import { useChatStore } from "@/stores/chatStore";
+import type { CurrentActivity } from "@/types";
 
 interface CharacterPanelProps {
-    emotion: string;
-    affinity: number;
     currentActivity?: CurrentActivity | null;
-    emotionalState?: EmotionalState | null;
 }
 
 /**
@@ -76,7 +74,12 @@ function normalizeEmotion(emotion: string): EmotionKey {
     return (emotionMap[emotion] || (emotionImages[emotion] ? emotion : "default")) as EmotionKey;
 }
 
-export default function CharacterPanel({ emotion, affinity, currentActivity, emotionalState }: CharacterPanelProps) {
+export default function CharacterPanel({ currentActivity }: CharacterPanelProps) {
+    // 会话状态从 chatStore 订阅（原 props 透传）
+    const emotion = useChatStore((s) => s.emotion);
+    const affinity = useChatStore((s) => s.affinity);
+    const emotionalState = useChatStore((s) => s.emotionalState);
+
     const [imageError, setImageError] = useState(false);
     // 点击立绘可手动切换情绪（预览用）；后端情绪变化时清除手动覆盖
     const [override, setOverride] = useState<EmotionKey | null>(null);

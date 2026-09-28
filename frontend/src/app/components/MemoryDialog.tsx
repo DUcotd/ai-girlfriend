@@ -5,14 +5,14 @@ import { Brain, Trash2, Heart, User, Loader2 } from "lucide-react";
 import { useToast } from "./Toast";
 import ConfirmDialog from "./ConfirmDialog";
 import { api } from "@/lib/api";
+import { useChatStore } from "@/stores/chatStore";
 import type { MemoryItem } from "@/types";
 
 interface MemoryDialogProps {
     onClose: () => void;
-    onStateChange?: (state: { affinity: number; nickname: string }) => void;
 }
 
-export default function MemoryDialog({ onClose, onStateChange }: MemoryDialogProps) {
+export default function MemoryDialog({ onClose }: MemoryDialogProps) {
     // 注意：本组件使用共享类型 MemoryItem（见 @/types），不再本地重复定义
     const [memories, setMemories] = useState<MemoryItem[]>([]);
     const [affinity, setAffinity] = useState(35);
@@ -21,7 +21,7 @@ export default function MemoryDialog({ onClose, onStateChange }: MemoryDialogPro
     const [activeTab, setActiveTab] = useState<"memories" | "settings">("memories");
     const [showClearConfirm, setShowClearConfirm] = useState(false);
 
-    const { showToast, ToastContainer } = useToast();
+    const showToast = useToast();
 
     const handleClearMemories = async () => {
         try {
@@ -35,7 +35,8 @@ export default function MemoryDialog({ onClose, onStateChange }: MemoryDialogPro
     };
 
     const handleSaveSettings = async () => {
-        if (onStateChange) onStateChange({ affinity, nickname });
+        // 同步到会话状态（好感度心心/进度条立即刷新），再落后端
+        useChatStore.getState().setAffinity(affinity);
         onClose();
         try {
             await api.updateState({ affinity, nickname });
@@ -146,8 +147,6 @@ export default function MemoryDialog({ onClose, onStateChange }: MemoryDialogPro
                     </button>
                 </div>
             </div>
-
-            {ToastContainer}
 
             <ConfirmDialog
                 isOpen={showClearConfirm}

@@ -1,14 +1,18 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { speakBus } from "@/hooks/useChatStream";
 import { api, BACKEND_URL } from "@/lib/api";
 import { speakLocal } from "@/lib/speech";
-import type { TtsEngine } from "@/types";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 /**
  * TTS 朗读：云端（后端 OpenAI TTS）或本地（浏览器 Web Speech API）。
+ * 引擎从 settingsStore 读取；实现注册到 speakBus，
+ * 供发送管线/主动消息轮询等非组件环境调用。
  */
-export function useSpeech(engine: TtsEngine) {
+export function useSpeech() {
+  const engine = useSettingsStore((s) => s.ttsEngine);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -46,6 +50,12 @@ export function useSpeech(engine: TtsEngine) {
     },
     [engine]
   );
+
+  // 注册全局朗读者（组件卸载时注销）
+  useEffect(() => {
+    speakBus.register(speak);
+    return () => speakBus.register(null);
+  }, [speak]);
 
   return { speak, stop, isSpeaking };
 }
