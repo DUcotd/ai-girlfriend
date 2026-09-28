@@ -8,17 +8,21 @@
  */
 
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+import { RELATIONSHIP_STAGES } from './relationshipStages.js';
 
 const STATE_FILE = 'emotion_state.json';
 
+// 各阶段的 PAD 情感基准（阈值本身在 relationshipStages.js 统一维护）
+const TIER_PAD = {
+    stranger:     { P: 0.0,  A: 0.0,  D: 0.1  },
+    acquaintance: { P: 0.1,  A: 0.05, D: 0.05 },
+    friend:       { P: 0.25, A: 0.1,  D: 0.0  },
+    close:        { P: 0.4,  A: 0.15, D: -0.1 },
+    lover:        { P: 0.55, A: 0.2,  D: -0.2 },
+};
+
 class EmotionEngine {
-    static AFFINITY_TIERS = [
-        { min: 0,  max: 20, stage: 'stranger',     label: '陌生/疏离', P: 0.0,  A: 0.0,  D: 0.1  },
-        { min: 21, max: 40, stage: 'acquaintance', label: '认识/礼貌', P: 0.1,  A: 0.05, D: 0.05 },
-        { min: 41, max: 60, stage: 'friend',       label: '朋友/好感', P: 0.25, A: 0.1,  D: 0.0  },
-        { min: 61, max: 80, stage: 'close',        label: '亲密/暧昧', P: 0.4,  A: 0.15, D: -0.1 },
-        { min: 81, max: 100,stage: 'lover',        label: '恋人/深爱', P: 0.55, A: 0.2,  D: -0.2 },
-    ];
+    static AFFINITY_TIERS = RELATIONSHIP_STAGES.map(t => ({ ...t, ...TIER_PAD[t.stage] }));
 
     constructor(statePath = null) {
         this.statePath = statePath || dataPath(STATE_FILE);
@@ -270,33 +274,33 @@ ${style.guide}
         const hasQuestion   = questionWords.some(w => input.includes(w));
         const hasExclamation = input.includes('!') || input.includes('！');
 
-        // 亲密话题 × 好感度
+        // 亲密话题 × 好感度（分档阈值与 relationshipStages.js 的阶段边界一致）
         if (hasIntimacy) {
-            if (affinity <= 20)        { delta.P -= 0.30; delta.A += 0.20; delta.D -= 0.15; }
-            else if (affinity <= 40)   { delta.P -= 0.05; delta.A += 0.10; delta.D -= 0.05; }
-            else if (affinity <= 60)   { delta.P += 0.08; delta.A += 0.05; }
-            else if (affinity <= 80)   { delta.P += 0.20; delta.A += 0.10; delta.D -= 0.10; }
+            if (affinity <= 15)        { delta.P -= 0.30; delta.A += 0.20; delta.D -= 0.15; }
+            else if (affinity <= 34)   { delta.P -= 0.10; delta.A += 0.15; delta.D -= 0.08; }
+            else if (affinity <= 59)   { delta.P += 0.08; delta.A += 0.05; }
+            else if (affinity <= 84)   { delta.P += 0.20; delta.A += 0.10; delta.D -= 0.10; }
             else                       { delta.P += 0.30; delta.A += 0.12; delta.D -= 0.15; }
         }
 
         // 批评 × 好感度
         if (hasCriticism) {
-            if (affinity <= 20)        { delta.P -= 0.10; delta.A += 0.05; }
-            else if (affinity <= 60)   { delta.P -= 0.20; delta.A += 0.08; }
+            if (affinity <= 15)        { delta.P -= 0.10; delta.A += 0.05; }
+            else if (affinity <= 59)   { delta.P -= 0.20; delta.A += 0.08; }
             else                       { delta.P -= 0.30; delta.A += 0.10; delta.D += 0.10; }
         }
 
         // 夸奖 × 好感度
         if (hasPraise) {
-            if (affinity <= 20)        { delta.P += 0.10; }
-            else if (affinity <= 60)   { delta.P += 0.15; delta.A += 0.05; }
+            if (affinity <= 15)        { delta.P += 0.10; }
+            else if (affinity <= 59)   { delta.P += 0.15; delta.A += 0.05; }
             else                       { delta.P += 0.25; delta.A += 0.08; delta.D -= 0.05; }
         }
 
         // 调戏 × 好感度
         if (hasTeasing) {
-            if (affinity <= 30)        { delta.P -= 0.15; delta.A += 0.15; delta.D += 0.10; }
-            else if (affinity <= 60)   { delta.P -= 0.03; delta.A += 0.05; }
+            if (affinity <= 34)        { delta.P -= 0.15; delta.A += 0.15; delta.D += 0.10; }
+            else if (affinity <= 59)   { delta.P -= 0.03; delta.A += 0.05; }
             else                       { delta.P += 0.10; delta.A += 0.08; delta.D += 0.15; }
         }
 
@@ -321,7 +325,7 @@ ${style.guide}
         // 疑问
         if (hasQuestion) {
             delta.A += 0.05;
-            if (affinity <= 20 && userInput.trim().length < 5) delta.D += 0.08;
+            if (affinity <= 15 && userInput.trim().length < 5) delta.D += 0.08;
         }
 
         delta.P = Math.max(-0.5, Math.min(0.5, delta.P));

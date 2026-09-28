@@ -112,12 +112,13 @@ class ProactiveEngine {
         return (Date.now() - lastTrigger) >= cooldown;
     }
 
+    // 分档阈值与 relationshipStages.js 的阶段边界一致（15/34/59/84）
     getAffinityBonus() {
         const affinity = this.aiGirlfriend.affinity || 35;
-        if (affinity <= 20) return 0.5;
-        if (affinity <= 40) return 0.8;
-        if (affinity <= 60) return 1.0;
-        if (affinity <= 80) return 1.3;
+        if (affinity <= 15) return 0.5;
+        if (affinity <= 34) return 0.8;
+        if (affinity <= 59) return 1.0;
+        if (affinity <= 84) return 1.3;
         return 1.6;
     }
 
@@ -125,10 +126,10 @@ class ProactiveEngine {
         if (this.config.customDailyLimit !== null) return this.config.customDailyLimit;
         const affinity = this.aiGirlfriend.affinity || 35;
         let baseLimit;
-        if (affinity <= 20) baseLimit = 3;
-        else if (affinity <= 40) baseLimit = 5;
-        else if (affinity <= 60) baseLimit = 8;
-        else if (affinity <= 80) baseLimit = 12;
+        if (affinity <= 15) baseLimit = 3;
+        else if (affinity <= 34) baseLimit = 5;
+        else if (affinity <= 59) baseLimit = 8;
+        else if (affinity <= 84) baseLimit = 12;
         else baseLimit = 15;
         const multiplier = this.frequencyMultipliers[this.config.frequencyLevel]?.dailyLimit || 1.0;
         return Math.round(baseLimit * multiplier);
