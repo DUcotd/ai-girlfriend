@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
 interface ModalProps {
@@ -11,9 +11,19 @@ interface ModalProps {
 
 /**
  * 通用弹窗容器 —— 原先每个弹窗各自复制了一份遮罩 + 居中布局代码。
- * 点击遮罩关闭，点击内容区不关闭。
+ * 点击遮罩关闭，点击内容区不关闭；Esc 键关闭。
  */
 export default function Modal({ isOpen, onClose, children }: ModalProps) {
+  // Esc 关闭（桌面端预期行为）
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isOpen, onClose]);
+
   return (
     <AnimatePresence>
       {isOpen && (

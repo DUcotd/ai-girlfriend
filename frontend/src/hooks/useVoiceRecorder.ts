@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { toast } from "@/stores/uiStore";
 
 /**
  * 麦克风录音 + 语音转文字。
@@ -63,7 +64,7 @@ export function useVoiceRecorder(onTranscribed: (text: string) => void) {
       mediaRecorder.start();
       setIsRecording(true);
     } catch {
-      alert("麦克风权限被拒绝");
+      toast("麦克风权限被拒绝，请在浏览器设置中允许", "error");
     }
   }, [clearTimer]);
 

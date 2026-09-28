@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { Volume2, Loader2, Square } from "lucide-react";
 import { api, BACKEND_URL } from "@/lib/api";
 import { speakLocal } from "@/lib/speech";
+import { toast } from "@/stores/uiStore";
 import type { TtsEngine } from "@/types";
 
 interface VoiceButtonProps {
@@ -76,7 +77,7 @@ export default function VoiceButton({ text, size = 16, engine = "openai" }: Voic
                 msg.includes("invalid") ||
                 msg.includes("not configured")
             ) {
-                alert("语音功能需要 OpenAI 官方 API 密钥，请在设置中配置有效且有额度的 TTS API 密钥 ✨");
+                toast("语音功能需要 OpenAI 官方 API 密钥，请在设置中配置有效且有余量的 TTS 密钥 ✨", "error");
             } else {
                 console.error("TTS failed", e);
             }

@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { speakBus } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
+import { playNotificationSound } from "@/lib/notifySound";
 import { useUiStore } from "@/stores/uiStore";
 import type { ProactiveMessage } from "@/types";
 
@@ -72,13 +73,8 @@ export function useProactivePolling({
               tag: "proactive-message",
             });
           }
-          try {
-            const audio = new Audio("/notification.mp3");
-            audio.volume = 0.3;
-            await audio.play();
-          } catch {
-            // 浏览器可能禁止自动播放，忽略
-          }
+          // 提示音：WebAudio 即时合成（此前是 404 的 /notification.mp3）
+          playNotificationSound();
         }
       } catch {
         // 后端未连接时静默重试

@@ -1,10 +1,9 @@
 "use client";
 
-import { Image as ImageIcon, Send } from "lucide-react";
+import { Send } from "lucide-react";
 import AudioVisualizer from "../voice/AudioVisualizer";
 import QuickReplies from "./QuickReplies";
 import Button from "../ui/Button";
-import IconButton from "../ui/IconButton";
 import EmojiPickerButton from "./input/EmojiPickerButton";
 import RecordButton from "./input/RecordButton";
 import VoiceModeControls from "./input/VoiceModeControls";
@@ -69,10 +68,6 @@ export default function ChatInput({
                     recordingTime={recordingTime}
                     onToggle={toggleRecording}
                 />
-
-                <IconButton title="发送图片">
-                    <ImageIcon size={20} />
-                </IconButton>
 
                 <Button
                     onClick={onSend}

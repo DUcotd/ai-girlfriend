@@ -26,7 +26,7 @@ export default function SettingsAdvancedTab({ onReset }: SettingsAdvancedTabProp
 
             <div className="space-y-2 rounded-2xl border border-line-subtle bg-surface-2/50 p-4 text-[11px] italic text-content-secondary">
                 <p>后端 API 版本: v1.2.0</p>
-                <p>前端版本: Next.js 15</p>
+                <p>前端版本: Next.js 16</p>
             </div>
         </div>
     );
