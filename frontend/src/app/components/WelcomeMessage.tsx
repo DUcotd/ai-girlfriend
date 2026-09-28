@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Heart, Sparkles, MessageCircle, Star } from "lucide-react";
+import { Heart, MessageCircle } from "lucide-react";
 
 interface WelcomeMessageProps {
     onQuickStart: (message: string) => void;

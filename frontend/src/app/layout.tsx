@@ -24,12 +24,6 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN">
-      <head>
-        {/* Live2D Cubism 2 Runtime (for older Cubism 2.1 models) */}
-        <script src="https://cdn.jsdelivr.net/gh/dylanNew/live2d/webgl/Live2D/lib/live2d.min.js"></script>
-        {/* Live2D Cubism 4 Runtime (for Cubism 3/4 models) */}
-        <script src="https://cdn.jsdelivr.net/npm/live2dcubismcore@latest/live2dcubismcore.min.js"></script>
-      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

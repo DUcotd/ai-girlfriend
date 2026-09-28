@@ -4,13 +4,14 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Settings, Key, Sparkles, ArrowRight, Check, Heart, Zap } from "lucide-react";
 import { useToast } from "./Toast";
+import { api } from "@/lib/api";
+import { set } from "@/lib/storage";
 
 interface FirstRunWizardProps {
-    backendUrl: string;
     onComplete: () => void;
 }
 
-export default function FirstRunWizard({ backendUrl, onComplete }: FirstRunWizardProps) {
+export default function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
     const [step, setStep] = useState(0); // 0: Welcome, 1: API Config, 2: Complete
     const [apiKey, setApiKey] = useState("");
     const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
@@ -30,25 +31,17 @@ export default function FirstRunWizard({ backendUrl, onComplete }: FirstRunWizar
 
         try {
             // 保存到 localStorage
-            localStorage.setItem("apiKey", apiKey);
-            localStorage.setItem("baseUrl", baseUrl);
-            localStorage.setItem("modelName", modelName);
-            localStorage.setItem("hasCompletedSetup", "true");
+            set("apiKey", apiKey);
+            set("baseUrl", baseUrl);
+            set("modelName", modelName);
+            set("hasCompletedSetup", "true");
 
             // 同步到后端
-            const res = await fetch(`${backendUrl}/config`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    api_key: apiKey,
-                    base_url: baseUrl,
-                    model_name: modelName,
-                }),
+            await api.updateConfig({
+                api_key: apiKey,
+                base_url: baseUrl,
+                model_name: modelName,
             });
-
-            if (!res.ok) {
-                throw new Error("后端配置同步失败");
-            }
 
             showToast("配置保存成功！", "success");
             setStep(2);
@@ -288,7 +281,7 @@ export default function FirstRunWizard({ backendUrl, onComplete }: FirstRunWizar
                     )}
                 </AnimatePresence>
             </div>
-            <ToastContainer />
+            {ToastContainer}
         </>
     );
 }

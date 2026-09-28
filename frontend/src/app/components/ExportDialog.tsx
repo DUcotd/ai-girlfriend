@@ -1,11 +1,7 @@
 "use client";
 
 import { useState } from "react";
-
-interface Message {
-    role: "user" | "assistant" | "system";
-    content: string;
-}
+import type { Message } from "@/types";
 
 interface ExportDialogProps {
     messages: Message[];

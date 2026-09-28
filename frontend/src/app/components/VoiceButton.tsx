@@ -2,17 +2,19 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Volume2, Loader2, Square } from "lucide-react";
+import { api, BACKEND_URL } from "@/lib/api";
+import { speakLocal } from "@/lib/speech";
+import type { TtsEngine } from "@/types";
 
 interface VoiceButtonProps {
     text: string;
-    backendUrl: string;
     size?: number;
-    engine?: "openai" | "local";
+    engine?: TtsEngine;
 }
 
 type PlayState = "idle" | "loading" | "playing";
 
-export default function VoiceButton({ text, backendUrl, size = 16, engine = "openai" }: VoiceButtonProps) {
+export default function VoiceButton({ text, size = 16, engine = "openai" }: VoiceButtonProps) {
     const [state, setState] = useState<PlayState>("idle");
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -28,27 +30,6 @@ export default function VoiceButton({ text, backendUrl, size = 16, engine = "ope
             }
         };
     }, [engine]);
-
-    const speakLocal = () => {
-        if (!("speechSynthesis" in window)) return;
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = "zh-CN";
-        utterance.rate = 1.1;
-        utterance.pitch = 1.2;
-
-        const voices = window.speechSynthesis.getVoices();
-        const femaleVoice = voices.find(v =>
-            (v.name.includes("Xiaoxiao") || v.name.includes("Huihui") || v.name.includes("Ting-Ting") || v.name.includes("female")) && v.lang.includes("zh")
-        );
-        if (femaleVoice) utterance.voice = femaleVoice;
-
-        utterance.onstart = () => setState("playing");
-        utterance.onend = () => setState("idle");
-        utterance.onerror = () => setState("idle");
-
-        window.speechSynthesis.speak(utterance);
-    };
 
     const handleClick = async () => {
         // If playing, stop
@@ -67,40 +48,16 @@ export default function VoiceButton({ text, backendUrl, size = 16, engine = "ope
         if (state === "loading") return;
 
         if (engine === "local") {
-            speakLocal();
+            speakLocal(text);
             return;
         }
 
         setState("loading");
 
         try {
-            const res = await fetch(`${backendUrl}/audio/speak`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ text }),
-            });
-
-            if (!res.ok) {
-                const errorData = await res.json().catch(() => ({}));
-                const errorMsg = errorData.detail || res.statusText;
-
-                // 检查是否是 API Key 相关错误 (不区分大小写)
-                const lowerMsg = errorMsg.toLowerCase();
-                const isAuthError = lowerMsg.includes("api key") || lowerMsg.includes("401") || lowerMsg.includes("not configured") || lowerMsg.includes("invalid");
-
-                if (isAuthError) {
-                    alert("语音功能需要 OpenAI 官方 API 密钥，请在设置中配置有效且有额度的 TTS API 密钥 ✨");
-                } else {
-                    console.error("TTS Error:", errorMsg);
-                }
-
-                setState("idle");
-                return;
-            }
-
-            const data = await res.json();
-            if (data.audio_url) {
-                const audio = new Audio(`${backendUrl}${data.audio_url}`);
+            const { audio_url } = await api.textToSpeech(text);
+            if (audio_url) {
+                const audio = new Audio(`${BACKEND_URL}${audio_url}`);
                 audioRef.current = audio;
 
                 audio.onplay = () => setState("playing");
@@ -112,7 +69,17 @@ export default function VoiceButton({ text, backendUrl, size = 16, engine = "ope
                 setState("idle");
             }
         } catch (e) {
-            console.error("TTS failed", e);
+            // 鉴权类错误给出可操作的提示，其余仅打日志
+            const msg = (e instanceof Error ? e.message : "").toLowerCase();
+            if (
+                msg.includes("api key") ||
+                msg.includes("invalid") ||
+                msg.includes("not configured")
+            ) {
+                alert("语音功能需要 OpenAI 官方 API 密钥，请在设置中配置有效且有额度的 TTS API 密钥 ✨");
+            } else {
+                console.error("TTS failed", e);
+            }
             setState("idle");
         }
     };

@@ -1,17 +1,17 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Heart } from "lucide-react";
+/* 立绘是 public/characters 下的静态小图，且图片缺失时需要 onError 回退到 emoji，
+   next/image 无法提供该回退，故本文件保留原生 <img> */
+/* eslint-disable @next/next/no-img-element */
+
+import { useState } from "react";
+import type { CurrentActivity, EmotionalState } from "@/types";
 
 interface CharacterPanelProps {
     emotion: string;
     affinity: number;
-    currentActivity?: { activity: string; emoji: string } | null;
-    emotionalState?: {
-        current: { P: number; A: number; D: number };
-        label: string;
-        style: { guide: string };
-    };
+    currentActivity?: CurrentActivity | null;
+    emotionalState?: EmotionalState | null;
 }
 
 const emotionImages: Record<string, string> = {
@@ -33,6 +33,10 @@ const emotionEmojis: Record<string, string> = {
     sad: "😢",
     angry: "😤",
 };
+
+/** 立绘支持的情绪种类（必须有对应图片与 emoji/label） */
+type EmotionKey = keyof typeof emotionImages;
+const EMOTION_ORDER: EmotionKey[] = ["default", "happy", "shy", "thinking", "sleepy", "sad", "angry"];
 
 const emotionLabels: Record<string, string> = {
     default: "开心",
@@ -64,15 +68,25 @@ const emotionMap: Record<string, string> = {
     "pleasant": "default", "friendly": "default",
 };
 
+/** 把后端返回的情绪标签映射到立绘支持的情绪种类 */
+function normalizeEmotion(emotion: string): EmotionKey {
+    return (emotionMap[emotion] || (emotionImages[emotion] ? emotion : "default")) as EmotionKey;
+}
+
 export default function CharacterPanel({ emotion, affinity, currentActivity, emotionalState }: CharacterPanelProps) {
     const [imageError, setImageError] = useState(false);
-    const [currentEmotion, setCurrentEmotion] = useState(emotion);
+    // 点击立绘可手动切换情绪（预览用）；后端情绪变化时清除手动覆盖
+    const [override, setOverride] = useState<EmotionKey | null>(null);
+    const [lastEmotion, setLastEmotion] = useState(emotion);
 
-    useEffect(() => {
-        const normalizedEmotion = (emotionMap[emotion] || (emotionImages[emotion] ? emotion : "default")) as any;
-        setCurrentEmotion(normalizedEmotion);
+    // emotion prop 变化时同步重置（React 官方推荐的「随 props 调整 state」写法）
+    if (emotion !== lastEmotion) {
+        setLastEmotion(emotion);
+        setOverride(null);
         setImageError(false);
-    }, [emotion]);
+    }
+
+    const currentEmotion = override ?? normalizeEmotion(emotion);
 
     const hearts = Array.from({ length: 5 }, (_, i) => {
         const threshold = (i + 1) * 20;
@@ -133,9 +147,8 @@ export default function CharacterPanel({ emotion, affinity, currentActivity, emo
                     <div
                         className="w-48 h-48 rounded-full overflow-hidden bg-gradient-to-br from-pink-100 to-purple-100 flex items-center justify-center shadow-xl transition-all duration-300 hover:scale-105 cursor-pointer"
                         onClick={() => {
-                            const emotions = ["default", "happy", "shy", "thinking", "sleepy", "sad", "angry"] as const;
-                            const nextIdx = (emotions.indexOf(currentEmotion) + 1) % emotions.length;
-                            setCurrentEmotion(emotions[nextIdx]);
+                            const nextIdx = (EMOTION_ORDER.indexOf(currentEmotion) + 1) % EMOTION_ORDER.length;
+                            setOverride(EMOTION_ORDER[nextIdx]);
                             setImageError(false);
                         }}
                     >

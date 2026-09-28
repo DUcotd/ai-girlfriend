@@ -2,71 +2,65 @@
 
 import { useState, useEffect } from "react";
 import { Settings, MessageSquare, Mic, Brain, ShieldAlert, Bell } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "./Toast";
 import ConfirmDialog from "./ConfirmDialog";
+import { api } from "@/lib/api";
+import { get, remove, set } from "@/lib/storage";
+import type { ProactiveTypeInfo, TtsEngine } from "@/types";
 
 interface SettingsDialogProps {
     onClose: () => void;
-    backendUrl: string;
-    onConfigChange?: (config: { ttsEngine: "openai" | "local" }) => void;
+    onConfigChange?: (config: { ttsEngine: TtsEngine }) => void;
 }
 
-export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: SettingsDialogProps) {
-    const [apiKey, setApiKey] = useState("");
-    const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
-    const [modelName, setModelName] = useState("gpt-3.5-turbo");
-    const [ttsApiKey, setTtsApiKey] = useState("");
-    const [ttsEngine, setTtsEngine] = useState<"openai" | "local">("openai");
-    const [embApiKey, setEmbApiKey] = useState("");
-    const [embBaseUrl, setEmbBaseUrl] = useState("https://api.siliconflow.cn/v1");
-    const [embModelName, setEmbModelName] = useState("BAAI/bge-large-zh-v1.5");
-    const [activeTab, setActiveTab] = useState<"general" | "voice" | "memory" | "proactive" | "advanced">("general");
+type SettingsTab = "general" | "voice" | "memory" | "proactive" | "advanced";
+
+export default function SettingsDialog({ onClose, onConfigChange }: SettingsDialogProps) {
+    // 初始值直接从 localStorage 惰性读取（storage 层已做 SSR 保护）
+    const [apiKey, setApiKey] = useState(() => get("apiKey") || "");
+    const [baseUrl, setBaseUrl] = useState(() => get("baseUrl") || "https://api.openai.com/v1");
+    const [modelName, setModelName] = useState(() => get("modelName") || "gpt-3.5-turbo");
+    const [ttsApiKey, setTtsApiKey] = useState(() => get("ttsApiKey") || "");
+    const [ttsEngine, setTtsEngine] = useState<TtsEngine>(() => (get("ttsEngine") as TtsEngine) || "openai");
+    const [embApiKey, setEmbApiKey] = useState(() => get("embApiKey") || "");
+    const [embBaseUrl, setEmbBaseUrl] = useState(() => get("embBaseUrl") || "https://api.siliconflow.cn/v1");
+    const [embModelName, setEmbModelName] = useState(() => get("embModelName") || "BAAI/bge-large-zh-v1.5");
+    const [activeTab, setActiveTab] = useState<SettingsTab>("general");
     const [isLoading, setIsLoading] = useState(false);
     const [showResetConfirm, setShowResetConfirm] = useState(false);
 
     // 主动消息配置
-    const [proactiveEnabled, setProactiveEnabled] = useState(true);
-    const [frequencyLevel, setFrequencyLevel] = useState<"low" | "medium" | "high">("medium");
-    const [customDailyLimit, setCustomDailyLimit] = useState<number | null>(null);
-    const [enabledTypes, setEnabledTypes] = useState<string[]>([
-        'morning_greeting', 'night_greeting', 'task_reminder',
-        'random_chat', 'miss_you', 'mood_check', 'memory_share'
-    ]);
-    const [availableTypes, setAvailableTypes] = useState<{ id: string, label: string, description: string }[]>([]);
+    const [proactiveEnabled, setProactiveEnabled] = useState(
+        () => get("proactiveEnabled") !== "false"
+    );
+    const [frequencyLevel, setFrequencyLevel] = useState<"low" | "medium" | "high">(
+        () => (get("frequencyLevel") as "low" | "medium" | "high") || "medium"
+    );
+    const [customDailyLimit, setCustomDailyLimit] = useState<number | null>(() => {
+        const saved = get("customDailyLimit");
+        if (!saved || saved === "null") return null;
+        return Number.parseInt(saved, 10);
+    });
+    const [enabledTypes, setEnabledTypes] = useState<string[]>(() => {
+        const saved = get("enabledTypes");
+        return saved
+            ? JSON.parse(saved)
+            : ['morning_greeting', 'night_greeting', 'task_reminder',
+               'random_chat', 'miss_you', 'mood_check', 'memory_share'];
+    });
+    const [availableTypes, setAvailableTypes] = useState<ProactiveTypeInfo[]>([]);
 
     const { showToast, ToastContainer } = useToast();
 
+    // 挂载后用服务端配置覆盖本地值。
+    // setState 放在异步回调里，避免 effect 同步体内 setState 造成级联渲染。
     useEffect(() => {
-        // 读取本地配置
-        setApiKey(localStorage.getItem("apiKey") || "");
-        setBaseUrl(localStorage.getItem("baseUrl") || "https://api.openai.com/v1");
-        setModelName(localStorage.getItem("modelName") || "gpt-3.5-turbo");
-        setTtsApiKey(localStorage.getItem("ttsApiKey") || "");
-        setTtsEngine((localStorage.getItem("ttsEngine") as "openai" | "local") || "openai");
-        setEmbApiKey(localStorage.getItem("embApiKey") || "");
-        setEmbBaseUrl(localStorage.getItem("embBaseUrl") || "https://api.siliconflow.cn/v1");
-        setEmbModelName(localStorage.getItem("embModelName") || "BAAI/bge-large-zh-v1.5");
-
-        // 从 localStorage 读取主动消息配置
-        const savedProactiveEnabled = localStorage.getItem("proactiveEnabled");
-        if (savedProactiveEnabled !== null) setProactiveEnabled(savedProactiveEnabled === 'true');
-        const savedFrequencyLevel = localStorage.getItem("frequencyLevel");
-        if (savedFrequencyLevel) setFrequencyLevel(savedFrequencyLevel as "low" | "medium" | "high");
-        const savedDailyLimit = localStorage.getItem("customDailyLimit");
-        if (savedDailyLimit) setCustomDailyLimit(savedDailyLimit === 'null' ? null : parseInt(savedDailyLimit));
-        const savedEnabledTypes = localStorage.getItem("enabledTypes");
-        if (savedEnabledTypes) setEnabledTypes(JSON.parse(savedEnabledTypes));
-
-        // 从后端获取主动消息配置
-        fetchProactiveConfig();
-    }, []);
-
-    const fetchProactiveConfig = async () => {
-        try {
-            const res = await fetch(`${backendUrl}/config/proactive`);
-            if (res.ok) {
-                const data = await res.json();
+        let cancelled = false;
+        api.getProactiveConfig()
+            .then((data) => {
+                if (cancelled) return;
                 if (data.config) {
                     setProactiveEnabled(data.config.enabled);
                     setFrequencyLevel(data.config.frequencyLevel);
@@ -76,56 +70,50 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
                 if (data.availableTypes) {
                     setAvailableTypes(data.availableTypes);
                 }
-            }
-        } catch (e) {
-            console.error("Failed to fetch proactive config:", e);
-        }
-    };
+            })
+            .catch((e) => {
+                if (!cancelled) console.error("Failed to fetch proactive config:", e);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     const handleSave = async () => {
         setIsLoading(true);
         // 保存到本地
-        localStorage.setItem("apiKey", apiKey);
-        localStorage.setItem("baseUrl", baseUrl);
-        localStorage.setItem("modelName", modelName);
-        localStorage.setItem("ttsApiKey", ttsApiKey);
-        localStorage.setItem("ttsEngine", ttsEngine);
-        localStorage.setItem("embApiKey", embApiKey);
-        localStorage.setItem("embBaseUrl", embBaseUrl);
-        localStorage.setItem("embModelName", embModelName);
+        set("apiKey", apiKey);
+        set("baseUrl", baseUrl);
+        set("modelName", modelName);
+        set("ttsApiKey", ttsApiKey);
+        set("ttsEngine", ttsEngine);
+        set("embApiKey", embApiKey);
+        set("embBaseUrl", embBaseUrl);
+        set("embModelName", embModelName);
 
         // 保存主动消息配置到本地
-        localStorage.setItem("proactiveEnabled", proactiveEnabled.toString());
-        localStorage.setItem("frequencyLevel", frequencyLevel);
-        localStorage.setItem("customDailyLimit", customDailyLimit === null ? 'null' : customDailyLimit.toString());
-        localStorage.setItem("enabledTypes", JSON.stringify(enabledTypes));
+        set("proactiveEnabled", proactiveEnabled.toString());
+        set("frequencyLevel", frequencyLevel);
+        set("customDailyLimit", customDailyLimit === null ? 'null' : customDailyLimit.toString());
+        set("enabledTypes", JSON.stringify(enabledTypes));
 
         try {
             // 同步到后端
-            await fetch(`${backendUrl}/config`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    api_key: apiKey,
-                    base_url: baseUrl,
-                    model_name: modelName,
-                    tts_api_key: ttsApiKey || undefined,
-                    embedding_api_key: embApiKey || undefined,
-                    embedding_base_url: embBaseUrl || undefined,
-                    embedding_model_name: embModelName || undefined,
-                }),
+            await api.updateConfig({
+                api_key: apiKey,
+                base_url: baseUrl,
+                model_name: modelName,
+                tts_api_key: ttsApiKey || undefined,
+                embedding_api_key: embApiKey || undefined,
+                embedding_base_url: embBaseUrl || undefined,
+                embedding_model_name: embModelName || undefined,
             });
 
-            // 同步主动消息配置到后端
-            await fetch(`${backendUrl}/config/proactive`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    enabled: proactiveEnabled,
-                    frequencyLevel,
-                    customDailyLimit,
-                    enabledTypes,
-                }),
+            await api.updateProactiveConfig({
+                enabled: proactiveEnabled,
+                frequencyLevel,
+                customDailyLimit,
+                enabledTypes,
             });
 
             if (onConfigChange) {
@@ -134,7 +122,7 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
 
             showToast("设置已保存并同步! ✨", "success");
             onClose();
-        } catch (e) {
+        } catch {
             showToast("保存失败，请检查后端连接", "error");
         } finally {
             setIsLoading(false);
@@ -143,17 +131,17 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
 
     const handleResetAll = async () => {
         try {
-            await fetch(`${backendUrl}/history`, { method: "DELETE" });
-            localStorage.removeItem("affinity");
+            await api.clearHistory();
+            remove("affinity");
             showToast("小爱已完全重置！", "success");
             setTimeout(() => window.location.reload(), 1000);
-        } catch (e) {
+        } catch {
             showToast("重置失败", "error");
         }
         setShowResetConfirm(false);
     };
 
-    const tabs = [
+    const tabs: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
         { id: "general", label: "通用", icon: MessageSquare },
         { id: "voice", label: "语音", icon: Mic },
         { id: "memory", label: "记忆", icon: Brain },
@@ -183,7 +171,7 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
                         {tabs.map((tab) => (
                             <button
                                 key={tab.id}
-                                onClick={() => setActiveTab(tab.id as any)}
+                                onClick={() => setActiveTab(tab.id)}
                                 className={`flex flex-col items-center justify-center py-3 rounded-2xl transition-all gap-1.5 ${activeTab === tab.id
                                     ? "bg-white text-pink-600 shadow-sm border border-pink-100"
                                     : "text-gray-400 hover:bg-white/50 hover:text-pink-400"
@@ -471,7 +459,7 @@ export default function SettingsDialog({ onClose, backendUrl, onConfigChange }: 
             </div>
 
             {/* Toast 通知 */}
-            <ToastContainer />
+            {ToastContainer}
 
             {/* 确认对话框 */}
             <ConfirmDialog

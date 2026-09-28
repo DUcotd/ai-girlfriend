@@ -2,23 +2,19 @@
 
 import { useState, useEffect } from "react";
 import { Brain, Trash2, Heart, User, Loader2 } from "lucide-react";
-import Toast, { useToast } from "./Toast";
+import { useToast } from "./Toast";
 import ConfirmDialog from "./ConfirmDialog";
-
-interface Memory {
-    id: string;
-    text: string;
-    timestamp: number;
-}
+import { api } from "@/lib/api";
+import type { MemoryItem } from "@/types";
 
 interface MemoryDialogProps {
     onClose: () => void;
-    backendUrl: string;
     onStateChange?: (state: { affinity: number; nickname: string }) => void;
 }
 
-export default function MemoryDialog({ onClose, backendUrl, onStateChange }: MemoryDialogProps) {
-    const [memories, setMemories] = useState<Memory[]>([]);
+export default function MemoryDialog({ onClose, onStateChange }: MemoryDialogProps) {
+    // 注意：本组件使用共享类型 MemoryItem（见 @/types），不再本地重复定义
+    const [memories, setMemories] = useState<MemoryItem[]>([]);
     const [affinity, setAffinity] = useState(35);
     const [nickname, setNickname] = useState("");
     const [isLoading, setIsLoading] = useState(true);
@@ -27,37 +23,12 @@ export default function MemoryDialog({ onClose, backendUrl, onStateChange }: Mem
 
     const { showToast, ToastContainer } = useToast();
 
-    useEffect(() => {
-        fetchData();
-    }, []);
-
-    const fetchData = async () => {
-        setIsLoading(true);
-        try {
-            const memRes = await fetch(`${backendUrl}/memories`);
-            if (memRes.ok) {
-                const data = await memRes.json();
-                setMemories(data);
-            }
-            const stateRes = await fetch(`${backendUrl}/state`);
-            if (stateRes.ok) {
-                const state = await stateRes.json();
-                setAffinity(state.affinity || 35);
-                setNickname(state.nickname || "");
-            }
-        } catch (e) {
-            console.error("Failed to fetch data", e);
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
     const handleClearMemories = async () => {
         try {
-            await fetch(`${backendUrl}/memories`, { method: "DELETE" });
+            await api.clearMemories();
             setMemories([]);
             showToast("记忆已清除！", "success");
-        } catch (e) {
+        } catch {
             showToast("清除失败", "error");
         }
         setShowClearConfirm(false);
@@ -67,15 +38,33 @@ export default function MemoryDialog({ onClose, backendUrl, onStateChange }: Mem
         if (onStateChange) onStateChange({ affinity, nickname });
         onClose();
         try {
-            await fetch(`${backendUrl}/state`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ affinity, nickname }),
-            });
+            await api.updateState({ affinity, nickname });
         } catch (e) {
             console.error("Save failed", e);
         }
     };
+
+    // 挂载后拉取一次数据。
+    // setState 全部放进异步回调（而非 effect 同步体），避免触发级联渲染。
+    useEffect(() => {
+        let cancelled = false;
+        Promise.all([api.getMemories(), api.getState()])
+            .then(([list, state]) => {
+                if (cancelled) return;
+                setMemories(list);
+                setAffinity(state.affinity || 35);
+                setNickname(state.nickname || "");
+                setIsLoading(false);
+            })
+            .catch((e) => {
+                if (cancelled) return;
+                console.error("Failed to fetch data", e);
+                setIsLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     const formatTime = (timestamp: number) => {
         return new Date(timestamp * 1000).toLocaleString("zh-CN");
@@ -158,7 +147,7 @@ export default function MemoryDialog({ onClose, backendUrl, onStateChange }: Mem
                 </div>
             </div>
 
-            <ToastContainer />
+            {ToastContainer}
 
             <ConfirmDialog
                 isOpen={showClearConfirm}

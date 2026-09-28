@@ -1,42 +1,33 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, Circle, Plus, Trash2, Calendar, ClipboardList } from "lucide-react";
-
-interface Task {
-    id: string;
-    title: string;
-    description?: string;
-    dueTime?: string;
-    completed: boolean;
-}
+import { api } from "@/lib/api";
+import type { Task } from "@/types";
 
 interface TaskDialogProps {
     onClose: () => void;
-    backendUrl: string;
 }
 
-export default function TaskDialog({ onClose, backendUrl }: TaskDialogProps) {
+export default function TaskDialog({ onClose }: TaskDialogProps) {
     const [tasks, setTasks] = useState<Task[]>([]);
     const [newTitle, setNewTitle] = useState("");
     const [newDue, setNewDue] = useState("");
     const [isLoading, setIsLoading] = useState(false);
 
-    useEffect(() => {
-        fetchTasks();
+    /** 拉取任务列表。setState 放在 Promise 回调里，避免 effect 同步体内 setState */
+    const fetchTasks = useCallback(() => {
+        return api
+            .getTasks()
+            .then(setTasks)
+            .catch(() => {
+                console.error("Failed to fetch tasks");
+            });
     }, []);
 
-    const fetchTasks = async () => {
-        try {
-            const res = await fetch(`${backendUrl}/tasks`);
-            if (res.ok) {
-                const data = await res.json();
-                setTasks(data);
-            }
-        } catch (e) {
-            console.error("Failed to fetch tasks", e);
-        }
-    };
+    useEffect(() => {
+        void fetchTasks();
+    }, [fetchTasks]);
 
     const handleAddTask = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -44,20 +35,11 @@ export default function TaskDialog({ onClose, backendUrl }: TaskDialogProps) {
 
         setIsLoading(true);
         try {
-            const res = await fetch(`${backendUrl}/tasks`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    title: newTitle,
-                    dueTime: newDue || undefined,
-                }),
-            });
-            if (res.ok) {
-                setNewTitle("");
-                setNewDue("");
-                fetchTasks();
-            }
-        } catch (e) {
+            await api.addTask({ title: newTitle, dueTime: newDue || undefined });
+            setNewTitle("");
+            setNewDue("");
+            await fetchTasks();
+        } catch {
             alert("添加失败");
         } finally {
             setIsLoading(false);
@@ -66,14 +48,8 @@ export default function TaskDialog({ onClose, backendUrl }: TaskDialogProps) {
 
     const toggleTask = async (id: string, completed: boolean) => {
         try {
-            const res = await fetch(`${backendUrl}/tasks/${id}`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ completed: !completed }),
-            });
-            if (res.ok) {
-                fetchTasks();
-            }
+            await api.updateTask(id, { completed: !completed });
+            await fetchTasks();
         } catch (e) {
             console.error("Failed to update task", e);
         }
@@ -82,12 +58,8 @@ export default function TaskDialog({ onClose, backendUrl }: TaskDialogProps) {
     const deleteTask = async (id: string) => {
         if (!confirm("确定要删除这个任务吗？")) return;
         try {
-            const res = await fetch(`${backendUrl}/tasks/${id}`, {
-                method: "DELETE",
-            });
-            if (res.ok) {
-                fetchTasks();
-            }
+            await api.deleteTask(id);
+            await fetchTasks();
         } catch (e) {
             console.error("Failed to delete task", e);
         }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { applyTheme, getStoredTheme } from "@/lib/storage";
 
 interface ThemeSwitcherProps {
     onClose: () => void;
@@ -39,21 +40,13 @@ const themes = [
 
 export default function ThemeSwitcher({ onClose }: ThemeSwitcherProps) {
     // 懒初始化：直接从 localStorage 读取，避免闪烁
-    const [currentTheme, setCurrentTheme] = useState(() => {
-        if (typeof window !== 'undefined') {
-            return localStorage.getItem("theme") || "sakura";
-        }
-        return "sakura";
-    });
-
-    const applyTheme = (themeId: string) => {
-        document.documentElement.setAttribute("data-theme", themeId);
-    };
+    const [currentTheme, setCurrentTheme] = useState(
+        () => getStoredTheme() || "sakura"
+    );
 
     const selectTheme = (themeId: string) => {
         setCurrentTheme(themeId);
         applyTheme(themeId);
-        localStorage.setItem("theme", themeId);
     };
 
     return (

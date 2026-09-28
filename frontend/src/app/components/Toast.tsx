@@ -2,7 +2,7 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 import { X, AlertCircle, CheckCircle, Info } from "lucide-react";
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback } from "react";
 
 interface ToastProps {
     message: string;
@@ -69,22 +69,21 @@ export function useToast() {
         setToasts((prev) => prev.filter((t) => t.id !== id));
     }, []);
 
-    const ToastContainer = useMemo(() => {
-        const Container = () => (
-            <AnimatePresence>
-                {toasts.map((toast, idx) => (
-                    <div key={toast.id} style={{ top: `${1 + idx * 4.5}rem` }} className="fixed right-4 z-[100]">
-                        <Toast
-                            message={toast.message}
-                            type={toast.type}
-                            onClose={() => removeToast(toast.id)}
-                        />
-                    </div>
-                ))}
-            </AnimatePresence>
-        );
-        return Container;
-    }, [toasts, removeToast]);
+    // 直接返回 JSX 元素（而非在 useMemo 里新建组件）：
+    // 避免每次 toasts 变化产生新的组件类型导致整棵子树 remount
+    const ToastContainer = (
+        <AnimatePresence>
+            {toasts.map((toast, idx) => (
+                <div key={toast.id} style={{ top: `${1 + idx * 4.5}rem` }} className="fixed right-4 z-[100]">
+                    <Toast
+                        message={toast.message}
+                        type={toast.type}
+                        onClose={() => removeToast(toast.id)}
+                    />
+                </div>
+            ))}
+        </AnimatePresence>
+    );
 
     return { showToast, ToastContainer };
 }
