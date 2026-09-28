@@ -40,12 +40,8 @@ export default function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
             set("modelName", modelName);
             set("hasCompletedSetup", "true");
 
-            // 同步到后端
-            await api.updateConfig({
-                api_key: apiKey,
-                base_url: baseUrl,
-                model_name: modelName,
-            });
+            // 同步到后端（camelCase → snake_case 由 syncConfig 统一处理）
+            await api.syncConfig({ apiKey, baseUrl, modelName });
 
             showToast("配置保存成功！", "success");
             setStep(2);

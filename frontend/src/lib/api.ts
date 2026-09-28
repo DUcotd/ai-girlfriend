@@ -15,6 +15,38 @@ export const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
 /**
+ * UI 侧配置对象（camelCase，即 `lib/storage.getChatConfig()` 的返回形状）。
+ *
+ * ⚠️ 后端 `/config` 只认 snake_case（见 `toBackendConfigPayload`）。
+ * 历史上「挂载时自动同步」把 camelCase 整包直发，后端全部字段收不到、
+ * 静默失效——表现是：后端重启后前端不会自动重新下发 Key，聊天报
+ * 「API Key not configured / 连接中断」，必须手动去设置里保存一次。
+ * （2026-09-28 冒烟回归发现，重构前即存在。）所有下发路径必须走 `syncConfig`。
+ */
+export interface UiChatConfig {
+  apiKey?: string;
+  baseUrl?: string;
+  modelName?: string;
+  ttsApiKey?: string;
+  embApiKey?: string;
+  embBaseUrl?: string;
+  embModelName?: string;
+}
+
+/** camelCase UI 配置 → 后端 /config 契约（snake_case）；空串归一为 undefined。 */
+export function toBackendConfigPayload(cfg: UiChatConfig) {
+  return {
+    api_key: cfg.apiKey || undefined,
+    base_url: cfg.baseUrl || undefined,
+    model_name: cfg.modelName || undefined,
+    tts_api_key: cfg.ttsApiKey || undefined,
+    embedding_api_key: cfg.embApiKey || undefined,
+    embedding_base_url: cfg.embBaseUrl || undefined,
+    embedding_model_name: cfg.embModelName || undefined,
+  };
+}
+
+/**
  * 统一请求封装：
  * - 自动带 Content-Type
  * - 区分「业务 4xx」与「网络错误」，失败时抛出带 detail 的 Error
@@ -63,6 +95,13 @@ export const api = {
     request<{ status: string; current_model?: string }>("/config", {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+
+  /** 下发 UI 配置（camelCase）——自动完成字段映射，所有调用方都用它，勿直发 camelCase */
+  syncConfig: (cfg: UiChatConfig) =>
+    request<{ status: string; current_model?: string }>("/config", {
+      method: "POST",
+      body: JSON.stringify(toBackendConfigPayload(cfg)),
     }),
 
   getProactiveConfig: () =>

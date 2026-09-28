@@ -35,7 +35,7 @@ export function useBootstrap() {
     // 已有配置时同步给后端（后端配置仅存于内存，重启后需要重新下发）
     const config = getChatConfig();
     if (config.apiKey) {
-      api.updateConfig(config).catch(() => {});
+      api.syncConfig(config).catch(() => {});
     }
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */

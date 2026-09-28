@@ -60,7 +60,7 @@ export default function ChatPage() {
   const handleFirstRunComplete = () => {
     completeFirstRun();
     const config = getChatConfig();
-    if (config.apiKey) api.updateConfig(config).catch(() => {});
+    if (config.apiKey) api.syncConfig(config).catch(() => {});
   };
 
   const handleSend = () => {

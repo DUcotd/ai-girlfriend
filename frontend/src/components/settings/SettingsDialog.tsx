@@ -119,15 +119,15 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         set("enabledTypes", JSON.stringify(enabledTypes));
 
         try {
-            // 同步到后端
-            await api.updateConfig({
-                api_key: apiKey,
-                base_url: baseUrl,
-                model_name: modelName,
-                tts_api_key: ttsApiKey || undefined,
-                embedding_api_key: embApiKey || undefined,
-                embedding_base_url: embBaseUrl || undefined,
-                embedding_model_name: embModelName || undefined,
+            // 同步到后端（camelCase → snake_case 由 syncConfig 统一处理）
+            await api.syncConfig({
+                apiKey,
+                baseUrl,
+                modelName,
+                ttsApiKey,
+                embApiKey,
+                embBaseUrl,
+                embModelName,
             });
 
             await api.updateProactiveConfig({
