@@ -1,0 +1,19 @@
+/* ======================================
+   设计 token · 基础尺度层（与主题/模式无关）
+   颜色语义变量（surface/text/border 系列）见 themes.css，
+   由 data-theme（色相）× data-mode（明度）正交组合决定。
+   ====================================== */
+
+:root {
+  /* 圆角 */
+  --radius-sm: 0.75rem;
+  --radius-md: 1rem;
+  --radius-lg: 1.5rem;
+  --radius-xl: 1.75rem;
+
+  /* 动效时长与缓动（使用规范见 Phase 4 动效约定） */
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}

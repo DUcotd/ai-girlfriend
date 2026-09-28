@@ -34,6 +34,7 @@ const KEYS = {
   embModelName: "embModelName",
   affinity: "affinity",
   theme: "theme",
+  themeMode: "themeMode",
   hasCompletedSetup: "hasCompletedSetup",
   proactiveEnabled: "proactiveEnabled",
   frequencyLevel: "frequencyLevel",
@@ -72,6 +73,17 @@ export function applyTheme(theme: string): void {
   if (typeof window === "undefined") return;
   document.documentElement.setAttribute("data-theme", theme);
   write(KEYS.theme, theme);
+}
+
+/** 显示模式（light/dark）的读取与应用，与主题（data-theme）正交 */
+export function getStoredThemeMode(): string | null {
+  return read(KEYS.themeMode);
+}
+
+export function applyThemeMode(mode: string): void {
+  if (typeof window === "undefined") return;
+  document.documentElement.setAttribute("data-mode", mode);
+  write(KEYS.themeMode, mode);
 }
 
 export function getStoredAffinity(): number | null {

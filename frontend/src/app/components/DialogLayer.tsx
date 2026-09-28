@@ -5,7 +5,7 @@ import ExportDialog from "./ExportDialog";
 import MemoryDialog from "./MemoryDialog";
 import SettingsDialog from "./SettingsDialog";
 import TaskDialog from "./TaskDialog";
-import ThemeSwitcher from "./ThemeSwitcher";
+import ThemeDialog from "./theme/ThemeDialog";
 import type { DialogName } from "@/app/dialogs";
 import type { Message, TtsEngine } from "@/types";
 
@@ -31,7 +31,7 @@ export default function DialogLayer({
   return (
     <>
       <Modal isOpen={dialog === "theme"} onClose={onClose}>
-        <ThemeSwitcher onClose={onClose} />
+        <ThemeDialog onClose={onClose} />
       </Modal>
 
       <Modal isOpen={dialog === "export"} onClose={onClose}>

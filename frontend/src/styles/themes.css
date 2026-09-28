@@ -1,0 +1,70 @@
+/* ======================================
+   主题系统 · data-theme（色相）× data-mode（明度）正交
+   4 主题 + 2 模式 = 8 种组合，互不写交集选择器。
+   主题只定义色相相关变量；模式只定义明度层级，
+   明度变量通过 var(--hue) 派生，天然适配所有主题。
+   ====================================== */
+
+/* ---------- 主题层：只管色相与 accent ---------- */
+:root,
+[data-theme="sakura"] {
+  --hue: 330;
+  --bg-end-hue: 280;
+  --accent-1: 330 81% 72%;
+  --accent-strong: 330 70% 55%;
+  --accent-2: 280 60% 70%;
+  --accent-pop: 340 82% 65%;
+}
+
+[data-theme="starry"] {
+  --hue: 270;
+  --bg-end-hue: 280;
+  --accent-1: 270 70% 65%;
+  --accent-strong: 270 60% 50%;
+  --accent-2: 240 60% 70%;
+  --accent-pop: 290 70% 60%;
+}
+
+[data-theme="ocean"] {
+  --hue: 200;
+  --bg-end-hue: 190;
+  --accent-1: 200 80% 60%;
+  --accent-strong: 200 70% 45%;
+  --accent-2: 180 60% 55%;
+  --accent-pop: 210 75% 65%;
+}
+
+[data-theme="forest"] {
+  --hue: 140;
+  --bg-end-hue: 110;
+  --accent-1: 140 50% 55%;
+  --accent-strong: 140 45% 40%;
+  --accent-2: 100 40% 60%;
+  --accent-pop: 160 55% 50%;
+}
+
+/* ---------- 模式层：只管明度 ---------- */
+/* 浅色（默认兜底也走这里，防 FOUC 脚本失败时仍是浅色） */
+:root,
+[data-mode="light"] {
+  --bg-start: var(--hue) 30% 95%;
+  --bg-end: var(--bg-end-hue) 30% 92%;
+  --surface-1: 0 0% 100%;
+  --surface-2: var(--hue) 30% 97%;
+  --text-primary: var(--hue) 30% 25%;
+  --text-secondary: var(--hue) 22% 40%;
+  --text-muted: var(--hue) 15% 55%;
+  --border-subtle: var(--hue) 30% 88%;
+}
+
+/* 深色：表面亮度层级比背景高 6-7%，与原星空紫的观感一致 */
+[data-mode="dark"] {
+  --bg-start: var(--hue) 26% 10%;
+  --bg-end: var(--bg-end-hue) 30% 7%;
+  --surface-1: var(--hue) 22% 16%;
+  --surface-2: var(--hue) 20% 21%;
+  --text-primary: var(--hue) 24% 92%;
+  --text-secondary: var(--hue) 18% 76%;
+  --text-muted: var(--hue) 14% 62%;
+  --border-subtle: var(--hue) 18% 28%;
+}

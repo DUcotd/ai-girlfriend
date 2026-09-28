@@ -112,3 +112,7 @@ export interface CurrentActivity {
 
 /** 用户在设置中选择的 TTS 引擎 */
 export type TtsEngine = "openai" | "local";
+
+/** 主题（色相）与显示模式（明度），正交组合成 4×2=8 种外观 */
+export type ThemeName = "sakura" | "starry" | "ocean" | "forest";
+export type ThemeMode = "light" | "dark";
