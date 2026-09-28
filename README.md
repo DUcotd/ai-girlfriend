@@ -20,7 +20,7 @@ npm run dev
 
 ## 技术栈
 
-- **前端**: Next.js 16 (App Router) + TailwindCSS + Framer Motion + TypeScript
+- **前端**: Next.js 16 (App Router) + React 19 + TypeScript + TailwindCSS + Framer Motion + zustand
 - **后端**: Node.js (ESM) + Express
 - **AI**: 兼容 OpenAI API（OpenAI / DeepSeek / Claude 等）
 
@@ -59,12 +59,27 @@ backend-node/
 
 frontend/
 └── src/
-    ├── app/page.tsx         页面编排（状态与逻辑已抽离到 hooks）
-    ├── app/components/      UI 组件（ui/ 通用件、chat/ 聊天件）
-    ├── hooks/               业务逻辑（聊天 / 轮询 / 语音 / 录音 / 特效）
-    ├── lib/                 API 客户端、localStorage、语音
+    ├── app/                 入口装配（layout / page / globals.css）
+    ├── components/
+    │   ├── ui/              通用原语（Button / Dialog / Card / Switch …，全吃设计 token）
+    │   ├── chat/            聊天页（ChatPage / ChatInput 胶囊 dock / 消息气泡 / 工具栏）
+    │   ├── character/       角色面板（立绘 / 好感度 / 情绪徽章 / PAD 状态）
+    │   ├── settings/        设置弹窗（通用 / 语音 / 记忆 / 主动 / 系统 五页签）
+    │   ├── wizard/          首启引导（欢迎 / API 配置 / 完成，三步）
+    │   ├── dialogs/         业务弹窗（任务 / 记忆 / 导出）
+    │   ├── voice/           语音控件（朗读按钮 / 录音波形）
+    │   ├── theme/           主题切换弹窗
+    │   └── effects/         背景特效（樱花飘落）
+    ├── stores/              zustand 状态真源（chat / settings / ui / theme）
+    ├── hooks/               业务逻辑（聊天流 / 主动轮询 / 语音 / 录音 / 自动滚动）
+    ├── lib/                 API 客户端、localStorage、cn、通知音、浏览器语音
+    ├── styles/              设计 token 三层（tokens 尺度 / themes 主题×模式 / utilities 装饰）
     └── types/               全局共享类型
 ```
+
+**主题系统**：`data-theme`（sakura / starry / ocean / forest 四色相）× `data-mode`（light / dark）
+正交组合共 8 种，全部颜色经 CSS 变量走 token，组件不写死色值；支持系统
+`prefers-reduced-motion`（禁装饰动画、压缩过渡）。
 
 ## 数据存放
 
@@ -135,9 +150,10 @@ cd backend-node && npm run check
 # 流式过滤器单元测试
 cd backend-node && npm test
 
-# 前端类型检查与构建
+# 前端类型检查与 Lint / 构建
 cd frontend && npx tsc --noEmit
-cd frontend && npm run build
+cd frontend && npx eslint src
+cd frontend && npm run build      # 注意：与 dev server 不要同时跑（会冲突 .next）
 ```
 
 ## API 密钥
