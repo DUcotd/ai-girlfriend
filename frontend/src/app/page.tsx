@@ -40,7 +40,9 @@ export default function Home() {
   const [isTypingProactive, setIsTypingProactive] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  /** 用户是否贴着底部：只有贴底时才自动跟随新内容，避免打断用户翻历史 */
+  const atBottomRef = useRef(true);
 
   const { speak } = useSpeech(ttsEngine);
   const chat = useChat({ voiceMode, speak });
@@ -55,7 +57,7 @@ export default function Home() {
       setIsTypingProactive(false);
       chat.setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: message.content },
+        { id: `proactive-${message.id}`, role: "assistant", content: message.content },
       ]);
     }, typingDelay);
   }, [chat]);
@@ -128,10 +130,23 @@ export default function Home() {
     };
   }, []);
 
-  // 滚动到底部
+  // 监听滚动，判断用户是否还贴着底部
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chat.messages]);
+    const el = listRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // 自动跟随：贴底时才滚。流式输出中用 auto（逐字追加时 smooth 会互相打断、抖动）
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || !atBottomRef.current) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: chat.isLoading ? "auto" : "smooth" });
+  }, [chat.messages, chat.isLoading]);
 
   const handleFirstRunComplete = () => {
     setIsFirstRun(false);
@@ -141,6 +156,7 @@ export default function Home() {
 
   const handleSend = () => {
     if (!input.trim()) return;
+    atBottomRef.current = true; // 主动发言时总是跟到底部
     chat.sendMessage(input);
     setInput("");
     setShowEmojiPicker(false);
@@ -226,20 +242,18 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+        <div ref={listRef} className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
           {chat.messages.length === 0 && !chat.isLoading && (
             <WelcomeMessage onQuickStart={chat.sendMessage} />
           )}
 
           <AnimatePresence>
-            {chat.messages.map((msg, idx) => (
-              <ChatMessage key={idx} message={msg} ttsEngine={ttsEngine} />
+            {chat.messages.map((msg) => (
+              <ChatMessage key={msg.id} message={msg} ttsEngine={ttsEngine} />
             ))}
             {chat.isLoading && <TypingIndicator />}
             {isTypingProactive && !chat.isLoading && <ProactiveTypingIndicator />}
           </AnimatePresence>
-
-          <div ref={messagesEndRef} />
         </div>
 
         <div className="p-4 md:p-6 pb-6">

@@ -7,6 +7,14 @@ import type { ChatResponse, EmotionalState, Message } from "@/types";
 
 const REQUEST_TIMEOUT_MS = 60_000;
 
+/** 消息 id：稳定且唯一，供列表 key 与 memo 复用判断 */
+let messageSeq = 0;
+const nextMessageId = () => `m${++messageSeq}`;
+
+/** 后端历史不带 id，补一个 */
+const withIds = (list: Message[]): Message[] =>
+  list.map((m) => (m.id ? m : { ...m, id: nextMessageId() }));
+
 interface UseChatOptions {
   /** 语音模式开启时，收到回复后自动朗读 */
   voiceMode: boolean;
@@ -43,7 +51,7 @@ export function useChat({ voiceMode, speak, onError }: UseChatOptions) {
   const fetchHistory = useCallback(async () => {
     try {
       const history = await api.getHistory();
-      setMessages(history);
+      setMessages(withIds(history));
     } catch {
       onErrorRef.current?.("无法加载历史记录");
     }
@@ -62,14 +70,14 @@ export function useChat({ voiceMode, speak, onError }: UseChatOptions) {
     async (text: string) => {
       if (!text.trim()) return;
 
-      setMessages((prev) => [...prev, { role: "user", content: text }]);
+      setMessages((prev) => [...prev, { id: nextMessageId(), role: "user", content: text }]);
       setIsLoading(true);
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
       // 先放一条空的 assistant 占位，流式过程中往里面追加文本
-      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+      setMessages((prev) => [...prev, { id: nextMessageId(), role: "assistant", content: "" }]);
 
       /** 把最后一条（占位）替换成指定内容，并挂上内心独白（若有） */
       const finishWith = (content: string, thought?: string | null) =>
@@ -86,7 +94,7 @@ export function useChat({ voiceMode, speak, onError }: UseChatOptions) {
       const markGhosting = () =>
         setMessages((prev) => {
           const next = prev.slice(0, -1);
-          return [...next, { role: "system", content: "💔 已读不回..." }];
+          return [...next, { id: nextMessageId(), role: "system", content: "💔 已读不回..." }];
         });
 
       const applyMeta = (data: Partial<ChatResponse>) => {

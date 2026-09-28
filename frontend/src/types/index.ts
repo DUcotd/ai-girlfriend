@@ -3,6 +3,11 @@
 export type MessageRole = "user" | "assistant" | "system";
 
 export interface Message {
+  /**
+   * 列表 key。流式渲染时每个增量都会生成新的 messages 数组，
+   * 用稳定 id 而不是数组下标，React/memo 才能只重渲染真正变化的那一条。
+   */
+  id: string;
   role: MessageRole;
   content: string;
   /** 小爱的人设内心独白（hover 小图标可见）；与模型 CoT 无关，CoT 不下发到前端 */

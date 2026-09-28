@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { motion } from "framer-motion";
 import { Brain } from "lucide-react";
 import VoiceButton from "../VoiceButton";
@@ -32,8 +33,14 @@ function ThoughtIcon({ text }: { text: string }) {
   );
 }
 
-/** 单条消息气泡：用户 / AI / 系统提示 */
-export default function ChatMessage({ message, ttsEngine }: ChatMessageProps) {
+/**
+ * 单条消息气泡：用户 / AI / 系统提示。
+ *
+ * 流式输出时每个增量都会生成新的 messages 数组，若不加 memo，
+ * 整列表（含每条的 framer-motion 动画）都会跟着重渲染，长对话明显掉帧。
+ * 配合稳定的 message.id 作为 key，未变化的消息不会重渲染。
+ */
+function ChatMessage({ message, ttsEngine }: ChatMessageProps) {
   const alignment =
     message.role === "user"
       ? "justify-end"
@@ -73,3 +80,5 @@ export default function ChatMessage({ message, ttsEngine }: ChatMessageProps) {
     </motion.div>
   );
 }
+
+export default memo(ChatMessage);
