@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Settings, Key, Sparkles, ArrowRight, Check, Heart, Zap } from "lucide-react";
-import { useToast } from "./Toast";
+import { useToast } from "../ui/Toast";
 import { api } from "@/lib/api";
 import { set } from "@/lib/storage";
 import { DEFAULT_PROVIDER } from "@/lib/providers";

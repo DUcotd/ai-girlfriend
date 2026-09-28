@@ -1,11 +1,11 @@
 "use client";
 
-import Modal from "./ui/Modal";
+import Modal from "../ui/Modal";
 import ExportDialog from "./ExportDialog";
 import MemoryDialog from "./MemoryDialog";
-import SettingsDialog from "./SettingsDialog";
+import SettingsDialog from "../settings/SettingsDialog";
 import TaskDialog from "./TaskDialog";
-import ThemeDialog from "./theme/ThemeDialog";
+import ThemeDialog from "../theme/ThemeDialog";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
 

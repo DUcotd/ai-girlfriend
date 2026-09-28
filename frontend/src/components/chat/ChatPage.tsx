@@ -8,10 +8,10 @@ import ChatInput from "./ChatInput";
 import ChatMessage from "./ChatMessage";
 import ChatToolbar from "./ChatToolbar";
 import { ProactiveTypingIndicator, TypingIndicator } from "./TypingIndicator";
-import CharacterPanel from "../CharacterPanel";
-import DialogLayer from "../DialogLayer";
-import FirstRunWizard from "../FirstRunWizard";
-import WelcomeMessage from "../WelcomeMessage";
+import CharacterPanel from "../character/CharacterPanel";
+import DialogLayer from "../dialogs/DialogLayer";
+import FirstRunWizard from "../wizard/FirstRunWizard";
+import WelcomeMessage from "./WelcomeMessage";
 
 import { useActivityPolling } from "@/hooks/useActivityPolling";
 import { useAutoScroll } from "@/hooks/useAutoScroll";

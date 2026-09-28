@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence } from "framer-motion";
-import Toast from "../Toast";
+import Toast from "./Toast";
 import { useUiStore } from "@/stores/uiStore";
 
 /**

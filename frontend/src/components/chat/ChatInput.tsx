@@ -3,9 +3,9 @@
 import { useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { Image as ImageIcon, Mic, Send, Smile, StopCircle, Volume2 } from "lucide-react";
-import AudioVisualizer from "../AudioVisualizer";
-import EmojiPicker from "../EmojiPicker";
-import QuickReplies from "../QuickReplies";
+import AudioVisualizer from "../voice/AudioVisualizer";
+import EmojiPicker from "./EmojiPicker";
+import QuickReplies from "./QuickReplies";
 import { useUiStore } from "@/stores/uiStore";
 
 interface ChatInputProps {

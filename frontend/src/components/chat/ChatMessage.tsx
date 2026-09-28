@@ -3,7 +3,7 @@
 import { memo } from "react";
 import { motion } from "framer-motion";
 import { Brain } from "lucide-react";
-import VoiceButton from "../VoiceButton";
+import VoiceButton from "../voice/VoiceButton";
 import type { Message, TtsEngine } from "@/types";
 
 interface ChatMessageProps {

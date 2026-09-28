@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import ToastViewport from "./components/ui/ToastViewport";
+import ToastViewport from "@/components/ui/ToastViewport";
 import "./globals.css";
 import "../styles/tokens.css";
 import "../styles/themes.css";

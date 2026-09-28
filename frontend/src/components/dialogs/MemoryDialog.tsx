@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { Brain, Trash2, Heart, User, Loader2 } from "lucide-react";
-import { useToast } from "./Toast";
-import ConfirmDialog from "./ConfirmDialog";
+import { useToast } from "../ui/Toast";
+import ConfirmDialog from "../ui/ConfirmDialog";
 import { api } from "@/lib/api";
 import { useChatStore } from "@/stores/chatStore";
 import type { MemoryItem } from "@/types";

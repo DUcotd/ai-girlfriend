@@ -4,14 +4,14 @@ import { useState, useEffect } from "react";
 import { Settings, MessageSquare, Mic, Brain, ShieldAlert, Bell } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useToast } from "./Toast";
-import ConfirmDialog from "./ConfirmDialog";
+import { useToast } from "../ui/Toast";
+import ConfirmDialog from "../ui/ConfirmDialog";
 import { api } from "@/lib/api";
 import { get, remove, set } from "@/lib/storage";
 import { PROVIDER_PRESETS, matchPreset, DEFAULT_PROVIDER } from "@/lib/providers";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { ProactiveTypeInfo, TtsEngine } from "@/types";
-import SettingsProactiveTab from "./settings/SettingsProactiveTab";
+import SettingsProactiveTab from "./SettingsProactiveTab";
 
 interface SettingsDialogProps {
     onClose: () => void;
