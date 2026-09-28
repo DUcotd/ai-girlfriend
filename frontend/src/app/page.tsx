@@ -174,6 +174,13 @@ export default function Home() {
     setShowEmojiPicker(false);
   };
 
+  /** 流式正文是否已经开始可见（最后一条 assistant 有实际内容） */
+  const isStreamingVisible = (() => {
+    if (!chat.isLoading) return false;
+    const last = chat.messages[chat.messages.length - 1];
+    return last?.role === "assistant" && !!last.content.trim();
+  })();
+
   // ---------- 首屏 ----------
   // 不再渲染整页「加载中」白屏：主界面直接铺出来（背景与布局骨架先到位），
   // 首次运行时引导层自带全屏遮罩叠在上面，等 localStorage 读完再决定要不要显示。
@@ -224,10 +231,15 @@ export default function Home() {
           )}
 
           <AnimatePresence>
-            {chat.messages.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} ttsEngine={ttsEngine} />
-            ))}
-            {chat.isLoading && <TypingIndicator />}
+            {chat.messages.map((msg) =>
+              // 流式占位的空气泡不渲染：等待期由下方打字指示器单独代表「在输入」，
+              // 否则会出现「🔊 空气泡 + ··· 」两个气泡并存的怪相
+              msg.role === "assistant" && !msg.content.trim() ? null : (
+                <ChatMessage key={msg.id} message={msg} ttsEngine={ttsEngine} />
+              )
+            )}
+            {/* 正文开始流出后由气泡接管，打字指示器退场 */}
+            {chat.isLoading && !isStreamingVisible && <TypingIndicator />}
             {isTypingProactive && !chat.isLoading && <ProactiveTypingIndicator />}
           </AnimatePresence>
         </div>

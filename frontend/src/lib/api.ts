@@ -139,6 +139,10 @@ export const api = {
             affinity: payload.affinity,
             emotionalState: payload.emotionalState,
             special_action: payload.special_action ?? undefined,
+            // ⚠️ 这两个字段必须带回来：inner_thought 是 <monologue> 人设独白
+            //（丢失的后果是气泡旁的「心声」图标永远不出现），漏映射过一次，别再删
+            inner_thought: payload.inner_thought ?? null,
+            model_reasoning: payload.model_reasoning ?? null,
           };
         } else if (payload.type === "error") {
           throw new Error(payload.detail || "stream failed");
