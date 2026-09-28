@@ -43,6 +43,8 @@ class AiGirlfriend {
         this.affinity = 35;
         this.nickname = "你";
         this.history = [];
+        // 近 24h 好感度正增长事件的时间戳，用于「加分疲劳」——防止好感度通胀
+        this.recentGainEvents = [];
 
         this._loadState();
 
@@ -110,6 +112,10 @@ class AiGirlfriend {
             this.nickname = data.nickname;
             console.log(`[State] Loaded nickname: ${this.nickname}`);
         }
+
+        if (Array.isArray(data.recentGainEvents)) {
+            this.recentGainEvents = data.recentGainEvents.filter(t => typeof t === 'number');
+        }
     }
 
     _saveState() {
@@ -117,6 +123,7 @@ class AiGirlfriend {
             affinity: this.affinity,
             nickname: this.nickname || "亲爱的",
             history: this.history.filter(msg => msg.role !== 'system'),
+            recentGainEvents: this.recentGainEvents,
             config: {
                 baseUrl: this.baseUrl,
                 modelName: this.modelName,
@@ -279,9 +286,23 @@ class AiGirlfriend {
 
         this.emotionEngine.decay(0.03);
 
+        // 好感度变化：先清掉 24h 前的加分记录，再做校验（含加分疲劳）
+        const DAY_MS = 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        this.recentGainEvents = this.recentGainEvents.filter(t => now - t < DAY_MS);
+
         const stage = this.emotionEngine.relationshipStage || 'stranger';
-        const validatedChange = validateAffinityChange(affinityChange, userInput, replyText, this.affinity, stage);
+        const validatedChange = validateAffinityChange(
+            affinityChange, userInput, replyText, this.affinity, stage, this.recentGainEvents.length
+        );
         this.affinity = Math.max(0, Math.min(100, this.affinity + validatedChange));
+
+        if (validatedChange > 0) {
+            this.recentGainEvents.push(now);
+            console.log(`[Affinity] +${validatedChange} → ${this.affinity} (24h gains: ${this.recentGainEvents.length})`);
+        } else if (validatedChange < 0) {
+            console.log(`[Affinity] ${validatedChange} → ${this.affinity}`);
+        }
 
         const sentiment = emotionDelta?.P || (affinityChange > 0 ? 0.5 : affinityChange < 0 ? -0.5 : 0);
         this.personalityDrift.recordInteraction(sentiment, affinityChange < -3);
@@ -624,6 +645,7 @@ class AiGirlfriend {
     clearHistory() {
         this.history = [{ role: "system", content: this.systemPrompt }];
         this.affinity = 35;
+        this.recentGainEvents = [];
         this._saveState();
         if (this.memory) {
             this.memory.clearMemory();
