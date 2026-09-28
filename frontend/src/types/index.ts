@@ -5,6 +5,8 @@ export type MessageRole = "user" | "assistant" | "system";
 export interface Message {
   role: MessageRole;
   content: string;
+  /** 小爱的人设内心独白（hover 小图标可见）；与模型 CoT 无关，CoT 不下发到前端 */
+  thought?: string | null;
 }
 
 /** PAD 三维情绪模型状态 */
@@ -39,6 +41,10 @@ export interface ChatResponse {
   affinity?: number;
   emotionalState?: EmotionalState | null;
   special_action?: "ghosting";
+  /** 人设内心独白：<monologue> 里的内容，默认隐藏，hover 可见 */
+  inner_thought?: string | null;
+  /** 模型自己的推理链 CoT，仅用于排障，前端不使用（也不该展示） */
+  model_reasoning?: string | null;
 }
 
 /** GET /chat/proactive 单条主动消息 */

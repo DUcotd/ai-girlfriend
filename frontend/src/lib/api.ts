@@ -84,6 +84,72 @@ export const api = {
       body: JSON.stringify({ message }),
     }),
 
+  /**
+   * 流式对话（SSE）。onDelta 会在每个文本片段到达时被调用，
+   * 让界面在模型还在生成时就显示内容，而不是等整段完成。
+   *
+   * 出错时抛出 Error，调用方应回退到 sendChat。
+   */
+  async streamChat(
+    message: string,
+    onDelta: (text: string) => void,
+    signal?: AbortSignal
+  ): Promise<ChatResponse> {
+    const res = await fetch(`${BACKEND_URL}/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+      signal,
+    });
+
+    if (!res.ok || !res.body) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.detail || `Stream failed: ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let final: ChatResponse | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE 以空行分隔事件
+      const events = buffer.split("\n\n");
+      buffer = events.pop() || "";
+
+      for (const event of events) {
+        const line = event
+          .split("\n")
+          .find((l) => l.startsWith("data:"))
+          ?.slice(5)
+          .trim();
+        if (!line) continue;
+
+        const payload = JSON.parse(line);
+        if (payload.type === "delta") {
+          if (payload.text) onDelta(payload.text);
+        } else if (payload.type === "done") {
+          final = {
+            reply: payload.reply ?? "",
+            emotion: payload.emotion,
+            affinity: payload.affinity,
+            emotionalState: payload.emotionalState,
+            special_action: payload.special_action ?? undefined,
+          };
+        } else if (payload.type === "error") {
+          throw new Error(payload.detail || "stream failed");
+        }
+      }
+    }
+
+    if (!final) throw new Error("stream ended without result");
+    return final;
+  },
+
   /** 拉取一条待展示的主动消息；无消息时返回 null（后端 204） */
   async fetchProactiveMessage(): Promise<ProactiveMessage | null> {
     const res = await fetch(`${BACKEND_URL}/chat/proactive`);

@@ -18,6 +18,8 @@ import { PERSONA_SYSTEM_PROMPT, buildSystemContext } from './prompts/systemPromp
 import { buildRelationshipContext } from './prompts/relationshipContext.js';
 import { buildProactivePrompt, buildProactiveDirective, buildProactivePersonaDirective } from './prompts/proactivePrompts.js';
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+import { config } from '../config.js';
+import { createStreamFilter, splitDelta, extractReasoning } from './streamFilter.js';
 
 dotenv.config();
 
@@ -132,7 +134,9 @@ class AiGirlfriend {
         try {
             this.openai = new OpenAI({
                 apiKey: this.apiKey,
-                baseURL: this.baseUrl
+                baseURL: this.baseUrl,
+                // 与前端等待上限对齐，避免后端请求无限挂起
+                timeout: config.chat.timeoutMs,
             });
         } catch (e) {
             console.error(`Error initializing OpenAI: ${e}`);
@@ -140,6 +144,47 @@ class AiGirlfriend {
     }
 
     // ==================== 对话主流程 ====================
+
+    /**
+     * 构造发送给 LLM 的消息：system prompt + 最近 N 条历史。
+     * 完整历史仍保留在 this.history 并落盘，这里只裁剪 prompt 以加快生成。
+     */
+    _buildPromptMessages() {
+        // history 里的 assistant 消息可能带 thought（内心独白），只对前端有意义，
+        // 这里统一剥成 { role, content }，避免多余字段打进 LLM 请求。
+        const toPromptMsg = (m) => ({ role: m.role, content: m.content });
+        const max = config.chat.maxPromptHistory;
+        // history[0] 固定为 system prompt
+        if (this.history.length <= max + 1) return this.history.map(toPromptMsg);
+
+        let tail = this.history.slice(1).slice(-max);
+        // 保证上下文从 user 消息开始，避免出现孤立的 assistant 回复
+        if (tail.length > 0 && tail[0].role === 'assistant') {
+            tail = tail.slice(1);
+        }
+        return [toPromptMsg(this.history[0]), ...tail.map(toPromptMsg)];
+    }
+
+    /**
+     * 回复生成后的收尾：记忆 embedding + 状态落盘。
+     * 这些都不在用户等待的关键路径上，改为后台执行，失败只记日志。
+     */
+    _persistAfterReply(userInput, replyText) {
+        // 快照要在当前 tick 取，避免后台执行时读到已被后续对话改动的状态
+        const snapshot = this.emotionEngine.getSnapshot();
+        setImmediate(() => {
+            if (this.memory) {
+                this.memory
+                    .addMemory(`User: ${userInput}\nXiao Ai: ${replyText}`, { emotionSnapshot: snapshot })
+                    .catch((e) => console.error(`[Chat] addMemory failed: ${e.message}`));
+            }
+            try {
+                this._saveState();
+            } catch (e) {
+                console.error(`[Chat] saveState failed: ${e.message}`);
+            }
+        });
+    }
 
     async chat(userInput) {
         return this._chatQueue = this._chatQueue.then(() => this._doChat(userInput)).catch(e => {
@@ -149,35 +194,25 @@ class AiGirlfriend {
         });
     }
 
-    async _doChat(userInput) {
-        if (!this.openai) {
-            return {
-                reply: "请先配置 API Key 才能和小爱聊天哦~ (在侧边栏输入或配置 .env 文件)",
-                token_usage: {},
-                emotion: "default",
-                affinity: this.affinity
-            };
-        }
-
-        if (!userInput || !userInput.trim()) {
-            return {
-                reply: "",
-                token_usage: {},
-                emotion: "default",
-                affinity: this.affinity
-            };
-        }
-
+    /**
+     * 对话前的准备工作（非流式与流式共用）：
+     * ghosting 判定、情感基准、记忆检索、prompt 组装。
+     *
+     * @returns {{done?: object, messagesToSend?: Array}} done 存在表示无需调用 LLM
+     */
+    async _prepare(userInput) {
         // ========== Layer 5: Ghosting 检测（优先于基准更新，避免 nudge 消解冷暴力） ==========
         if (this.emotionEngine.shouldGhost()) {
             console.log(`[Chat] Ghosting triggered: P=${this.emotionEngine.state.P.toFixed(2)}`);
             this.emotionEngine.decay(0.05);
             return {
-                reply: null,
-                token_usage: {},
-                emotion: "冷漠",
-                affinity: this.affinity,
-                special_action: "ghosting"
+                done: {
+                    reply: null,
+                    token_usage: {},
+                    emotion: "冷漠",
+                    affinity: this.affinity,
+                    special_action: "ghosting"
+                }
             };
         }
 
@@ -200,7 +235,9 @@ class AiGirlfriend {
         }
 
         // ========== 构建消息 ==========
-        const messagesToSend = [...this.history];
+        // 只把最近若干条历史送进 prompt：上下文越短，prefill 与生成都越快。
+        // 完整历史仍持久化在 state.json，不受影响。
+        const messagesToSend = this._buildPromptMessages();
 
         const pendingTasks = TaskManager.getPendingTasks();
         const taskSummary = TaskManager.getSummary();
@@ -221,6 +258,65 @@ class AiGirlfriend {
         messagesToSend.push({ role: "system", content: consolidatedSystemInfo });
         messagesToSend.push({ role: "user", content: userInput });
 
+        return { messagesToSend };
+    }
+
+    /**
+     * LLM 返回后的收尾（非流式与流式共用）：
+     * 情绪更新、好感度校验、历史写入与裁剪。
+     */
+    _finalize(parsed, userInput, usage) {
+        const { replyText, affinityChange, emotionDelta, innerThought, modelReasoning } = parsed;
+
+        // 关键词分析总是生效，LLM delta 叠加混合
+        const autoDelta = this.emotionEngine.analyzeInput(userInput, this.affinity);
+        this.emotionEngine.applyDelta(autoDelta);
+        if (emotionDelta) {
+            this.emotionEngine.applyDelta(emotionDelta);
+        }
+
+        this.emotionEngine.decay(0.03);
+
+        const stage = this.emotionEngine.relationshipStage || 'stranger';
+        const validatedChange = validateAffinityChange(affinityChange, userInput, replyText, this.affinity, stage);
+        this.affinity = Math.max(0, Math.min(100, this.affinity + validatedChange));
+
+        const sentiment = emotionDelta?.P || (affinityChange > 0 ? 0.5 : affinityChange < 0 ? -0.5 : 0);
+        this.personalityDrift.recordInteraction(sentiment, affinityChange < -3);
+
+        this.history.push({ role: "user", content: userInput });
+        // 内心独白随消息一起持久化，刷新后 hover 小图标仍可查看；
+        // 送进 LLM 时会被 _buildPromptMessages 剥掉，不会污染上下文。
+        const assistantMsg = { role: "assistant", content: replyText };
+        if (innerThought) assistantMsg.thought = innerThought;
+        this.history.push(assistantMsg);
+
+        // 裁剪历史：保留最近 MAX_HISTORY 条消息（含 system prompt）
+        while (this.history.length > MAX_HISTORY) {
+            this.history.splice(1, 2); // 跳过 [0]=system prompt，成对删除
+        }
+
+        // 回复已经生成完毕，记忆 embedding 与落盘不再阻塞响应
+        this._persistAfterReply(userInput, replyText);
+
+        return {
+            reply: replyText,
+            token_usage: usage || {},
+            emotion: this.emotionEngine.getEmotionLabel(),
+            affinity: this.affinity,
+            emotionalState: this.emotionEngine.getFullState(),
+            innerThought,
+            modelReasoning,
+        };
+    }
+
+    async _doChat(userInput) {
+        const guard = this._preChatGuard(userInput);
+        if (guard) return guard;
+
+        const { done, messagesToSend } = await this._prepare(userInput);
+        if (done) return done;
+
         try {
             const completion = await this.openai.chat.completions.create({
                 model: this.modelName,
@@ -228,51 +324,8 @@ class AiGirlfriend {
                 temperature: 0.75
             });
 
-            const { replyText, emotion, affinityChange, emotionDelta, innerThought } =
-                this._parseCompletion(completion, userInput);
-
-            // 关键词分析总是生效，LLM delta 叠加混合
-            const autoDelta = this.emotionEngine.analyzeInput(userInput, this.affinity);
-            this.emotionEngine.applyDelta(autoDelta);
-            if (emotionDelta) {
-                this.emotionEngine.applyDelta(emotionDelta);
-            }
-
-            this.emotionEngine.decay(0.03);
-
-            const stage = this.emotionEngine.relationshipStage || 'stranger';
-            const validatedChange = validateAffinityChange(affinityChange, userInput, replyText, this.affinity, stage);
-            this.affinity = Math.max(0, Math.min(100, this.affinity + validatedChange));
-
-            const sentiment = emotionDelta?.P || (affinityChange > 0 ? 0.5 : affinityChange < 0 ? -0.5 : 0);
-            this.personalityDrift.recordInteraction(sentiment, affinityChange < -3);
-
-            this.history.push({ role: "user", content: userInput });
-            this.history.push({ role: "assistant", content: replyText });
-
-            // 裁剪历史：保留最近 MAX_HISTORY 条消息（含 system prompt）
-            while (this.history.length > MAX_HISTORY) {
-                this.history.splice(1, 2); // 跳过 [0]=system prompt，成对删除
-            }
-
-            if (this.memory) {
-                this.memory.addMemory(
-                    `User: ${userInput}\nXiao Ai: ${replyText}`,
-                    { emotionSnapshot: this.emotionEngine.getSnapshot() }
-                );
-            }
-
-            this._saveState();
-
-            return {
-                reply: replyText,
-                token_usage: completion.usage,
-                emotion: this.emotionEngine.getEmotionLabel(),
-                affinity: this.affinity,
-                emotionalState: this.emotionEngine.getFullState(),
-                innerThought,
-            };
-
+            const parsed = this._parseCompletion(completion, userInput);
+            return this._finalize(parsed, userInput, completion.usage);
         } catch (e) {
             console.error(`Chat Error: ${e}`);
             return {
@@ -285,44 +338,203 @@ class AiGirlfriend {
     }
 
     /**
-     * 解析 LLM 输出：剥离 <think> 内心独白与 <metadata> 元数据。
+     * 流式对话：边生成边通过 onDelta 吐出正文，
+     * 让用户看到第一个字的时间从「整段生成完」提前到「首个 token 到达」。
+     *
+     * @returns 与 chat() 相同结构的结果对象（含完整 reply）
+     */
+    async chatStream(userInput, onDelta) {
+        return this._chatQueue = this._chatQueue
+            .then(() => this._doChatStream(userInput, onDelta))
+            .catch(e => {
+                console.error(`[Chat] Stream queue error: ${e.message}`);
+                this._chatQueue = Promise.resolve();
+                return {
+                    reply: "发生了点小意外",
+                    token_usage: {},
+                    emotion: this.emotionEngine.getEmotionLabel(),
+                    affinity: this.affinity
+                };
+            });
+    }
+
+    async _doChatStream(userInput, onDelta) {
+        const guard = this._preChatGuard(userInput);
+        if (guard) return guard;
+
+        const { done, messagesToSend } = await this._prepare(userInput);
+        if (done) return done;
+
+        const filter = createStreamFilter();
+        let fullContent = "";
+        let visibleText = "";
+
+        try {
+            const stream = await this.openai.chat.completions.create({
+                model: this.modelName,
+                messages: messagesToSend,
+                temperature: 0.75,
+                stream: true
+            });
+
+            let reasoningText = "";
+            for await (const chunk of stream) {
+                const { content: delta, reasoning } = splitDelta(chunk);
+                if (reasoning) reasoningText += reasoning;
+                if (!delta) continue;
+                fullContent += delta;
+                const visible = filter.push(delta);
+                if (visible) {
+                    visibleText += visible;
+                    onDelta(visible);
+                }
+            }
+
+            const { tail, cot, monologue, metadata } = filter.finish();
+            if (tail) {
+                visibleText += tail;
+                onDelta(tail);
+            }
+
+            const parsed = this._parseReplyText(fullContent, userInput, { cot, monologue, metadata, reasoning: reasoningText });
+            // 以实际流式展示给用户的正文为准，保证界面显示与历史记录一致
+            if (visibleText.trim()) parsed.replyText = visibleText.trim();
+            return this._finalize(parsed, userInput, null);
+        } catch (e) {
+            console.error(`Chat Stream Error: ${e}`);
+            return {
+                reply: `发生了点小意外: ${e.message}`,
+                token_usage: {},
+                emotion: this.emotionEngine.getEmotionLabel(),
+                affinity: this.affinity
+            };
+        }
+    }
+
+    /** 进入对话前的通用校验，返回非 null 时直接作为结果返回 */
+    _preChatGuard(userInput) {
+        if (!this.openai) {
+            return {
+                reply: "请先配置 API Key 才能和小爱聊天哦~ (在侧边栏输入或配置 .env 文件)",
+                token_usage: {},
+                emotion: "default",
+                affinity: this.affinity
+            };
+        }
+        if (!userInput || !userInput.trim()) {
+            return {
+                reply: "",
+                token_usage: {},
+                emotion: "default",
+                affinity: this.affinity
+            };
+        }
+        return null;
+    }
+
+    /**
+     * 解析 LLM 输出：把三类片段各归各位。
      */
     _parseCompletion(completion, userInput) {
-        const fullContent = completion.choices[0].message.content;
-        let replyText = fullContent;
+        const message = completion.choices[0].message;
+        return this._parseReplyText(message.content, userInput, { reasoning: extractReasoning(message) });
+    }
+
+    /**
+     * 解析回复文本。
+     *
+     * 「思考」有两个来源，语义完全不同，这里显式分流、绝不混淆：
+     *   innerThought   —— 人设内心独白：我们 prompt 要求小爱写的 <monologue>，走 content。
+     *                     默认隐藏，前端小图标 hover 可见。
+     *   modelReasoning —— 模型自己的推理链：① 原生字段 reasoning_content；
+     *                     ② 部分推理/蒸馏模型把 CoT 写进正文的 <think>。永不展示。
+     *
+     * 兼容旧行为：若只有 <think> 且原生通道为空（非推理模型 + 旧格式），
+     * 那这个 <think> 就是我们要的独白，仍归入 innerThought。
+     *
+     * @param hints 流式场景下由 streamFilter 给出已分离好的 cot / monologue / metadata / reasoning
+     */
+    _parseReplyText(fullContent, userInput, hints = {}) {
+        const raw = fullContent || "";
+        let replyText = raw;
         let emotion = "default";
         let affinityChange = 0;
         let emotionDelta = null;
         let innerThought = null;
+        let modelReasoning = null;
+        let metadataJson = null;
 
-        const thinkRegex = /<think>(.*?)<\/think>/s;
-        const thinkMatch = fullContent.match(thinkRegex);
-        if (thinkMatch) {
-            innerThought = thinkMatch[1].trim();
-            console.log(`\n[Inner Monologue]: ${innerThought}\n`);
-            replyText = fullContent.replace(thinkMatch[0], "").trim();
+        // ---- 人设内心独白 <monologue> ----
+        let monologue = (hints.monologue || "").trim();
+        if (!monologue) {
+            const m = raw.match(/<monologue>(.*?)<\/monologue>/s);
+            if (m) {
+                monologue = m[1].trim();
+                replyText = replyText.replace(m[0], "").trim();
+            }
         }
 
-        const metadataRegex = /<metadata>\s*({.*?})\s*<\/metadata>/s;
-        const match = replyText.match(metadataRegex) || fullContent.match(metadataRegex);
+        // ---- 模型 CoT（正文里的 <think>）----
+        let cot = (hints.cot || "").trim();
+        if (!cot) {
+            const t = raw.match(/<think>(.*?)<\/think>/s);
+            if (t) {
+                cot = t[1].trim();
+                replyText = replyText.replace(t[0], "").trim();
+            }
+        }
 
-        if (match) {
-            replyText = replyText.replace(match[0], "").trim();
+        // ---- 模型 CoT（原生 reasoning_content 通道）----
+        const native = (hints.reasoning || "").trim();
 
+        modelReasoning = [native, cot].filter(Boolean).join("\n\n") || null;
+        innerThought = monologue || null;
+        if (!innerThought && cot && !native) {
+            innerThought = cot;      // 旧格式：唯一的 <think> 就是人设独白
+            modelReasoning = null;
+        }
+
+        if (innerThought) {
+            console.log(`\n[Inner Monologue]: ${innerThought}\n`);
+            if (innerThought.length > 400) {
+                console.warn(`[Chat] 内心独白异常长（${innerThought.length} 字符），注意是否混入了模型 CoT`);
+            }
+        }
+        if (modelReasoning) {
+            const preview = modelReasoning.length > 300 ? modelReasoning.slice(0, 300) + ' …' : modelReasoning;
+            console.log(`\n[Model Reasoning] (${modelReasoning.length} chars): ${preview}\n`);
+        }
+
+        // ---- 元数据 ----
+        if (hints.metadata) {
+            metadataJson = hints.metadata;
+            // 正文里可能残留标签片段，一并清掉（含未闭合的情况）
+            replyText = replyText
+                .replace(/<metadata>[\s\S]*?<\/metadata>/s, "")
+                .replace(/<metadata>[\s\S]*$/s, "")
+                .trim();
+        } else {
+            const match = replyText.match(/<metadata>\s*({.*?})\s*<\/metadata>/s)
+                || raw.match(/<metadata>\s*({.*?})\s*<\/metadata>/s);
+            if (match) {
+                replyText = replyText.replace(match[0], "").trim();
+                metadataJson = match[1];
+            }
+        }
+
+        if (metadataJson) {
             try {
-                let metadataJson = match[1];
-                metadataJson = metadataJson.replace(/:\s*\+([0-9.]+)/g, ': $1');
-
-                const metadata = JSON.parse(metadataJson);
+                const normalized = metadataJson.replace(/:\s*\+([0-9.]+)/g, ': $1');
+                const metadata = JSON.parse(normalized);
                 emotion = metadata.emotion || "default";
                 affinityChange = metadata.affinity_change || 0;
                 emotionDelta = metadata.emotion_delta || null;
             } catch (e) {
-                console.error(`Metadata parse error: ${e}. Raw match: ${match[1]}`);
+                console.error(`Metadata parse error: ${e}. Raw: ${metadataJson}`);
             }
         }
 
-        return { replyText, emotion, affinityChange, emotionDelta, innerThought };
+        return { replyText, emotion, affinityChange, emotionDelta, innerThought, modelReasoning };
     }
 
     // ==================== 主动消息生成 ====================
@@ -337,7 +549,8 @@ class AiGirlfriend {
         const scenarioPrompt = buildProactivePrompt(reason, data, this.affinity);
 
         const messages = [
-            ...this.history.slice(-10),
+            // 同样剥掉 thought，只把 role/content 交给 LLM
+            ...this.history.slice(-10).map(m => ({ role: m.role, content: m.content })),
             { role: "system", content: buildProactiveDirective(reason, this.affinity, contextInfo) },
             { role: "system", content: buildProactivePersonaDirective(scenarioPrompt, this.affinity) }
         ];
@@ -350,7 +563,11 @@ class AiGirlfriend {
             });
 
             const content = completion.choices[0].message.content;
-            let reply = content;
+            // 主动消息直接进气泡，CoT 与独白标签一并清掉（万一模型带了出来）
+            let reply = content
+                .replace(/<think>[\s\S]*?<\/think>/gs, "")
+                .replace(/<monologue>[\s\S]*?<\/monologue>/gs, "")
+                .trim();
             let emotion = "default";
 
             const metadataRegex = /<metadata>\s*({.*?})\s*<\/metadata>/s;

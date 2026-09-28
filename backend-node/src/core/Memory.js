@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+import { config } from '../config.js';
 
 dotenv.config();
 
@@ -31,9 +32,13 @@ class Memory {
 
     initOpenAI() {
         let cleanBaseUrl = this.baseUrl.replace(/\/embeddings\/?$/, "");
+        // embedding 只用来做「锦上添花」的语义检索：
+        // 超时短、不重试，慢/挂了就立刻回退关键词检索，绝不拖慢对话主链路。
         this.openai = new OpenAI({
             apiKey: this.apiKey,
-            baseURL: cleanBaseUrl
+            baseURL: cleanBaseUrl,
+            timeout: config.embedding.timeoutMs,
+            maxRetries: config.embedding.maxRetries,
         });
     }
 
@@ -105,6 +110,12 @@ class Memory {
 
     async getRelevantContext(query, currentEmotion = null, nResults = 3) {
         if (!this.memories || this.memories.length === 0) return "";
+
+        // 没有任何向量化的记忆时，语义检索无从谈起，
+        // 直接走关键词检索，省掉一次 embedding 网络往返。
+        const hasVectors = this.memories.some(m => m.embedding);
+        if (!hasVectors) return this._keywordSearch(query, nResults);
+
         const queryEmbedding = await this.getEmbedding(query);
         if (queryEmbedding) {
             const scoredMemories = [];

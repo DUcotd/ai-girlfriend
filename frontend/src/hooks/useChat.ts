@@ -68,39 +68,84 @@ export function useChat({ voiceMode, speak, onError }: UseChatOptions) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-      try {
-        const data = await api.sendChat(text);
-        clearTimeout(timeoutId);
+      // 先放一条空的 assistant 占位，流式过程中往里面追加文本
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
+      /** 把最后一条（占位）替换成指定内容，并挂上内心独白（若有） */
+      const finishWith = (content: string, thought?: string | null) =>
+        setMessages((prev) => {
+          if (prev.length === 0) return prev;
+          const next = [...prev];
+          const last = next[next.length - 1];
+          next[next.length - 1] =
+            last.role === "assistant" ? { ...last, content, thought: thought ?? null } : last;
+          return next;
+        });
+
+      /** Ghosting：把占位换成系统提示 */
+      const markGhosting = () =>
+        setMessages((prev) => {
+          const next = prev.slice(0, -1);
+          return [...next, { role: "system", content: "💔 已读不回..." }];
+        });
+
+      const applyMeta = (data: Partial<ChatResponse>) => {
         if (data.emotion) setEmotion(data.emotion);
         if (typeof data.affinity === "number") applyAffinity(data.affinity);
         if (data.emotionalState) setEmotionalState(data.emotionalState);
+      };
 
-        // Ghosting：AI 已读不回
+      const settle = (data: ChatResponse) => {
+        applyMeta(data);
         if (data.special_action === "ghosting") {
-          setMessages((prev) => [
-            ...prev,
-            { role: "system", content: "💔 已读不回..." },
-          ]);
+          markGhosting();
           return;
         }
-
         const reply = data.reply || "";
-        setMessages((prev) => [...prev, { role: "assistant", content: reply }]);
+        finishWith(reply, data.inner_thought ?? null);
         if (voiceModeRef.current && reply) speakRef.current?.(reply);
+      };
+
+      try {
+        // 优先流式：模型一边生成，界面一边渲染，首字时间大幅提前
+        const data = await api.streamChat(
+          text,
+          (chunk) =>
+            setMessages((prev) => {
+              if (prev.length === 0) return prev;
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last.role !== "assistant") return prev;
+              next[next.length - 1] = {
+                ...last,
+                content: last.content + chunk,
+              };
+              return next;
+            }),
+          controller.signal
+        );
+        clearTimeout(timeoutId);
+        settle(data);
+        return;
       } catch (error) {
         const isTimeout = error instanceof Error && error.name === "AbortError";
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: isTimeout
-              ? "⏰ 响应时间过长，请重试..."
-              : "⚠️ 连接中断...",
-          },
-        ]);
-      } finally {
         clearTimeout(timeoutId);
+
+        // 超时不必重试；其余情况（后端不支持流式等）回退到非流式
+        if (!isTimeout) {
+          try {
+            const data = await api.sendChat(text);
+            settle(data);
+            return;
+          } catch {
+            // 两条路都失败，落到下面的统一提示
+          }
+        }
+
+        finishWith(
+          isTimeout ? "⏰ 响应时间过长，请重试..." : "⚠️ 连接中断..."
+        );
+      } finally {
         setIsLoading(false);
       }
     },

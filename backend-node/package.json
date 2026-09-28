@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "check": "node --experimental-vm-modules scripts/check-syntax.mjs"
+    "check": "node --experimental-vm-modules scripts/check-syntax.mjs",
+    "test": "node scripts/test-stream-filter.mjs"
   },
   "keywords": [],
   "author": "",

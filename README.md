@@ -85,7 +85,8 @@ frontend/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/chat` | 发送消息 |
+| POST | `/chat` | 发送消息（非流式） |
+| POST | `/chat/stream` | 发送消息，SSE 流式返回正文 |
 | GET | `/chat/proactive` | 取一条主动消息（无则 204） |
 | POST | `/chat/proactive/trigger` | 手动触发主动消息 |
 | GET/POST | `/config` | 模型 / API 配置 |
@@ -100,11 +101,39 @@ frontend/
 | GET | `/life/current` `/life/history` | 当前活动 / 活动历史 |
 | POST | `/audio/speak` `/audio/transcribe` | TTS / 语音转文字 |
 
+## 内心独白 vs 模型思考
+
+模型一次输出里可能有两类「思考」，归属完全不同，代码里分两条通道处理，绝不混淆：
+
+| 片段 | 归属 | 去向 | 用户可见 |
+|------|------|------|----------|
+| `<monologue>…</monologue>` | 小爱的人设内心独白（我们 prompt 要求写的） | `inner_thought`，随消息持久化 | 默认隐藏，气泡旁小图标 hover 可见 |
+| `<think>…</think>` | 模型自己的推理链 CoT（推理模型/蒸馏版会写进正文） | `model_reasoning` | 永不展示 |
+| `reasoning_content` 字段 | 推理模型的原生 CoT（独立字段） | `model_reasoning` | 永不展示 |
+| `<metadata>…</metadata>` | 情绪 / 好感度结构化数据 | 进情绪系统，不出现在正文中 | 否 |
+
+`/chat` 与 `/chat/stream` 的 `done` 事件都会带上 `inner_thought`、`model_reasoning`
+（后者按 `CHAT_THINKING_MAX_CHARS` 截断，默认 2000 字符，仅用于排障）。
+
+兼容：若模型只输出 `<think>` 且没有原生 `reasoning_content`（非推理模型 + 旧格式），
+该 `<think>` 仍被当作人设独白，行为与重构前一致。
+
+本地验证（会临时把后端指向 mock，跑完记得恢复 `data/` 并重启）：
+
+```bash
+cd backend-node
+node scripts/mock-llm-server.mjs 8899     # 终端 1
+node scripts/verify-thinking-split.mjs    # 终端 2
+```
+
 ## 开发
 
 ```bash
 # 后端语法检查（不依赖子进程，纯解析）
 cd backend-node && npm run check
+
+# 流式过滤器单元测试
+cd backend-node && npm test
 
 # 前端类型检查与构建
 cd frontend && npx tsc --noEmit
