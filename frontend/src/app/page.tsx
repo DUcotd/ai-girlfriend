@@ -23,7 +23,7 @@ import { useSakuraEffect } from "@/hooks/useSakuraEffect";
 import { useSpeech } from "@/hooks/useSpeech";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { api } from "@/lib/api";
-import { applyTheme, get, getChatConfig, getStoredTheme, isSetupComplete } from "@/lib/storage";
+import { applyTheme, get, getChatConfig, getStoredTheme, isSetupComplete, set } from "@/lib/storage";
 import type { CurrentActivity, ProactiveMessage, TtsEngine } from "@/types";
 
 type DialogName = "settings" | "memory" | "task" | "export" | "theme";
@@ -50,10 +50,14 @@ export default function Home() {
   useSakuraEffect();
 
   // ---------- 主动消息：先显示「思考中」，再逐字延迟出场 ----------
+  const proactiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handleProactiveMessage = useCallback((message: ProactiveMessage) => {
     setIsTypingProactive(true);
     const typingDelay = Math.min(2000, Math.max(800, message.content.length * 30));
-    setTimeout(() => {
+    // 存下来以便卸载时清理，避免组件已卸载还去 setState
+    proactiveTimerRef.current = setTimeout(() => {
+      proactiveTimerRef.current = null;
       setIsTypingProactive(false);
       chat.setMessages((prev) => [
         ...prev,
@@ -96,7 +100,15 @@ export default function Home() {
     const savedTheme = getStoredTheme();
     if (savedTheme) applyTheme(savedTheme);
 
-    if ("Notification" in window) Notification.requestPermission();
+    // 通知权限只问一次：问过就记下来，已授权/已拒绝也不再打扰
+    if (
+      "Notification" in window &&
+      Notification.permission === "default" &&
+      !get("notificationAsked")
+    ) {
+      set("notificationAsked", "true");
+      void Notification.requestPermission();
+    }
 
     void syncState();
     void fetchHistory();
@@ -128,6 +140,11 @@ export default function Home() {
       cancelled = true;
       clearInterval(interval);
     };
+  }, []);
+
+  // 卸载时清理主动消息的延时器
+  useEffect(() => () => {
+    if (proactiveTimerRef.current) clearTimeout(proactiveTimerRef.current);
   }, []);
 
   // 监听滚动，判断用户是否还贴着底部
@@ -163,23 +180,9 @@ export default function Home() {
   };
 
   // ---------- 首屏 ----------
-  if (isFirstRun === null) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-pink-100 via-purple-50 to-blue-100">
-        <div className="text-center">
-          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-br from-pink-400 to-purple-500 flex items-center justify-center animate-pulse" />
-          <p className="text-gray-500">加载中...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (isFirstRun) {
-    return (
-      <FirstRunWizard onComplete={handleFirstRunComplete} />
-    );
-  }
-
+  // 不再渲染整页「加载中」白屏：主界面直接铺出来（背景与布局骨架先到位），
+  // 首次运行时引导层自带全屏遮罩叠在上面，等 localStorage 读完再决定要不要显示。
+  // 这样回访用户是「一帧到位」，首次用户也不会看到白屏切换。
   return (
     <main className="flex h-screen overflow-hidden relative">
       {/* 背景光晕 */}
@@ -296,6 +299,9 @@ export default function Home() {
       <Modal isOpen={dialog === "task"} onClose={() => setDialog(null)}>
         <TaskDialog onClose={() => setDialog(null)} />
       </Modal>
+
+      {/* 首次运行引导：自带全屏遮罩，叠在主界面之上 */}
+      {isFirstRun && <FirstRunWizard onComplete={handleFirstRunComplete} />}
     </main>
   );
 }

@@ -37,6 +37,8 @@ const KEYS = {
   frequencyLevel: "frequencyLevel",
   customDailyLimit: "customDailyLimit",
   enabledTypes: "enabledTypes",
+  /** 通知权限是否已问过（只问一次，避免每次进页面都弹） */
+  notificationAsked: "notificationAsked",
 } as const;
 
 export const StorageKeys = KEYS;
