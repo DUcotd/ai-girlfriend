@@ -4,14 +4,21 @@ import { useState, useEffect } from "react";
 import { Settings, MessageSquare, Mic, Brain, ShieldAlert, Bell } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useToast } from "../ui/Toast";
+import Button from "../ui/Button";
 import ConfirmDialog from "../ui/ConfirmDialog";
+import Dialog from "../ui/Dialog";
+import { useToast } from "../ui/Toast";
 import { api } from "@/lib/api";
 import { get, remove, set } from "@/lib/storage";
-import { PROVIDER_PRESETS, matchPreset, DEFAULT_PROVIDER } from "@/lib/providers";
+import { DEFAULT_PROVIDER } from "@/lib/providers";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { cn } from "@/lib/cn";
 import type { ProactiveTypeInfo, TtsEngine } from "@/types";
-import SettingsProactiveTab from "./SettingsProactiveTab";
+import SettingsAdvancedTab from "./tabs/SettingsAdvancedTab";
+import SettingsGeneralTab from "./tabs/SettingsGeneralTab";
+import SettingsMemoryTab from "./tabs/SettingsMemoryTab";
+import SettingsProactiveTab from "./tabs/SettingsProactiveTab";
+import SettingsVoiceTab from "./tabs/SettingsVoiceTab";
 
 interface SettingsDialogProps {
     onClose: () => void;
@@ -19,6 +26,18 @@ interface SettingsDialogProps {
 
 type SettingsTab = "general" | "voice" | "memory" | "proactive" | "advanced";
 
+const tabs: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
+    { id: "general", label: "通用", icon: MessageSquare },
+    { id: "voice", label: "语音", icon: Mic },
+    { id: "memory", label: "记忆", icon: Brain },
+    { id: "proactive", label: "主动", icon: Bell },
+    { id: "advanced", label: "系统", icon: ShieldAlert },
+];
+
+/**
+ * 设置弹窗外壳：持有全部配置状态与保存/重置逻辑，
+ * 五个页签的展示拆分在 ./tabs/ 下。
+ */
 export default function SettingsDialog({ onClose }: SettingsDialogProps) {
     // 初始值直接从 localStorage 惰性读取（storage 层已做 SSR 保护）
     const [apiKey, setApiKey] = useState(() => get("apiKey") || "");
@@ -142,258 +161,109 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         setShowResetConfirm(false);
     };
 
-    // 从当前填写值反推命中的预设（值被手改过就自动落到「自定义」）
-    const activePreset = matchPreset(baseUrl, modelName);
-    const activePresetNote = PROVIDER_PRESETS.find((p) => p.id === activePreset)?.note;
-
-    const tabs: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
-        { id: "general", label: "通用", icon: MessageSquare },
-        { id: "voice", label: "语音", icon: Mic },
-        { id: "memory", label: "记忆", icon: Brain },
-        { id: "proactive", label: "主动", icon: Bell },
-        { id: "advanced", label: "系统", icon: ShieldAlert },
-    ];
-
     return (
         <>
-            <div className="modal-glass p-0 overflow-hidden w-[520px] max-h-[90vh] flex flex-col shadow-2xl">
-                {/* Header */}
-                <div className="px-6 py-4 border-b border-pink-100/50 flex justify-between items-center bg-white/40">
-                    <h3 className="font-bold text-lg flex items-center gap-2 text-pink-600">
-                        <Settings size={22} className="animate-spin-slow" /> 系统设置
-                    </h3>
-                    <button
-                        onClick={onClose}
-                        className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-pink-100/50 text-gray-400 hover:text-pink-500 transition-all"
-                    >
-                        ✕
-                    </button>
-                </div>
-
-                <div className="flex flex-1 overflow-hidden">
-                    {/* Sidebar Tabs */}
-                    <div className="w-32 bg-pink-50/30 border-r border-pink-100/50 p-3 flex flex-col gap-2">
-                        {tabs.map((tab) => (
-                            <button
-                                key={tab.id}
-                                onClick={() => setActiveTab(tab.id)}
-                                className={`flex flex-col items-center justify-center py-3 rounded-2xl transition-all gap-1.5 ${activeTab === tab.id
-                                    ? "bg-white text-pink-600 shadow-sm border border-pink-100"
-                                    : "text-gray-400 hover:bg-white/50 hover:text-pink-400"
-                                    }`}
-                            >
-                                <tab.icon size={20} />
-                                <span className="text-[10px] font-bold uppercase tracking-wider">{tab.label}</span>
-                            </button>
-                        ))}
+            <Dialog
+                title="系统设置"
+                icon={<Settings size={22} className="animate-spin-slow" />}
+                onClose={onClose}
+                widthClassName="w-[520px]"
+                className="overflow-hidden"
+                bodyClassName="flex p-0"
+                footer={
+                    <div className="flex justify-end">
+                        <Button
+                            onClick={handleSave}
+                            disabled={isLoading}
+                            className="min-w-[120px] px-8 py-2.5"
+                        >
+                            {isLoading ? "保存中..." : "保存全部配置"}
+                        </Button>
                     </div>
-
-                    {/* Content Area */}
-                    <div className="flex-1 overflow-y-auto p-6 bg-white/20 custom-scrollbar h-[420px]">
-                        <AnimatePresence mode="wait">
-                            <motion.div
-                                key={activeTab}
-                                initial={{ opacity: 0, x: 10 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                exit={{ opacity: 0, x: -10 }}
-                                transition={{ duration: 0.2 }}
-                                className="space-y-5"
-                            >
-                                {activeTab === "general" && (
-                                    <>
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">服务商</label>
-                                            <div className="flex gap-2 p-1 bg-gray-100/50 rounded-2xl border border-gray-100">
-                                                {PROVIDER_PRESETS.map((preset) => (
-                                                    <button
-                                                        key={preset.id}
-                                                        type="button"
-                                                        onClick={() => { setBaseUrl(preset.baseUrl); setModelName(preset.modelName); }}
-                                                        className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${activePreset === preset.id ? "bg-white text-pink-600 shadow-sm" : "text-gray-400 hover:text-gray-500"}`}
-                                                    >
-                                                        {preset.label}
-                                                    </button>
-                                                ))}
-                                                <div
-                                                    className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${activePreset === "custom" ? "bg-white text-pink-600 shadow-sm" : "text-gray-400"}`}
-                                                >
-                                                    自定义
-                                                </div>
-                                            </div>
-                                            {activePresetNote && (
-                                                <p className="text-[10px] text-amber-500 pl-1 leading-relaxed">
-                                                    ⚠️ {activePresetNote}
-                                                </p>
-                                            )}
-                                        </div>
-                                        <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">API 密钥</label>
-                                            <input
-                                                type="password"
-                                                value={apiKey}
-                                                onChange={(e) => setApiKey(e.target.value)}
-                                                className="input-cute py-2.5 text-sm bg-white/80"
-                                                placeholder="sk-..."
-                                            />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">基础 URL</label>
-                                            <input
-                                                type="text"
-                                                value={baseUrl}
-                                                onChange={(e) => setBaseUrl(e.target.value)}
-                                                className="input-cute py-2.5 text-sm bg-white/80"
-                                                placeholder="https://api.openai.com/v1"
-                                            />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">模型名称</label>
-                                            <input
-                                                type="text"
-                                                value={modelName}
-                                                onChange={(e) => setModelName(e.target.value)}
-                                                className="input-cute py-2.5 text-sm bg-white/80"
-                                                placeholder="gpt-3.5-turbo"
-                                            />
-                                        </div>
-                                    </>
-                                )}
-
-                                {activeTab === "voice" && (
-                                    <>
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">语音引擎</label>
-                                            <div className="flex gap-2 p-1 bg-gray-100/50 rounded-2xl border border-gray-100">
-                                                <button
-                                                    onClick={() => setTtsEngine("openai")}
-                                                    className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${ttsEngine === "openai" ? "bg-white text-pink-600 shadow-sm" : "text-gray-400 hover:text-gray-500"
-                                                        }`}
-                                                >
-                                                    OpenAI (云端)
-                                                </button>
-                                                <button
-                                                    onClick={() => setTtsEngine("local")}
-                                                    className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${ttsEngine === "local" ? "bg-white text-pink-600 shadow-sm" : "text-gray-400 hover:text-gray-500"
-                                                        }`}
-                                                >
-                                                    浏览器 (本地)
-                                                </button>
-                                            </div>
-                                        </div>
-                                        {ttsEngine === "openai" && (
-                                            <motion.div
-                                                initial={{ opacity: 0, y: 5 }}
-                                                animate={{ opacity: 1, y: 0 }}
-                                                className="space-y-1"
-                                            >
-                                                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">
-                                                    TTS API 密钥 <span className="text-pink-300 normal-case">(仅支持 OpenAI 官方 Key)</span>
-                                                </label>
-                                                <input
-                                                    type="password"
-                                                    value={ttsApiKey}
-                                                    onChange={(e) => setTtsApiKey(e.target.value)}
-                                                    className="input-cute py-2.5 text-sm bg-white/80"
-                                                    placeholder="sk-... (不填则尝试主 Key)"
-                                                />
-                                            </motion.div>
-                                        )}
-                                        <div className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100 text-[11px] text-blue-500 leading-relaxed">
-                                            💡 提示：本地引擎完全免费且零延迟，但音色取决于你的系统配置；云端引擎音色更自然但需要消耗额度。
-                                        </div>
-                                    </>
-                                )}
-
-                                {activeTab === "memory" && (
-                                    <>
-                                        <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">嵌入 API 密钥</label>
-                                            <input
-                                                type="password"
-                                                value={embApiKey}
-                                                onChange={(e) => setEmbApiKey(e.target.value)}
-                                                className="input-cute py-2.5 text-sm bg-white/80"
-                                                placeholder="sk-... (留空则使用主 Key)"
-                                            />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">嵌入基础 URL</label>
-                                            <input
-                                                type="text"
-                                                value={embBaseUrl}
-                                                onChange={(e) => setEmbBaseUrl(e.target.value)}
-                                                className="input-cute py-2.5 text-sm bg-white/80"
-                                                placeholder="https://api.siliconflow.cn/v1"
-                                            />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pl-1">嵌入模型名称</label>
-                                            <input
-                                                type="text"
-                                                value={embModelName}
-                                                onChange={(e) => setEmbModelName(e.target.value)}
-                                                className="input-cute py-2.5 text-sm bg-white/80"
-                                            />
-                                        </div>
-                                        <div className="p-4 bg-pink-50/50 rounded-2xl border border-pink-100 text-[11px] text-pink-500 leading-relaxed">
-                                            🧠 记忆引擎让小爱具备语义搜索能力。推荐使用硅基流动等服务，能让小爱更精准地回忆起之前的谈话。
-                                        </div>
-                                    </>
-                                )}
-
-                                {activeTab === "proactive" && (
-                                    <SettingsProactiveTab
-                                        enabled={proactiveEnabled}
-                                        onToggleEnabled={setProactiveEnabled}
-                                        frequencyLevel={frequencyLevel}
-                                        onFrequencyChange={setFrequencyLevel}
-                                        customDailyLimit={customDailyLimit}
-                                        onCustomDailyLimitChange={setCustomDailyLimit}
-                                        enabledTypes={enabledTypes}
-                                        onEnabledTypesChange={setEnabledTypes}
-                                        availableTypes={availableTypes}
-                                    />
-                                )}
-
-                                {activeTab === "advanced" && (
-                                    <div className="space-y-6">
-                                        <div className="p-4 bg-red-50/30 rounded-2xl border border-red-100 space-y-3">
-                                            <h4 className="text-xs font-bold text-red-500 flex items-center gap-1">
-                                                <ShieldAlert size={14} /> 危险操作
-                                            </h4>
-                                            <button
-                                                onClick={() => setShowResetConfirm(true)}
-                                                className="w-full py-2.5 rounded-xl border border-red-200 text-red-500 text-xs font-bold hover:bg-red-500 hover:text-white transition-all shadow-sm"
-                                            >
-                                                🔄 完全重置小爱 (不可逆)
-                                            </button>
-                                            <p className="text-[10px] text-red-400 text-center">
-                                                这将清空所有对话历史、向量化存储和角色好感度。
-                                            </p>
-                                        </div>
-
-                                        <div className="p-4 bg-gray-50/50 rounded-2xl border border-gray-100 space-y-2 text-[11px] text-gray-500 italic">
-                                            <p>后端 API 版本: v1.2.0</p>
-                                            <p>前端版本: Next.js 15</p>
-                                        </div>
-                                    </div>
-                                )}
-                            </motion.div>
-                        </AnimatePresence>
-                    </div>
+                }
+            >
+                {/* Sidebar Tabs */}
+                <div className="flex w-32 flex-col gap-2 border-r border-line-subtle bg-surface-2/30 p-3">
+                    {tabs.map((tab) => (
+                        <button
+                            key={tab.id}
+                            onClick={() => setActiveTab(tab.id)}
+                            className={cn(
+                                "flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 transition-all",
+                                activeTab === tab.id
+                                    ? "border border-line-subtle bg-surface-1 text-accent-strong shadow-sm dark:text-accent-1"
+                                    : "text-content-muted hover:bg-surface-1/50 hover:text-accent-1"
+                            )}
+                        >
+                            <tab.icon size={20} />
+                            <span className="text-[10px] font-bold uppercase tracking-wider">{tab.label}</span>
+                        </button>
+                    ))}
                 </div>
 
-                {/* Footer */}
-                <div className="px-6 py-4 border-t border-pink-100/30 bg-white/40 flex justify-end">
-                    <button
-                        onClick={handleSave}
-                        disabled={isLoading}
-                        className="btn-cute px-8 py-2.5 text-sm shadow-pink-200 min-w-[120px]"
-                    >
-                        {isLoading ? "保存中..." : "保存全部配置"}
-                    </button>
+                {/* Content Area */}
+                <div className="h-[420px] flex-1 overflow-y-auto p-6">
+                    <AnimatePresence mode="wait">
+                        <motion.div
+                            key={activeTab}
+                            initial={{ opacity: 0, x: 10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: -10 }}
+                            transition={{ duration: 0.2 }}
+                            className="space-y-5"
+                        >
+                            {activeTab === "general" && (
+                                <SettingsGeneralTab
+                                    apiKey={apiKey}
+                                    baseUrl={baseUrl}
+                                    modelName={modelName}
+                                    onApiKeyChange={setApiKey}
+                                    onBaseUrlChange={setBaseUrl}
+                                    onModelNameChange={setModelName}
+                                />
+                            )}
+
+                            {activeTab === "voice" && (
+                                <SettingsVoiceTab
+                                    ttsEngine={ttsEngine}
+                                    ttsApiKey={ttsApiKey}
+                                    onTtsEngineChange={setTtsEngine}
+                                    onTtsApiKeyChange={setTtsApiKey}
+                                />
+                            )}
+
+                            {activeTab === "memory" && (
+                                <SettingsMemoryTab
+                                    embApiKey={embApiKey}
+                                    embBaseUrl={embBaseUrl}
+                                    embModelName={embModelName}
+                                    onEmbApiKeyChange={setEmbApiKey}
+                                    onEmbBaseUrlChange={setEmbBaseUrl}
+                                    onEmbModelNameChange={setEmbModelName}
+                                />
+                            )}
+
+                            {activeTab === "proactive" && (
+                                <SettingsProactiveTab
+                                    enabled={proactiveEnabled}
+                                    onToggleEnabled={setProactiveEnabled}
+                                    frequencyLevel={frequencyLevel}
+                                    onFrequencyChange={setFrequencyLevel}
+                                    customDailyLimit={customDailyLimit}
+                                    onCustomDailyLimitChange={setCustomDailyLimit}
+                                    enabledTypes={enabledTypes}
+                                    onEnabledTypesChange={setEnabledTypes}
+                                    availableTypes={availableTypes}
+                                />
+                            )}
+
+                            {activeTab === "advanced" && (
+                                <SettingsAdvancedTab onReset={() => setShowResetConfirm(true)} />
+                            )}
+                        </motion.div>
+                    </AnimatePresence>
                 </div>
-            </div>
+            </Dialog>
 
             {/* 确认对话框 */}
             <ConfirmDialog

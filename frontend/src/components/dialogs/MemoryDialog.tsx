@@ -2,8 +2,12 @@
 
 import { useState, useEffect } from "react";
 import { Brain, Trash2, Heart, User, Loader2 } from "lucide-react";
-import { useToast } from "../ui/Toast";
+import Button from "../ui/Button";
 import ConfirmDialog from "../ui/ConfirmDialog";
+import Dialog from "../ui/Dialog";
+import Input from "../ui/Input";
+import SegmentedControl from "../ui/SegmentedControl";
+import { useToast } from "../ui/Toast";
 import { api } from "@/lib/api";
 import { useChatStore } from "@/stores/chatStore";
 import type { MemoryItem } from "@/types";
@@ -73,80 +77,87 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
 
     return (
         <>
-            <div className="modal-glass p-6 w-[450px] max-h-[80vh] flex flex-col">
-                <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-bold text-lg flex items-center gap-2">
-                        <Brain size={20} className="text-pink-500" /> 记忆
-                    </h3>
-                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">✕</button>
-                </div>
-
-                <div className="flex gap-2 mb-4">
-                    <button onClick={() => setActiveTab("memories")}
-                        className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${activeTab === "memories" ? "bg-pink-100 text-pink-600" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
-                        记忆
+            <Dialog
+                title="记忆"
+                icon={<Brain size={20} />}
+                onClose={onClose}
+                widthClassName="w-[450px]"
+                footer={
+                    <button
+                        onClick={() => setShowClearConfirm(true)}
+                        className="flex w-full items-center justify-center gap-2 rounded-xl py-2 text-sm text-status-warning transition-colors hover:bg-status-warning/10"
+                    >
+                        <Trash2 size={16} /> 清除记忆（保留聊天记录）
                     </button>
-                    <button onClick={() => setActiveTab("settings")}
-                        className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${activeTab === "settings" ? "bg-pink-100 text-pink-600" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
-                        设置
-                    </button>
-                </div>
+                }
+            >
+                <SegmentedControl
+                    className="mb-4"
+                    options={[
+                        { value: "memories", label: "记忆" },
+                        { value: "settings", label: "设置" },
+                    ]}
+                    value={activeTab}
+                    onChange={setActiveTab}
+                />
 
-                <div className="flex-1 overflow-y-auto">
+                <div className="max-h-[50vh] overflow-y-auto">
                     {isLoading ? (
-                        <div className="flex items-center justify-center py-8 text-gray-500">
-                            <Loader2 className="animate-spin mr-2" size={20} /> 加载中...
+                        <div className="flex items-center justify-center py-8 text-content-secondary">
+                            <Loader2 className="mr-2 animate-spin" size={20} /> 加载中...
                         </div>
                     ) : activeTab === "memories" ? (
                         <div className="space-y-3">
                             {memories.length === 0 ? (
-                                <div className="text-center text-gray-500 py-8">暂无记忆</div>
+                                <div className="py-8 text-center text-content-secondary">暂无记忆</div>
                             ) : (
                                 memories.map((mem) => (
-                                    <div key={mem.id} className="bg-pink-50/50 rounded-xl p-3 text-sm">
-                                        <p className="text-gray-700 whitespace-pre-wrap">{mem.text}</p>
-                                        <p className="text-xs text-gray-400 mt-2">{formatTime(mem.timestamp)}</p>
+                                    <div key={mem.id} className="rounded-xl bg-accent-1/10 p-3 text-sm">
+                                        <p className="whitespace-pre-wrap text-content-primary">{mem.text}</p>
+                                        <p className="mt-2 text-xs text-content-muted">{formatTime(mem.timestamp)}</p>
                                     </div>
                                 ))
                             )}
                         </div>
                     ) : (
                         <div className="space-y-4">
-                            <div className="bg-pink-50/50 rounded-xl p-4">
-                                <label className="flex items-center gap-2 text-sm font-medium mb-3">
-                                    <Heart size={16} className="text-pink-500" /> 好感度: {affinity}
+                            <div className="rounded-xl bg-surface-2/60 p-4">
+                                <label className="mb-3 flex items-center gap-2 text-sm font-medium">
+                                    <Heart size={16} className="text-accent-1" /> 好感度: {affinity}
                                 </label>
-                                <input type="range" min="0" max="100" value={affinity}
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="100"
+                                    value={affinity}
                                     onChange={(e) => setAffinity(Number(e.target.value))}
-                                    className="w-full accent-pink-500" />
-                                <div className="flex justify-between text-xs text-gray-400 mt-1">
+                                    className="w-full accent-accent-1"
+                                />
+                                <div className="mt-1 flex justify-between text-xs text-content-muted">
                                     <span>陌生</span><span>恋人</span>
                                 </div>
                             </div>
 
-                            <div className="bg-pink-50/50 rounded-xl p-4">
-                                <label className="flex items-center gap-2 text-sm font-medium mb-3">
-                                    <User size={16} className="text-pink-500" /> 昵称
+                            <div className="rounded-xl bg-surface-2/60 p-4">
+                                <label className="mb-3 flex items-center gap-2 text-sm font-medium">
+                                    <User size={16} className="text-accent-1" /> 昵称
                                 </label>
-                                <input type="text" value={nickname}
+                                <Input
+                                    type="text"
+                                    value={nickname}
                                     onChange={(e) => setNickname(e.target.value)}
-                                    className="input-cute py-2 text-sm" placeholder="例如：宝贝、亲爱的..." />
+                                    className="py-2 text-sm"
+                                    placeholder="例如：宝贝、亲爱的..."
+                                />
                             </div>
 
-                            <button onClick={handleSaveSettings} className="btn-cute w-full py-2.5">
+                            <Button onClick={handleSaveSettings} className="w-full py-2.5">
                                 保存设置
-                            </button>
+                            </Button>
                         </div>
                     )}
                 </div>
-
-                <div className="mt-4 pt-4 border-t border-pink-100">
-                    <button onClick={() => setShowClearConfirm(true)}
-                        className="w-full py-2 text-sm text-orange-500 hover:bg-orange-50 rounded-xl transition-colors flex items-center justify-center gap-2">
-                        <Trash2 size={16} /> 清除记忆（保留聊天记录）
-                    </button>
-                </div>
-            </div>
+            </Dialog>
 
             <ConfirmDialog
                 isOpen={showClearConfirm}

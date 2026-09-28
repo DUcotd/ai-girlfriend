@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import SakuraEffect from "@/components/effects/SakuraEffect";
 import ToastViewport from "@/components/ui/ToastViewport";
 import "./globals.css";
 import "../styles/tokens.css";
@@ -29,6 +30,7 @@ export default function RootLayout({
       </head>
       <body className="antialiased">
         {children}
+        <SakuraEffect />
         <ToastViewport />
       </body>
     </html>

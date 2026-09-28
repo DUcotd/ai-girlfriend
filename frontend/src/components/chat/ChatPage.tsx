@@ -17,7 +17,6 @@ import { useActivityPolling } from "@/hooks/useActivityPolling";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useBootstrap } from "@/hooks/useBootstrap";
 import { useProactivePolling } from "@/hooks/useProactivePolling";
-import { useSakuraEffect } from "@/hooks/useSakuraEffect";
 import { useSpeech } from "@/hooks/useSpeech";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { api } from "@/lib/api";
@@ -46,7 +45,6 @@ export default function ChatPage() {
   const currentActivity = useActivityPolling();
   const { listRef, stickToBottom } = useAutoScroll();
   useSpeech(); // 注册 speakBus 全局朗读者
-  useSakuraEffect();
   useProactivePolling({ onMessage: appendProactiveMessage });
 
   // 录音转写结果：自动发送或填入输入框
@@ -57,8 +55,7 @@ export default function ChatPage() {
       setInput(text);
     }
   }, []);
-  const { isRecording, recordingTime, mediaStream, toggleRecording } =
-    useVoiceRecorder(handleTranscribed);
+  const recorder = useVoiceRecorder(handleTranscribed);
 
   const handleFirstRunComplete = () => {
     completeFirstRun();
@@ -86,12 +83,12 @@ export default function ChatPage() {
     <main className="flex h-screen overflow-hidden relative">
       {/* 背景光晕 */}
       <div className="fixed inset-0 pointer-events-none z-0">
-        <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-gradient-to-bl from-pink-200/40 to-transparent rounded-full blur-3xl" />
-        <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-gradient-to-tr from-blue-200/40 to-transparent rounded-full blur-3xl" />
+        <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-gradient-to-bl from-accent-1/40 to-transparent rounded-full blur-3xl" />
+        <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-gradient-to-tr from-accent-2/40 to-transparent rounded-full blur-3xl" />
       </div>
 
       <button
-        className="md:hidden fixed top-4 left-4 z-50 p-2 bg-white/80 rounded-full shadow-lg"
+        className="md:hidden fixed top-4 left-4 z-50 p-2 bg-surface-1/80 text-content-primary rounded-full shadow-lg"
         onClick={() => setSidebarOpen(!isSidebarOpen)}
       >
         <Menu size={24} />
@@ -99,14 +96,14 @@ export default function ChatPage() {
 
       {/* 侧边栏：角色面板 */}
       <div
-        className={`fixed md:static inset-y-0 left-0 z-40 w-full md:w-[400px] bg-white/80 md:bg-transparent backdrop-blur-xl md:backdrop-blur-none transition-transform duration-300 transform ${
+        className={`fixed md:static inset-y-0 left-0 z-40 w-full md:w-[400px] bg-surface-1/80 md:bg-transparent backdrop-blur-xl md:backdrop-blur-none transition-transform duration-300 transform ${
           isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         } p-4 md:p-6 flex flex-col`}
       >
         <CharacterPanel currentActivity={currentActivity} />
         {isSidebarOpen && (
           <button
-            className="absolute top-4 right-4 p-2 text-gray-500 md:hidden"
+            className="absolute top-4 right-4 p-2 text-content-secondary md:hidden"
             onClick={() => setSidebarOpen(false)}
           >
             <X size={20} />
@@ -142,11 +139,7 @@ export default function ChatPage() {
             onInputChange={setInput}
             onSend={handleSend}
             onQuickSend={sendMessage}
-            isLoading={isLoading}
-            isRecording={isRecording}
-            recordingTime={recordingTime}
-            mediaStream={mediaStream}
-            onToggleRecording={toggleRecording}
+            recorder={recorder}
           />
         </div>
       </div>

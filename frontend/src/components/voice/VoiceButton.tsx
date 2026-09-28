@@ -87,7 +87,7 @@ export default function VoiceButton({ text, size = 16, engine = "openai" }: Voic
     return (
         <button
             onClick={handleClick}
-            className={`p-1.5 rounded-full transition-all hover:bg-pink-100 ${state === "playing" ? "text-pink-500 bg-pink-50" : "text-gray-400"
+            className={`rounded-full p-1.5 transition-all hover:bg-accent-1/15 ${state === "playing" ? "bg-accent-1/10 text-accent-1" : "text-content-muted"
                 }`}
             title={state === "playing" ? "停止播放" : "播放语音"}
         >

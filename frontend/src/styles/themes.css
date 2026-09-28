@@ -55,6 +55,18 @@
   --text-secondary: var(--hue) 22% 40%;
   --text-muted: var(--hue) 15% 55%;
   --border-subtle: var(--hue) 30% 88%;
+
+  /* 状态色：语义状态（成功/危险/信息/警告），与主题色相无关 */
+  --status-success: 150 60% 42%;
+  --status-danger: 355 72% 55%;
+  --status-info: 210 82% 55%;
+  --status-warning: 28 88% 52%;
+
+  /* 表面阴影：随模式调整深浅 */
+  --shadow-card: 0 4px 20px -5px hsl(var(--accent-1) / 0.15),
+    inset 0 0 0 1px hsl(0 0% 100% / 0.08);
+  --shadow-modal: 0 25px 50px -12px hsl(0 0% 0% / 0.15),
+    inset 0 0 0 1px hsl(0 0% 100% / 0.06);
 }
 
 /* 深色：表面亮度层级比背景高 6-7%，与原星空紫的观感一致 */
@@ -67,4 +79,15 @@
   --text-secondary: var(--hue) 18% 76%;
   --text-muted: var(--hue) 14% 62%;
   --border-subtle: var(--hue) 18% 28%;
+
+  /* 状态色：暗底上提高明度保证可辨 */
+  --status-success: 150 55% 62%;
+  --status-danger: 355 75% 66%;
+  --status-info: 210 88% 68%;
+  --status-warning: 32 92% 62%;
+
+  --shadow-card: 0 4px 20px -5px hsl(0 0% 0% / 0.45),
+    inset 0 0 0 1px hsl(0 0% 100% / 0.05);
+  --shadow-modal: 0 25px 50px -12px hsl(0 0% 0% / 0.5),
+    inset 0 0 0 1px hsl(0 0% 100% / 0.04);
 }

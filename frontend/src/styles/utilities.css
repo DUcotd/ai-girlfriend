@@ -1,8 +1,7 @@
 /* ======================================
-   组件类 · 全部吃语义 token，不写死颜色
-   （Phase 3 起逐步迁移为 ui/ 组件后此处对应删除）
-   注意：HSL 透明度统一用 hsl(var(--x) / α) 语法；
-   旧的 hsla(var(--x), α) 混合格式是无效声明，本文件已修正。
+   动画与装饰类 · 全部吃语义 token，不写死颜色
+   （按钮/输入框/卡片/弹窗/徽章等已组件化为 ui/ 原语，不再保留 CSS 类）
+   注意：HSL 透明度统一用 hsl(var(--x) / α) 语法。
    ====================================== */
 
 /* ---------- 樱花飘落 ---------- */
@@ -30,7 +29,7 @@
   position: fixed;
   width: 12px;
   height: 12px;
-  background: linear-gradient(135deg, #ffb7c5, #ffc0cb);
+  background: linear-gradient(135deg, hsl(var(--accent-1)), hsl(var(--accent-1) / 0.6));
   border-radius: 50% 0 50% 50%;
   opacity: 0.7;
   pointer-events: none;
@@ -57,123 +56,6 @@
   animation: messagePop 0.3s ease-out forwards;
 }
 
-/* ---------- 可爱按钮 ---------- */
-.btn-cute {
-  padding: 0.5rem 1rem;
-  border-radius: 9999px;
-  font-weight: 500;
-  transition: all var(--duration-normal);
-  background: linear-gradient(135deg, hsl(var(--accent-1)), hsl(var(--accent-2)));
-  color: #fff;
-  box-shadow: 0 4px 15px -3px hsl(var(--accent-1) / 0.4);
-}
-
-.btn-cute:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px -3px hsl(var(--accent-1) / 0.5);
-}
-
-.btn-cute:active {
-  transform: translateY(0) scale(0.98);
-}
-
-/* ---------- 卡片 ---------- */
-.card-cute {
-  background: hsl(var(--surface-1) / 0.85);
-  backdrop-filter: blur(20px);
-  border-radius: 24px;
-  border: 1px solid hsl(var(--accent-1) / 0.15);
-  box-shadow:
-    0 4px 20px -5px hsl(var(--accent-1) / 0.15),
-    0 0 0 1px hsl(0 0% 100% / 0.08) inset;
-}
-
-/* ---------- 输入框 ---------- */
-.input-cute {
-  width: 100%;
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius-md);
-  border: 2px solid;
-  transition: all var(--duration-normal);
-  background: hsl(var(--surface-1) / 0.9);
-  border-color: hsl(var(--accent-1) / 0.2);
-  color: hsl(var(--text-primary));
-}
-
-.input-cute::placeholder {
-  color: hsl(var(--text-muted));
-}
-
-.input-cute:focus {
-  outline: none;
-  border-color: hsl(var(--accent-1));
-  box-shadow: 0 0 0 4px hsl(var(--accent-1) / 0.15);
-}
-
-/* ---------- 聊天气泡 ---------- */
-.chat-bubble-user {
-  background: linear-gradient(135deg, hsl(var(--accent-1)), hsl(var(--accent-strong)));
-  color: #fff;
-  border-radius: 20px 20px 8px 20px;
-  box-shadow: 0 4px 15px -3px hsl(var(--accent-1) / 0.3);
-}
-
-.chat-bubble-ai {
-  background: hsl(var(--surface-1) / 0.95);
-  border: 2px solid hsl(var(--accent-1) / 0.2);
-  color: hsl(var(--text-primary));
-  border-radius: 20px 20px 20px 8px;
-  box-shadow: 0 4px 15px -3px hsl(0 0% 0% / 0.08);
-}
-
-/* ---------- 好感度心形 ---------- */
-.affinity-heart {
-  display: inline-block;
-  font-size: 1.25rem;
-  transition: all var(--duration-slow);
-}
-
-.affinity-heart.filled {
-  color: #ff6b8a;
-  filter: drop-shadow(0 0 4px rgb(255 107 138 / 0.5));
-}
-
-.affinity-heart.empty {
-  color: hsl(var(--text-muted) / 0.35);
-}
-
-/* ---------- 情绪徽章 ---------- */
-.emotion-badge {
-  padding: 0.25rem 0.75rem;
-  border-radius: 9999px;
-  font-size: 0.875rem;
-  font-weight: 500;
-  background: hsl(var(--accent-1) / 0.15);
-  color: hsl(var(--accent-strong));
-}
-
-[data-mode="dark"] .emotion-badge {
-  color: hsl(var(--accent-1));
-}
-
-/* ---------- 快捷回复 ---------- */
-.quick-reply-btn {
-  padding: 0.5rem 1rem;
-  border-radius: 9999px;
-  font-size: 0.875rem;
-  font-weight: 500;
-  transition: all var(--duration-normal);
-  background: hsl(var(--surface-1) / 0.9);
-  border: 2px solid hsl(var(--accent-1) / 0.2);
-  color: hsl(var(--text-primary));
-}
-
-.quick-reply-btn:hover {
-  background: hsl(var(--accent-1) / 0.15);
-  border-color: hsl(var(--accent-1));
-  transform: translateY(-2px);
-}
-
 /* ---------- 滚动条 ---------- */
 ::-webkit-scrollbar {
   width: 8px;
@@ -191,25 +73,6 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--accent-1) / 0.5);
-}
-
-/* ---------- 角色立绘 ---------- */
-.character-container {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.character-image {
-  max-height: 400px;
-  object-fit: contain;
-  filter: drop-shadow(0 10px 30px hsl(var(--accent-1) / 0.2));
-  transition: all 0.5s ease;
-}
-
-.character-image:hover {
-  transform: scale(1.02);
 }
 
 /* ---------- 星星闪烁 ---------- */
@@ -256,24 +119,4 @@
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-}
-
-/* ---------- 玻璃态弹窗 ----------
-   吃 surface/text token，暗色模式自然变暗；
-   旧版「starry 下强制回亮」补丁已删除。 */
-.modal-glass {
-  background: hsl(var(--surface-1) / 0.94);
-  backdrop-filter: blur(30px);
-  border: 1px solid hsl(var(--accent-1) / 0.2);
-  border-radius: 28px;
-  box-shadow:
-    0 25px 50px -12px hsl(0 0% 0% / 0.15),
-    0 0 0 1px hsl(0 0% 100% / 0.06) inset;
-  color: hsl(var(--text-primary));
-}
-
-[data-mode="dark"] .modal-glass {
-  box-shadow:
-    0 25px 50px -12px hsl(0 0% 0% / 0.5),
-    0 0 0 1px hsl(0 0% 100% / 0.04) inset;
 }

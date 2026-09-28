@@ -4,12 +4,21 @@ import { memo } from "react";
 import { motion } from "framer-motion";
 import { Brain } from "lucide-react";
 import VoiceButton from "../voice/VoiceButton";
+import { cn } from "@/lib/cn";
 import type { Message, TtsEngine } from "@/types";
 
 interface ChatMessageProps {
   message: Message;
   ttsEngine: TtsEngine;
 }
+
+/** 原 .chat-bubble-user：accent 渐变圆角气泡 */
+const userBubbleClasses =
+  "rounded-[20px] rounded-br-lg bg-gradient-to-br from-accent-1 to-accent-strong text-white shadow-[0_4px_15px_-3px_hsl(var(--accent-1)/0.3)]";
+
+/** 原 .chat-bubble-ai：surface 底 + accent 描边 */
+const aiBubbleClasses =
+  "rounded-[20px] rounded-bl-lg border-2 border-accent-1/20 bg-surface-1/95 text-content-primary shadow-[0_4px_15px_-3px_hsl(0_0%_0%/0.08)]";
 
 /**
  * 内心独白入口：默认只是一个小图标，hover / 聚焦才展开小爱的心声。
@@ -21,12 +30,12 @@ function ThoughtIcon({ text }: { text: string }) {
       <span
         tabIndex={0}
         aria-label="查看小爱的内心独白"
-        className="mt-1 flex h-6 w-6 cursor-help items-center justify-center rounded-full bg-white/90 text-pink-500 ring-1 ring-pink-200 shadow-sm transition hover:bg-pink-50 focus:outline-none focus:ring-2 focus:ring-pink-300"
+        className="mt-1 flex h-6 w-6 cursor-help items-center justify-center rounded-full bg-surface-1/90 text-accent-1 shadow-sm ring-1 ring-accent-1/30 transition hover:bg-accent-1/10 focus:outline-none focus:ring-2 focus:ring-accent-1/50"
       >
         <Brain size={14} />
       </span>
-      <div className="pointer-events-none absolute left-1/2 top-8 z-20 hidden w-60 -translate-x-1/2 rounded-xl bg-white p-3 text-xs leading-relaxed text-gray-700 shadow-lg ring-1 ring-black/5 group-hover:block group-focus-within:block">
-        <div className="mb-1 text-[11px] font-medium text-pink-500">小爱的心声</div>
+      <div className="pointer-events-none absolute left-1/2 top-8 z-20 hidden w-60 -translate-x-1/2 rounded-xl bg-surface-1 p-3 text-xs leading-relaxed text-content-secondary shadow-lg ring-1 ring-line-subtle group-hover:block group-focus-within:block">
+        <div className="mb-1 text-[11px] font-medium text-accent-1">小爱的心声</div>
         {text}
       </div>
     </div>
@@ -57,15 +66,16 @@ function ChatMessage({ message, ttsEngine }: ChatMessageProps) {
       className={`flex w-full items-start gap-2 ${alignment}`}
     >
       {message.role === "system" ? (
-        <div className="text-xs text-gray-400 bg-gray-100/50 px-3 py-1 rounded-full my-2">
+        <div className="my-2 rounded-full bg-surface-2/60 px-3 py-1 text-xs text-content-muted">
           {message.content}
         </div>
       ) : (
         <>
           <div
-            className={`max-w-[70%] p-4 text-sm md:text-base leading-relaxed break-words message-bubble relative ${
-              message.role === "user" ? "chat-bubble-user" : "chat-bubble-ai"
-            }`}
+            className={cn(
+              "message-bubble relative max-w-[70%] break-words p-4 text-sm leading-relaxed md:text-base",
+              message.role === "user" ? userBubbleClasses : aiBubbleClasses
+            )}
           >
             <div className="flex items-start gap-2">
               <span className="flex-1">{message.content}</span>

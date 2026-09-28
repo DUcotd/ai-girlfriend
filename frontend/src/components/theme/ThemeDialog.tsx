@@ -1,5 +1,6 @@
 "use client";
 
+import Dialog from "../ui/Dialog";
 import { cn } from "@/lib/cn";
 import { useThemeStore } from "@/stores/themeStore";
 import { MODES, THEMES } from "./themeConfig";
@@ -19,18 +20,7 @@ export default function ThemeDialog({ onClose }: ThemeDialogProps) {
   const setMode = useThemeStore((s) => s.setMode);
 
   return (
-    <div className="modal-glass p-6 w-80">
-      {/* 标题 */}
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="font-bold text-lg">🎨 主题切换</h3>
-        <button
-          onClick={onClose}
-          className="text-content-muted hover:text-content-secondary transition-colors"
-        >
-          ✕
-        </button>
-      </div>
-
+    <Dialog title="🎨 主题切换" onClose={onClose} widthClassName="w-80">
       {/* 明暗模式 */}
       <div className="grid grid-cols-2 gap-2 mb-4">
         {MODES.map((m) => (
@@ -87,6 +77,6 @@ export default function ThemeDialog({ onClose }: ThemeDialogProps) {
       <p className="text-xs text-content-muted text-center mt-4">
         主题设置会自动保存 ✨
       </p>
-    </div>
+    </Dialog>
   );
 }

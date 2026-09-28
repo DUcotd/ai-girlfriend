@@ -21,15 +21,15 @@ export default function Toast({ message, type, onClose, duration = 3000 }: Toast
     }, [duration, onClose]);
 
     const icons = {
-        success: <CheckCircle className="w-5 h-5 text-green-500" />,
-        error: <AlertCircle className="w-5 h-5 text-red-500" />,
-        info: <Info className="w-5 h-5 text-blue-500" />,
+        success: <CheckCircle className="h-5 w-5 text-status-success" />,
+        error: <AlertCircle className="h-5 w-5 text-status-danger" />,
+        info: <Info className="h-5 w-5 text-status-info" />,
     };
 
-    const colors = {
-        success: "bg-green-50 border-green-200",
-        error: "bg-red-50 border-red-200",
-        info: "bg-blue-50 border-blue-200",
+    const borders = {
+        success: "border-status-success/30",
+        error: "border-status-danger/30",
+        info: "border-status-info/30",
     };
 
     return (
@@ -37,15 +37,15 @@ export default function Toast({ message, type, onClose, duration = 3000 }: Toast
             initial={{ opacity: 0, y: -20, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -10, scale: 0.95 }}
-            className={`fixed top-4 right-4 z-[100] flex items-center gap-3 px-4 py-3 rounded-2xl border shadow-lg backdrop-blur-sm ${colors[type]}`}
+            className={`fixed right-4 top-4 z-[100] flex items-center gap-3 rounded-2xl border bg-surface-1/95 px-4 py-3 shadow-lg backdrop-blur-sm ${borders[type]}`}
         >
             {icons[type]}
-            <span className="text-sm text-gray-700">{message}</span>
+            <span className="text-sm text-content-primary">{message}</span>
             <button
                 onClick={onClose}
-                className="p-1 hover:bg-white/50 rounded-full transition-colors"
+                className="rounded-full p-1 transition-colors hover:bg-surface-2"
             >
-                <X size={16} className="text-gray-400" />
+                <X size={16} className="text-content-muted" />
             </button>
         </motion.div>
     );

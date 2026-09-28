@@ -26,19 +26,19 @@ export default function ConfirmDialog({
 }: ConfirmDialogProps) {
     const colors = {
         danger: {
-            icon: "text-red-500",
-            iconBg: "bg-red-100",
-            button: "bg-red-500 hover:bg-red-600 text-white",
+            icon: "text-status-danger",
+            iconBg: "bg-status-danger/15",
+            button: "bg-status-danger text-white hover:bg-status-danger/85",
         },
         warning: {
-            icon: "text-orange-500",
-            iconBg: "bg-orange-100",
-            button: "bg-orange-500 hover:bg-orange-600 text-white",
+            icon: "text-status-warning",
+            iconBg: "bg-status-warning/15",
+            button: "bg-status-warning text-white hover:bg-status-warning/85",
         },
         normal: {
-            icon: "text-pink-500",
-            iconBg: "bg-pink-100",
-            button: "btn-cute",
+            icon: "text-accent-1",
+            iconBg: "bg-accent-1/15",
+            button: "bg-gradient-to-br from-accent-1 to-accent-2 text-white shadow-accent",
         },
     };
 
@@ -54,7 +54,7 @@ export default function ConfirmDialog({
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                         onClick={onCancel}
-                        className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[200]"
+                        className="fixed inset-0 z-[200] bg-black/40 backdrop-blur-sm"
                     />
 
                     {/* Dialog */}
@@ -63,37 +63,37 @@ export default function ConfirmDialog({
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.9, y: 20 }}
                         transition={{ type: "spring", damping: 25, stiffness: 300 }}
-                        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[201] w-[90%] max-w-[360px]"
+                        className="fixed left-1/2 top-1/2 z-[201] w-[90%] max-w-[360px] -translate-x-1/2 -translate-y-1/2"
                     >
-                        <div className="modal-glass p-5 space-y-4">
+                        <div className="space-y-4 rounded-[28px] border border-accent-1/20 bg-surface-1/95 p-5 text-content-primary shadow-modal backdrop-blur-[30px]">
                             {/* Header */}
                             <div className="flex items-start gap-3">
-                                <div className={`p-2 rounded-xl ${style.iconBg}`}>
-                                    <AlertTriangle className={`w-5 h-5 ${style.icon}`} />
+                                <div className={`rounded-xl p-2 ${style.iconBg}`}>
+                                    <AlertTriangle className={`h-5 w-5 ${style.icon}`} />
                                 </div>
                                 <div className="flex-1">
-                                    <h3 className="font-bold text-gray-800">{title}</h3>
-                                    <p className="text-sm text-gray-500 mt-1 whitespace-pre-line">{message}</p>
+                                    <h3 className="font-bold text-content-primary">{title}</h3>
+                                    <p className="mt-1 whitespace-pre-line text-sm text-content-secondary">{message}</p>
                                 </div>
                                 <button
                                     onClick={onCancel}
-                                    className="p-1 hover:bg-gray-100 rounded-full transition-colors"
+                                    className="rounded-full p-1 transition-colors hover:bg-surface-2"
                                 >
-                                    <X size={18} className="text-gray-400" />
+                                    <X size={18} className="text-content-muted" />
                                 </button>
                             </div>
 
                             {/* Actions */}
-                            <div className="flex gap-2 justify-end pt-2">
+                            <div className="flex justify-end gap-2 pt-2">
                                 <button
                                     onClick={onCancel}
-                                    className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-xl transition-colors"
+                                    className="rounded-xl px-4 py-2 text-sm text-content-secondary transition-colors hover:bg-surface-2"
                                 >
                                     {cancelText}
                                 </button>
                                 <button
                                     onClick={onConfirm}
-                                    className={`px-4 py-2 text-sm rounded-xl transition-all ${style.button}`}
+                                    className={`rounded-xl px-4 py-2 text-sm transition-all ${style.button}`}
                                 >
                                     {confirmText}
                                 </button>

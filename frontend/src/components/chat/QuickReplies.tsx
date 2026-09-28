@@ -24,7 +24,7 @@ export default function QuickReplies({ onSend, disabled }: QuickRepliesProps) {
                     key={idx}
                     onClick={() => onSend(reply.text)}
                     disabled={disabled}
-                    className="quick-reply-btn hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="rounded-full border-2 border-accent-1/20 bg-surface-1/90 px-4 py-2 text-sm font-medium text-content-primary transition-all hover:-translate-y-0.5 hover:scale-105 hover:border-accent-1 hover:bg-accent-1/15 disabled:cursor-not-allowed disabled:opacity-50"
                     title={reply.text}
                 >
                     <span className="mr-1">{reply.emoji}</span>

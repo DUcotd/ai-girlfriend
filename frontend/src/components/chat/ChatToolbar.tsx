@@ -21,7 +21,7 @@ export default function ChatToolbar() {
   const clearChat = useChatStore((s) => s.clearChat);
 
   return (
-    <header className="h-16 flex items-center justify-between px-6 border-b border-white/20 backdrop-blur-sm">
+    <header className="flex h-16 items-center justify-between border-b border-line-subtle/50 px-6 backdrop-blur-sm">
       <div />
       <div className="flex gap-1">
         {ACTIONS.map(({ dialog, icon: Icon, label }) => (
@@ -31,7 +31,7 @@ export default function ChatToolbar() {
             aria-label={label}
             title={label}
             onClick={() => (dialog ? openDialog(dialog) : void clearChat())}
-            className="p-2 rounded-full text-gray-500 hover:text-pink-600 hover:bg-white/70 active:scale-95 transition-all"
+            className="rounded-full p-2 text-content-secondary transition-all hover:bg-surface-1/70 hover:text-accent-strong active:scale-95 dark:hover:text-accent-1"
           >
             <Icon size={20} />
           </button>

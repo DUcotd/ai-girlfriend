@@ -19,7 +19,7 @@ export default function WelcomeMessage({ onQuickStart }: WelcomeMessageProps) {
         <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center justify-center h-full px-6 py-12 text-center"
+            className="flex h-full flex-col items-center justify-center px-6 py-12 text-center"
         >
             {/* 欢迎图标 */}
             <motion.div
@@ -28,13 +28,13 @@ export default function WelcomeMessage({ onQuickStart }: WelcomeMessageProps) {
                 transition={{ type: "spring", delay: 0.2 }}
                 className="relative mb-6"
             >
-                <div className="w-24 h-24 rounded-full bg-gradient-to-br from-pink-100 to-purple-100 flex items-center justify-center shadow-lg">
-                    <Heart className="w-12 h-12 text-pink-400" />
+                <div className="flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br from-accent-1/20 to-accent-2/20 shadow-lg">
+                    <Heart className="h-12 w-12 text-accent-1" />
                 </div>
                 <motion.span
                     animate={{ rotate: [0, 15, -15, 0] }}
                     transition={{ repeat: Infinity, duration: 2 }}
-                    className="absolute -top-2 -right-2 text-2xl"
+                    className="absolute -right-2 -top-2 text-2xl"
                 >
                     ✨
                 </motion.span>
@@ -45,7 +45,7 @@ export default function WelcomeMessage({ onQuickStart }: WelcomeMessageProps) {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.3 }}
-                className="text-2xl font-bold gradient-text mb-2"
+                className="gradient-text mb-2 text-2xl font-bold"
             >
                 欢迎回来！
             </motion.h2>
@@ -54,7 +54,7 @@ export default function WelcomeMessage({ onQuickStart }: WelcomeMessageProps) {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.4 }}
-                className="text-gray-500 mb-8 max-w-md"
+                className="mb-8 max-w-md text-content-secondary"
             >
                 我是小爱，你的 AI 女友 💕<br />
                 随时可以和我聊天哦～
@@ -65,7 +65,7 @@ export default function WelcomeMessage({ onQuickStart }: WelcomeMessageProps) {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.5 }}
-                className="grid grid-cols-2 gap-3 w-full max-w-sm"
+                className="grid w-full max-w-sm grid-cols-2 gap-3"
             >
                 {quickStarters.map((item, idx) => (
                     <motion.button
@@ -73,10 +73,10 @@ export default function WelcomeMessage({ onQuickStart }: WelcomeMessageProps) {
                         whileHover={{ scale: 1.03 }}
                         whileTap={{ scale: 0.97 }}
                         onClick={() => onQuickStart(item.text)}
-                        className="flex flex-col items-center gap-2 p-4 rounded-2xl bg-white/80 border border-pink-100 shadow-sm hover:shadow-md hover:border-pink-200 transition-all"
+                        className="flex flex-col items-center gap-2 rounded-2xl border border-line-subtle bg-surface-1/80 p-4 shadow-sm transition-all hover:border-accent-1/40 hover:shadow-md"
                     >
                         <span className="text-2xl">{item.emoji}</span>
-                        <span className="text-sm text-gray-600">{item.label}</span>
+                        <span className="text-sm text-content-secondary">{item.label}</span>
                     </motion.button>
                 ))}
             </motion.div>
@@ -86,7 +86,7 @@ export default function WelcomeMessage({ onQuickStart }: WelcomeMessageProps) {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.7 }}
-                className="mt-8 flex items-center gap-2 text-xs text-gray-400"
+                className="mt-8 flex items-center gap-2 text-xs text-content-muted"
             >
                 <MessageCircle size={14} />
                 <span>点击上方按钮或直接输入消息开始聊天</span>

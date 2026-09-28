@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { cn } from "@/lib/cn";
 
 interface EmojiPickerProps {
     onSelect: (emoji: string) => void;
@@ -35,28 +36,30 @@ export default function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
     const [activeCategory, setActiveCategory] = useState(0);
 
     return (
-        <div className="absolute bottom-full left-0 mb-2 w-80 modal-glass p-4 shadow-2xl">
+        <div className="absolute bottom-full left-0 mb-2 w-80 rounded-[28px] border border-accent-1/20 bg-surface-1/95 p-4 text-content-primary shadow-modal backdrop-blur-[30px]">
             {/* 标题栏 */}
-            <div className="flex justify-between items-center mb-3">
-                <h3 className="font-bold text-sm">选择表情 ✨</h3>
+            <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-bold">选择表情 ✨</h3>
                 <button
                     onClick={onClose}
-                    className="text-gray-400 hover:text-gray-600 transition-colors"
+                    className="text-content-muted transition-colors hover:text-content-secondary"
                 >
                     ✕
                 </button>
             </div>
 
             {/* 分类标签 */}
-            <div className="flex gap-1 mb-3 pb-2 border-b border-gray-200 overflow-x-auto">
+            <div className="mb-3 flex gap-1 overflow-x-auto border-b border-line-subtle pb-2">
                 {emojiCategories.map((cat, idx) => (
                     <button
                         key={idx}
                         onClick={() => setActiveCategory(idx)}
-                        className={`px-3 py-1 rounded-full text-xs font-medium transition-all whitespace-nowrap ${activeCategory === idx
-                                ? "bg-pink-100 text-pink-600"
-                                : "text-gray-500 hover:bg-gray-100"
-                            }`}
+                        className={cn(
+                            "whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-all",
+                            activeCategory === idx
+                                ? "bg-accent-1/15 text-accent-strong dark:text-accent-1"
+                                : "text-content-secondary hover:bg-surface-2"
+                        )}
                     >
                         {cat.name}
                     </button>
@@ -64,7 +67,7 @@ export default function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
             </div>
 
             {/* 表情网格 */}
-            <div className="grid grid-cols-6 gap-2 max-h-40 overflow-y-auto">
+            <div className="grid max-h-40 grid-cols-6 gap-2 overflow-y-auto">
                 {emojiCategories[activeCategory].emojis.map((emoji, idx) => (
                     <button
                         key={idx}
@@ -72,7 +75,7 @@ export default function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
                             onSelect(emoji);
                             onClose();
                         }}
-                        className="p-2 rounded-lg hover:bg-pink-50 transition-colors text-center text-lg hover:scale-110 active:scale-95"
+                        className="rounded-lg p-2 text-center text-lg transition-all hover:scale-110 hover:bg-accent-1/10 active:scale-95"
                         title={emoji}
                     >
                         {emoji}

@@ -16,4 +16,8 @@
   --duration-normal: 200ms;
   --duration-slow: 300ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* accent 系阴影：引用 accent 变量，随主题自动变色、明暗模式通用 */
+  --shadow-accent: 0 4px 15px -3px hsl(var(--accent-1) / 0.4);
+  --shadow-accent-hover: 0 6px 20px -3px hsl(var(--accent-1) / 0.5);
 }

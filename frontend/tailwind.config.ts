@@ -1,9 +1,13 @@
 import type { Config } from "tailwindcss";
+import plugin from "tailwindcss/plugin";
 
 /**
  * 设计 token 的 Tailwind 注册表。
  * 颜色变量单一定义在 src/styles/themes.css（主题×模式正交），
  * 这里只做映射，组件里写 bg-surface-1 / text-content-primary / border-line-subtle 等。
+ *
+ * dark 变体映射到 [data-mode="dark"] 属性选择器（不用默认的媒体查询），
+ * 组件里写 dark:text-accent-1 即可按我们的模式开关生效。
  */
 const config: Config = {
     content: [
@@ -32,6 +36,18 @@ const config: Config = {
                 line: {
                     subtle: "hsl(var(--border-subtle) / <alpha-value>)",
                 },
+                status: {
+                    success: "hsl(var(--status-success) / <alpha-value>)",
+                    danger: "hsl(var(--status-danger) / <alpha-value>)",
+                    info: "hsl(var(--status-info) / <alpha-value>)",
+                    warning: "hsl(var(--status-warning) / <alpha-value>)",
+                },
+            },
+            boxShadow: {
+                card: "var(--shadow-card)",
+                modal: "var(--shadow-modal)",
+                accent: "var(--shadow-accent)",
+                "accent-hover": "var(--shadow-accent-hover)",
             },
             keyframes: {
                 "spin-slow": {
@@ -43,7 +59,11 @@ const config: Config = {
             },
         },
     },
-    plugins: [],
+    plugins: [
+        plugin(({ addVariant }) => {
+            addVariant("dark", '[data-mode="dark"] &');
+        }),
+    ],
 };
 
 export default config;

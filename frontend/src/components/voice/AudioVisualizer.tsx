@@ -28,6 +28,11 @@ export default function AudioVisualizer({ stream, isRecording }: AudioVisualizer
         const analyser = audioContext.createAnalyser();
         const source = audioContext.createMediaStreamSource(stream);
 
+        // 柱条渐变色跟随主题 token（canvas 吃不了 Tailwind 类，从 CSS 变量读）
+        const rootStyle = getComputedStyle(document.documentElement);
+        const barColorStart = `hsl(${rootStyle.getPropertyValue("--accent-1").trim()})`;
+        const barColorEnd = `hsl(${rootStyle.getPropertyValue("--accent-2").trim()})`;
+
         analyser.fftSize = 64;
         source.connect(analyser);
         analyserRef.current = analyser;
@@ -57,10 +62,10 @@ export default function AudioVisualizer({ stream, isRecording }: AudioVisualizer
             for (let i = 0; i < bufferLength; i++) {
                 const barHeight = (dataArray[i] / 255) * canvas.height * 0.9;
 
-                // Gradient from pink to purple
+                // 渐变跟随主题 accent 色
                 const gradient = ctx.createLinearGradient(0, canvas.height, 0, canvas.height - barHeight);
-                gradient.addColorStop(0, "#f472b6"); // pink-400
-                gradient.addColorStop(1, "#a855f7"); // purple-500
+                gradient.addColorStop(0, barColorStart);
+                gradient.addColorStop(1, barColorEnd);
 
                 ctx.fillStyle = gradient;
                 ctx.beginPath();

@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, Circle, Plus, Trash2, Calendar, ClipboardList } from "lucide-react";
+import Button from "../ui/Button";
+import Dialog from "../ui/Dialog";
+import Input from "../ui/Input";
+import ProgressBar from "../ui/ProgressBar";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import type { Task } from "@/types";
 
 interface TaskDialogProps {
@@ -69,64 +74,63 @@ export default function TaskDialog({ onClose }: TaskDialogProps) {
     const progress = tasks.length > 0 ? (completedCount / tasks.length) * 100 : 0;
 
     return (
-        <div className="modal-glass p-6 w-[400px] max-h-[80vh] flex flex-col">
-            {/* Header */}
-            <div className="flex justify-between items-center mb-6">
-                <h3 className="font-bold text-lg flex items-center gap-2 text-pink-600">
-                    <ClipboardList size={22} /> 小爱的任务清单
-                </h3>
-                <button
-                    onClick={onClose}
-                    className="text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                    ✕
-                </button>
-            </div>
-
+        <Dialog
+            title="小爱的任务清单"
+            icon={<ClipboardList size={22} />}
+            onClose={onClose}
+            widthClassName="w-[400px]"
+        >
             {/* Progress Bar */}
             {tasks.length > 0 && (
                 <div className="mb-6 space-y-2">
-                    <div className="flex justify-between text-xs font-semibold text-gray-500 uppercase">
+                    <div className="flex justify-between text-xs font-semibold uppercase text-content-secondary">
                         <span>今日进度</span>
                         <span>{completedCount}/{tasks.length}</span>
                     </div>
-                    <div className="h-2 w-full bg-pink-100 rounded-full overflow-hidden">
-                        <div
-                            className="h-full bg-gradient-to-r from-pink-400 to-rose-400 transition-all duration-500"
-                            style={{ width: `${progress}%` }}
-                        />
-                    </div>
+                    <ProgressBar value={progress} />
                 </div>
             )}
 
             {/* Task List */}
-            <div className="flex-1 overflow-y-auto pr-2 space-y-3 mb-6 scrollbar-cute">
+            <div className="mb-6 max-h-[40vh] space-y-3 overflow-y-auto pr-2">
                 {tasks.length === 0 ? (
-                    <div className="text-center py-10 text-gray-400 italic text-sm">
+                    <div className="py-10 text-center text-sm italic text-content-muted">
                         暂时没有任务哦，亲爱的快去添加吧~ ✨
                     </div>
                 ) : (
                     tasks.map(task => (
                         <div
                             key={task.id}
-                            className={`flex items-center gap-3 p-3 rounded-2xl border-2 transition-all ${task.completed
-                                    ? "bg-gray-50 border-transparent opacity-60"
-                                    : "bg-white border-pink-50 hover:border-pink-100 shadow-sm"
-                                }`}
+                            className={cn(
+                                "flex items-center gap-3 rounded-2xl border-2 p-3 transition-all",
+                                task.completed
+                                    ? "border-transparent bg-surface-2/50 opacity-60"
+                                    : "border-line-subtle bg-surface-1 shadow-sm hover:border-accent-1/30"
+                            )}
                         >
                             <button
                                 onClick={() => toggleTask(task.id, task.completed)}
-                                className={`transition-colors ${task.completed ? "text-green-500" : "text-pink-300 hover:text-pink-400"}`}
+                                className={cn(
+                                    "transition-colors",
+                                    task.completed
+                                        ? "text-status-success"
+                                        : "text-accent-1/50 hover:text-accent-1"
+                                )}
                             >
                                 {task.completed ? <CheckCircle2 size={24} /> : <Circle size={24} />}
                             </button>
 
-                            <div className="flex-1 min-w-0">
-                                <p className={`text-sm font-medium truncate ${task.completed ? "line-through text-gray-400" : "text-gray-700"}`}>
+                            <div className="min-w-0 flex-1">
+                                <p className={cn(
+                                    "truncate text-sm font-medium",
+                                    task.completed
+                                        ? "text-content-muted line-through"
+                                        : "text-content-primary"
+                                )}>
                                     {task.title}
                                 </p>
                                 {task.dueTime && (
-                                    <p className="text-[10px] text-gray-400 flex items-center gap-1 mt-0.5">
+                                    <p className="mt-0.5 flex items-center gap-1 text-[10px] text-content-muted">
                                         <Calendar size={10} /> {new Date(task.dueTime).toLocaleString()}
                                     </p>
                                 )}
@@ -134,7 +138,7 @@ export default function TaskDialog({ onClose }: TaskDialogProps) {
 
                             <button
                                 onClick={() => deleteTask(task.id)}
-                                className="text-gray-300 hover:text-red-400 transition-colors p-1"
+                                className="p-1 text-content-muted/50 transition-colors hover:text-status-danger"
                             >
                                 <Trash2 size={16} />
                             </button>
@@ -144,32 +148,32 @@ export default function TaskDialog({ onClose }: TaskDialogProps) {
             </div>
 
             {/* Add Task Form */}
-            <form onSubmit={handleAddTask} className="space-y-3 pt-4 border-t border-pink-100">
-                <input
+            <form onSubmit={handleAddTask} className="space-y-3 border-t border-line-subtle pt-4">
+                <Input
                     type="text"
                     value={newTitle}
                     onChange={(e) => setNewTitle(e.target.value)}
                     placeholder="新任务计划..."
-                    className="input-cute py-2 text-sm"
+                    className="py-2 text-sm"
                     disabled={isLoading}
                 />
                 <div className="flex gap-2">
-                    <input
+                    <Input
                         type="datetime-local"
                         value={newDue}
                         onChange={(e) => setNewDue(e.target.value)}
-                        className="input-cute py-2 text-xs flex-1"
+                        className="flex-1 py-2 text-xs"
                         disabled={isLoading}
                     />
-                    <button
+                    <Button
                         type="submit"
                         disabled={isLoading || !newTitle.trim()}
-                        className="btn-cute p-2 h-[42px] aspect-square flex items-center justify-center disabled:opacity-50"
+                        className="flex aspect-square h-[42px] items-center justify-center p-2"
                     >
                         <Plus size={20} />
-                    </button>
+                    </Button>
                 </div>
             </form>
-        </div>
+        </Dialog>
     );
 }
