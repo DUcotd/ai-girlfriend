@@ -108,13 +108,33 @@ export const api = {
     request<{
       config: ProactiveConfig;
       availableTypes: import("@/types").ProactiveTypeInfo[];
+      groups?: import("@/types").ProactiveGroupInfo[];
     }>("/config/proactive"),
 
+  /**
+   * 下发主动消息配置。
+   * ⚠️ 与 /config 不同，这个路由**就是 camelCase 契约**（后端直接解构同名 key），
+   * 不要顺手按 syncConfig 那套改成 snake_case。
+   */
   updateProactiveConfig: (payload: Partial<ProactiveConfig>) =>
     request<{ status: string; config: ProactiveConfig }>("/config/proactive", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  /** 主动消息引擎运行时状态（今日已发/上限、排队数、静音时段、下次可发时间…） */
+  getProactiveStatus: () =>
+    request<{
+      queue: { size: number; messages: unknown[] };
+      engine: import("@/types").ProactiveEngineStatus;
+    }>("/chat/proactive/status"),
+
+  /** 立刻让小爱生成一条主动消息（设置页的「现在发一条」），会真正调用一次 LLM */
+  triggerProactive: (reason: string = "random_chat") =>
+    request<{ status: string; reason: string; queueSize: number }>(
+      "/chat/proactive/trigger",
+      { method: "POST", body: JSON.stringify({ reason }) }
+    ),
 
   // ---------- 聊天 ----------
   sendChat: (message: string) =>

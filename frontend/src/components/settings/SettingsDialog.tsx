@@ -13,7 +13,7 @@ import { get, remove, set } from "@/lib/storage";
 import { DEFAULT_PROVIDER } from "@/lib/providers";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { cn } from "@/lib/cn";
-import type { ProactiveTypeInfo, TtsEngine } from "@/types";
+import type { ProactiveGroupInfo, ProactiveTypeInfo, TtsEngine } from "@/types";
 import SettingsAdvancedTab from "./tabs/SettingsAdvancedTab";
 import SettingsGeneralTab from "./tabs/SettingsGeneralTab";
 import SettingsMemoryTab from "./tabs/SettingsMemoryTab";
@@ -66,12 +66,14 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
     });
     const [enabledTypes, setEnabledTypes] = useState<string[]>(() => {
         const saved = get("enabledTypes");
-        return saved
-            ? JSON.parse(saved)
-            : ['morning_greeting', 'night_greeting', 'task_reminder',
-               'random_chat', 'miss_you', 'mood_check', 'memory_share'];
+        if (saved) return JSON.parse(saved);
+        // 与 backend/src/core/proactiveTypes.js 的 defaultEnabled 保持镜像；
+        // 挂载后会被服务端下发的列表覆盖，这里只是后端不可用时的兜底。
+        return ['morning_greeting', 'night_greeting', 'task_reminder',
+                'random_chat', 'miss_you', 'mood_check', 'memory_share', 'life_update'];
     });
     const [availableTypes, setAvailableTypes] = useState<ProactiveTypeInfo[]>([]);
+    const [availableGroups, setAvailableGroups] = useState<ProactiveGroupInfo[]>([]);
 
     const showToast = useToast();
 
@@ -90,6 +92,9 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 }
                 if (data.availableTypes) {
                     setAvailableTypes(data.availableTypes);
+                }
+                if (data.groups) {
+                    setAvailableGroups(data.groups);
                 }
             })
             .catch((e) => {
@@ -189,10 +194,13 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id)}
                             className={cn(
-                                "flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 transition-all",
+                                // border 常驻（未激活用 transparent），避免激活态增删边框改变高度，
+                                // 点击切换时下方按钮会整体位移（UI 抽动）
+                                "flex flex-col items-center justify-center gap-1.5 rounded-2xl border py-3",
+                                "transition-colors duration-fast ease-out-expo",
                                 activeTab === tab.id
-                                    ? "border border-line-subtle bg-surface-1 text-accent-strong shadow-sm dark:text-accent-1"
-                                    : "text-content-muted hover:bg-surface-1/50 hover:text-accent-1"
+                                    ? "border-line-subtle bg-surface-1 text-accent-strong shadow-sm dark:text-accent-1"
+                                    : "border-transparent text-content-muted hover:bg-surface-1/50 hover:text-accent-1"
                             )}
                         >
                             <tab.icon size={20} />
@@ -202,7 +210,10 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 </div>
 
                 {/* Content Area */}
-                <div className="h-[420px] flex-1 overflow-y-auto p-6">
+                {/* scrollbar-gutter: stable 让滚动条槽位常驻：各页签内容高度不同，
+                    否则滚动条来回出现/消失会让内容区宽度跳变 8px */}
+                {/* overflow-x-hidden 兜住页签切换动画的 x 位移，避免水平滚动条闪现 */}
+                <div className="h-[420px] flex-1 overflow-y-auto overflow-x-hidden p-6 [scrollbar-gutter:stable]">
                     <AnimatePresence mode="wait">
                         <motion.div
                             key={activeTab}
@@ -254,6 +265,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                                     enabledTypes={enabledTypes}
                                     onEnabledTypesChange={setEnabledTypes}
                                     availableTypes={availableTypes}
+                                    availableGroups={availableGroups}
                                 />
                             )}
 

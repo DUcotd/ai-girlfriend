@@ -60,11 +60,13 @@ export default function ApiConfigForm({
                             }
                         }}
                     />
-                    {activePresetNote && (
-                        <p className="pl-1 text-[10px] leading-relaxed text-status-warning">
-                            ⚠️ {activePresetNote}
-                        </p>
-                    )}
+                    {/* note 区常驻并预留两行高度：各预设的 note 有无/长短不一，
+                        若条件渲染，点击预设按钮时下方全部字段会整体上下跳（实测 40.5px）。
+                        min-h 取两行实际高度（10px × leading-relaxed ≈ 32.5px）向上取整；
+                        后续若有超过两行的 note，需同步调高这个值。 */}
+                    <p className="min-h-[33px] pl-1 text-[10px] leading-relaxed text-status-warning">
+                        {activePresetNote ? `⚠️ ${activePresetNote}` : ""}
+                    </p>
                 </div>
             )}
 

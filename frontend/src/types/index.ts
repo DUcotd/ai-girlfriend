@@ -72,7 +72,30 @@ export type ProactiveReason =
   | "random_chat"
   | "life_update";
 
+/**
+ * 单个主动消息类型。
+ * 真源在后端 `core/proactiveTypes.js`；前端不做本地目录镜像，
+ * 只在后端不可用时按 id 兜底展示。
+ */
 export interface ProactiveTypeInfo {
+  id: string;
+  /** 英文短名（历史契约字段） */
+  label: string;
+  /** 中文标题（设置页展示） */
+  labelZh?: string;
+  /** 英文说明（历史契约字段） */
+  description: string;
+  /** 中文「什么时候会发」说明 */
+  schedule?: string;
+  /** emoji 图标 */
+  icon?: string;
+  /** 归属分组 id，见 ProactiveGroupInfo.id */
+  group?: string;
+  defaultEnabled?: boolean;
+}
+
+/** 主动消息类型分组（设置页分组标题） */
+export interface ProactiveGroupInfo {
   id: string;
   label: string;
   description: string;
@@ -83,6 +106,30 @@ export interface ProactiveConfig {
   frequencyLevel: "low" | "medium" | "high";
   customDailyLimit: number | null;
   enabledTypes: string[];
+}
+
+/** GET /chat/proactive/status → engine 字段 */
+export interface ProactiveEngineStatus {
+  config: ProactiveConfig;
+  queueSize: number;
+  dailyMessagesSent: number;
+  dailyLimit: number;
+  /** 自动档（按好感度阶段 × 频率倍率）算出的上限，供 UI 对照 */
+  autoDailyLimit: number;
+  /** 关系阶段 id：stranger / acquaintance / friend / close / lover */
+  stage: string;
+  /** 阶段中文短标签：陌生 / 初识 / 朋友 / 挚友 / 恋人 */
+  stageLabel: string;
+  affinity: number;
+  affinityBonus: number;
+  quietHours: { active: boolean; from: string; to: string };
+  lastTriggerTime: number;
+  lastUserActiveTime: number;
+  /** 每种类型下次可发的时间戳（null = 现在就可以） */
+  nextEligible: Record<string, number | null>;
+  /** 定时问候类今天是否已发过 */
+  sentToday: Record<string, boolean>;
+  currentCooldowns: Record<string, number>;
 }
 
 export interface Task {
