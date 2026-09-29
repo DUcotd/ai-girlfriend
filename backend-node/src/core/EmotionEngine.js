@@ -8,9 +8,28 @@
  */
 
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
-import { RELATIONSHIP_STAGES } from './relationshipStages.js';
+import { RELATIONSHIP_STAGES, getStageForAffinity } from './relationshipStages.js';
+import {
+    anyIncludes, DEEP_INTIMACY, MILD_INTIMACY, PRAISE, CRITICISM, TEASING,
+    EXCITING, CALMING, SAD, QUESTION,
+} from './lexicon.js';
 
 const STATE_FILE = 'emotion_state.json';
+
+/**
+ * 情绪分析的非阶段阈值（不是阶段边界，故不放进 relationshipStages）。
+ * PRD P0-a 只要求移除 15/34/59/84 这组阶段边界；40/50 是「情绪增幅」参数，
+ * 保留原值以维持既有手感，收敛为具名常量便于调参。
+ */
+const EMOTION_RULES = {
+    EXCITING_PLEASURE_MIN: 40,   // 兴奋时额外加愉悦的门槛
+    SAD_DOMINANCE_MIN: 50,       // 悲伤时额外打击优势感的门槛
+    CALMING_PLEASURE_MIN: 50,    // 平静时额外舒缓愉悦的门槛
+    SHORT_QUESTION_MAX_LEN: 5,   // 短问句额外提升优势感的长度阈值
+};
+
+/** 亲密度词表 = 重度 ∪ 轻度（统一来自 lexicon） */
+const INTIMACY_WORDS = [...DEEP_INTIMACY, ...MILD_INTIMACY];
 
 // 各阶段的 PAD 情感基准（阈值本身在 relationshipStages.js 统一维护）
 const TIER_PAD = {
@@ -248,84 +267,81 @@ ${style.guide}
     // ==================== 话题 × 好感度情感矩阵 ====================
 
     /**
-     * 根据用户输入 + 当前好感度分析情绪变化
-     * 同一话题在不同关系阶段产生不同的情绪反应
+     * 根据用户输入 + 当前好感度分析情绪变化。
+     * 同一话题在不同**阶段**产生不同的情绪反应。
+     *
+     * 重构要点（PRD P0-a / P0-b）：词表统一来自 lexicon.js；分档由硬编码
+     * 15/34/59/84 改为 getStageForAffinity().stage 五档一一对应。
+     * ⚠️ 「命中亲密就不算夸奖 / 命中调戏就不算批评」的互斥门控是刻意设计，
+     * 必须保留——它保证一句话不会同时触发两类相反判定。
      */
     analyzeInput(userInput, affinity) {
         const delta = { P: 0, A: 0, D: 0 };
         const input = userInput.toLowerCase();
+        const stage = getStageForAffinity(affinity).stage;
 
-        const intimacyWords  = ['爱', '喜欢', '想你', '抱抱', '亲亲', '么么', '老婆', '老公', '宝贝', '亲爱的'];
-        const praiseWords    = ['好棒', '厉害', '可爱', '漂亮', '聪明', '温柔', '最喜欢', '真好', '谢谢', '感谢'];
-        const criticismWords = ['讨厌', '烦', '丑', '恶心', '走开', '别烦我', '无语'];
-        const teasingWords   = ['笨蛋', '傻瓜', '猪头', '小傻瓜', '大笨蛋', '呆子', '哼'];
-        const excitingWords  = ['惊喜', '太棒了', '哇', '好激动', '天啊', '啊啊', '居然', '没想到'];
-        const calmingWords   = ['晚安', '休息', '慢慢', '别急', '放松', '累了', '困了'];
-        const sadWords       = ['难过', '伤心', '哭', '不开心', '失望', '孤独', '寂寞', '想哭'];
-        const questionWords  = ['?', '？', '怎么', '为什么', '什么', '谁', '哪里', '什么时候'];
-
-        const hasTeasing    = teasingWords.some(w => input.includes(w));
-        const hasIntimacy   = intimacyWords.some(w => input.includes(w));
-        const hasPraise     = !hasIntimacy && praiseWords.some(w => input.includes(w));
-        const hasCriticism  = !hasTeasing && criticismWords.some(w => input.includes(w));
-        const hasExciting   = excitingWords.some(w => input.includes(w));
-        const hasCalming    = calmingWords.some(w => input.includes(w));
-        const hasSad        = sadWords.some(w => input.includes(w));
-        const hasQuestion   = questionWords.some(w => input.includes(w));
+        const hasTeasing    = anyIncludes(input, TEASING);
+        const hasIntimacy   = anyIncludes(input, INTIMACY_WORDS);
+        const hasPraise     = !hasIntimacy && anyIncludes(input, PRAISE);
+        const hasCriticism  = !hasTeasing && anyIncludes(input, CRITICISM);
+        const hasExciting   = anyIncludes(input, EXCITING);
+        const hasCalming    = anyIncludes(input, CALMING);
+        const hasSad        = anyIncludes(input, SAD);
+        const hasQuestion   = anyIncludes(input, QUESTION);
         const hasExclamation = input.includes('!') || input.includes('！');
 
-        // 亲密话题 × 好感度（分档阈值与 relationshipStages.js 的阶段边界一致）
+        // 亲密话题 × 阶段（原 15/34/59/84 五档 → 阶段名，映射一一对应）
         if (hasIntimacy) {
-            if (affinity <= 15)        { delta.P -= 0.30; delta.A += 0.20; delta.D -= 0.15; }
-            else if (affinity <= 34)   { delta.P -= 0.10; delta.A += 0.15; delta.D -= 0.08; }
-            else if (affinity <= 59)   { delta.P += 0.08; delta.A += 0.05; }
-            else if (affinity <= 84)   { delta.P += 0.20; delta.A += 0.10; delta.D -= 0.10; }
-            else                       { delta.P += 0.30; delta.A += 0.12; delta.D -= 0.15; }
+            if (stage === 'stranger')          { delta.P -= 0.30; delta.A += 0.20; delta.D -= 0.15; }
+            else if (stage === 'acquaintance') { delta.P -= 0.10; delta.A += 0.15; delta.D -= 0.08; }
+            else if (stage === 'friend')       { delta.P += 0.08; delta.A += 0.05; }
+            else if (stage === 'close')        { delta.P += 0.20; delta.A += 0.10; delta.D -= 0.10; }
+            else                               { delta.P += 0.30; delta.A += 0.12; delta.D -= 0.15; }
         }
 
-        // 批评 × 好感度
+        // 批评 × 阶段（stranger / acquaintance+friend / close+lover）
         if (hasCriticism) {
-            if (affinity <= 15)        { delta.P -= 0.10; delta.A += 0.05; }
-            else if (affinity <= 59)   { delta.P -= 0.20; delta.A += 0.08; }
-            else                       { delta.P -= 0.30; delta.A += 0.10; delta.D += 0.10; }
+            if (stage === 'stranger')                        { delta.P -= 0.10; delta.A += 0.05; }
+            else if (stage === 'close' || stage === 'lover') { delta.P -= 0.30; delta.A += 0.10; delta.D += 0.10; }
+            else                                             { delta.P -= 0.20; delta.A += 0.08; }
         }
 
-        // 夸奖 × 好感度
+        // 夸奖 × 阶段（同批评的档位切分）
         if (hasPraise) {
-            if (affinity <= 15)        { delta.P += 0.10; }
-            else if (affinity <= 59)   { delta.P += 0.15; delta.A += 0.05; }
-            else                       { delta.P += 0.25; delta.A += 0.08; delta.D -= 0.05; }
+            if (stage === 'stranger')                        { delta.P += 0.10; }
+            else if (stage === 'close' || stage === 'lover') { delta.P += 0.25; delta.A += 0.08; delta.D -= 0.05; }
+            else                                             { delta.P += 0.15; delta.A += 0.05; }
         }
 
-        // 调戏 × 好感度
+        // 调戏 × 阶段（stranger+acquaintance / friend / close+lover）
         if (hasTeasing) {
-            if (affinity <= 34)        { delta.P -= 0.15; delta.A += 0.15; delta.D += 0.10; }
-            else if (affinity <= 59)   { delta.P -= 0.03; delta.A += 0.05; }
-            else                       { delta.P += 0.10; delta.A += 0.08; delta.D += 0.15; }
+            if (stage === 'stranger' || stage === 'acquaintance') { delta.P -= 0.15; delta.A += 0.15; delta.D += 0.10; }
+            else if (stage === 'friend')                          { delta.P -= 0.03; delta.A += 0.05; }
+            else                                                  { delta.P += 0.10; delta.A += 0.08; delta.D += 0.15; }
         }
 
-        // 悲伤 × 好感度
+        // 悲伤 × 好感度（非阶段阈值，收敛为 EMOTION_RULES）
         if (hasSad) {
             delta.P -= 0.15; delta.A -= 0.10;
-            if (affinity > 50) { delta.P -= 0.05; delta.D -= 0.10; }
+            if (affinity > EMOTION_RULES.SAD_DOMINANCE_MIN) { delta.P -= 0.05; delta.D -= 0.10; }
         }
 
         // 兴奋
         if (hasExciting || hasExclamation) {
             delta.A += 0.15;
-            if (affinity > 40) delta.P += 0.05;
+            if (affinity > EMOTION_RULES.EXCITING_PLEASURE_MIN) delta.P += 0.05;
         }
 
         // 平静
         if (hasCalming) {
             delta.A -= 0.12;
-            if (affinity > 50) delta.P += 0.05;
+            if (affinity > EMOTION_RULES.CALMING_PLEASURE_MIN) delta.P += 0.05;
         }
 
-        // 疑问
+        // 疑问（原 affinity<=15 即 stranger 阶段）
         if (hasQuestion) {
             delta.A += 0.05;
-            if (affinity <= 15 && userInput.trim().length < 5) delta.D += 0.08;
+            if (stage === 'stranger' && userInput.trim().length < EMOTION_RULES.SHORT_QUESTION_MAX_LEN) delta.D += 0.08;
         }
 
         delta.P = Math.max(-0.5, Math.min(0.5, delta.P));

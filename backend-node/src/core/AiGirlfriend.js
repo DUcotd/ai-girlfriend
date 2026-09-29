@@ -13,7 +13,7 @@ import Memory from './Memory.js';
 import TaskManager from './TaskManager.js';
 import EmotionEngine from './EmotionEngine.js';
 import PersonalityDrift from './PersonalityDrift.js';
-import { validateAffinityChange } from './affinityRules.js';
+import AffinityEngine from './AffinityEngine.js';
 import { PERSONA_SYSTEM_PROMPT, buildSystemContext } from './prompts/systemPrompt.js';
 import { buildRelationshipContext } from './prompts/relationshipContext.js';
 import { buildProactivePrompt, buildProactiveDirective, buildProactivePersonaDirective } from './prompts/proactivePrompts.js';
@@ -40,11 +40,11 @@ class AiGirlfriend {
         this.embeddingBaseUrl = null;
         this.embeddingModelName = null;
 
-        this.affinity = 35;
+        // 好感度是自持状态的引擎（落 data/affinity_state.json），本类不再自己持有。
+        // 只通过下面的 get affinity() 暴露只读视图，写操作一律走 this.affinityEngine。
+        this.affinityEngine = new AffinityEngine();
         this.nickname = "你";
         this.history = [];
-        // 近 24h 好感度正增长事件的时间戳，用于「加分疲劳」——防止好感度通胀
-        this.recentGainEvents = [];
 
         this._loadState();
 
@@ -82,6 +82,15 @@ class AiGirlfriend {
         }
     }
 
+    /**
+     * 好感度只读视图（兼容 getter）。
+     * ProactiveEngine / 本类多处代码按 this.aiGirlfriend.affinity 读取，
+     * 改持 affinityEngine 后必须保留这个 getter，否则这些读取点会全线 undefined。
+     */
+    get affinity() {
+        return this.affinityEngine.affinity;
+    }
+
     // ==================== 持久化 ====================
 
     _loadState() {
@@ -103,27 +112,17 @@ class AiGirlfriend {
             console.log(`[State] Loaded ${data.history.length} messages from history`);
         }
 
-        if (typeof data.affinity === 'number') {
-            this.affinity = data.affinity;
-            console.log(`[State] Loaded affinity: ${this.affinity}`);
-        }
-
         if (data.nickname) {
             this.nickname = data.nickname;
             console.log(`[State] Loaded nickname: ${this.nickname}`);
         }
-
-        if (Array.isArray(data.recentGainEvents)) {
-            this.recentGainEvents = data.recentGainEvents.filter(t => typeof t === 'number');
-        }
+        // affinity 与 24h 增益事件已迁出到 data/affinity_state.json（AffinityEngine 自持）
     }
 
     _saveState() {
         const ok = writeJson(STATE_FILE, {
-            affinity: this.affinity,
             nickname: this.nickname || "亲爱的",
             history: this.history.filter(msg => msg.role !== 'system'),
-            recentGainEvents: this.recentGainEvents,
             config: {
                 baseUrl: this.baseUrl,
                 modelName: this.modelName,
@@ -210,6 +209,13 @@ class AiGirlfriend {
      * @returns {{done?: object, messagesToSend?: Array}} done 存在表示无需调用 LLM
      */
     async _prepare(userInput) {
+        // ========== Layer -1: 好感度时间衰减惰性结算（必须在任何 LLM 交互之前） ==========
+        // 顺序不可颠倒：先按久未互动补扣衰减，再打卡刷新互动时间。
+        // 反了会把待结算的空闲时间抹掉，衰减永远触发不了。
+        const now = Date.now();
+        this.affinityEngine.settleDecay(now);
+        this.affinityEngine.notifyUserActive(now);
+
         // ========== Layer 5: Ghosting 检测（优先于基准更新，避免 nudge 消解冷暴力） ==========
         if (this.emotionEngine.shouldGhost()) {
             console.log(`[Chat] Ghosting triggered: P=${this.emotionEngine.state.P.toFixed(2)}`);
@@ -286,23 +292,10 @@ class AiGirlfriend {
 
         this.emotionEngine.decay(0.03);
 
-        // 好感度变化：先清掉 24h 前的加分记录，再做校验（含加分疲劳）
-        const DAY_MS = 24 * 60 * 60 * 1000;
-        const now = Date.now();
-        this.recentGainEvents = this.recentGainEvents.filter(t => now - t < DAY_MS);
-
-        const stage = this.emotionEngine.relationshipStage || 'stranger';
-        const validatedChange = validateAffinityChange(
-            affinityChange, userInput, replyText, this.affinity, stage, this.recentGainEvents.length
-        );
-        this.affinity = Math.max(0, Math.min(100, this.affinity + validatedChange));
-
-        if (validatedChange > 0) {
-            this.recentGainEvents.push(now);
-            console.log(`[Affinity] +${validatedChange} → ${this.affinity} (24h gains: ${this.recentGainEvents.length})`);
-        } else if (validatedChange < 0) {
-            console.log(`[Affinity] ${validatedChange} → ${this.affinity}`);
-        }
+        // 好感度结算：裁窗 / 疲劳 / 越界 / 超低保护 / 惯性 / 日上限全部在引擎内部完成，
+        // 这里只把「用户消息 + LLM 原始变化 + AI 回复」交给引擎，拿回 affinity / trace / 阶段元数据。
+        const { affinity, change, trace, meta } =
+            this.affinityEngine.recordUserTurn(userInput, affinityChange, replyText);
 
         const sentiment = emotionDelta?.P || (affinityChange > 0 ? 0.5 : affinityChange < 0 ? -0.5 : 0);
         this.personalityDrift.recordInteraction(sentiment, affinityChange < -3);
@@ -326,7 +319,9 @@ class AiGirlfriend {
             reply: replyText,
             token_usage: usage || {},
             emotion: this.emotionEngine.getEmotionLabel(),
-            affinity: this.affinity,
+            affinity,
+            affinityTrace: trace,
+            affinityMeta: meta,
             emotionalState: this.emotionEngine.getFullState(),
             innerThought,
             modelReasoning,
@@ -677,8 +672,7 @@ class AiGirlfriend {
 
     clearHistory() {
         this.history = [{ role: "system", content: this.systemPrompt }];
-        this.affinity = 35;
-        this.recentGainEvents = [];
+        this.affinityEngine.reset();
         this._saveState();
         if (this.memory) {
             this.memory.clearMemory();
@@ -700,7 +694,10 @@ class AiGirlfriend {
             nickname: this.nickname || "亲爱的",
             historyCount: this.history.filter(m => m.role !== 'system').length,
             memoryCount: this.memory ? this.memory.memories.length : 0,
-            emotionalState: this.emotionEngine ? this.emotionEngine.getFullState() : null
+            emotionalState: this.emotionEngine ? this.emotionEngine.getFullState() : null,
+            // 平铺阶段元数据 + recentChangeReason / decaying / dailyCapReached，
+            // 前端 /state 与 /chat 响应共用同一份字段（前端零阈值）。
+            ...this.affinityEngine.getMeta()
         };
     }
 
@@ -752,7 +749,7 @@ class AiGirlfriend {
 
     updateState(updates) {
         if (typeof updates.affinity === 'number') {
-            this.affinity = Math.max(0, Math.min(100, updates.affinity));
+            this.affinityEngine.setAffinity(updates.affinity);
         }
         if (updates.nickname !== undefined) {
             this.nickname = updates.nickname;

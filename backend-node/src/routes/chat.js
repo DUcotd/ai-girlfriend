@@ -20,6 +20,30 @@ function thinkingField(text) {
     return text.length > max ? text.slice(0, max) + ' …(truncated)' : text;
 }
 
+/**
+ * 组装好感度相关字段（trace + 阶段元数据 + 衰减/日上限提示）。
+ *
+ * ⚠️ /chat 与 /chat/stream 的 done 是两处**独立手写**的 object 字面量，
+ * 必须共用这个 helper，否则会出现「流式有元数据、非流式没有」的不一致。
+ * result.affinityMeta 缺失时（ghosting / 兜底路径）回退到引擎实时快照。
+ */
+function affinityPayload(result) {
+    const meta = result.affinityMeta || aiGirlfriend.affinityEngine.getMeta();
+    return {
+        affinityTrace: result.affinityTrace || [],
+        stage: meta.stage,
+        stageLabel: meta.stageLabel,
+        stageShortLabel: meta.stageShortLabel,
+        nextStage: meta.nextStage,
+        nextStageLabel: meta.nextStageLabel,
+        pointsToNextStage: meta.pointsToNextStage,
+        stageProgress: meta.stageProgress,
+        recentChangeReason: meta.recentChangeReason,
+        decaying: meta.decaying,
+        dailyCapReached: meta.dailyCapReached,
+    };
+}
+
 router.post('/chat', asyncHandler(async (req, res) => {
     const { message } = req.body;
     if (!aiGirlfriend.apiKey) return res.status(400).json({ detail: "API Key not configured" });
@@ -34,6 +58,7 @@ router.post('/chat', asyncHandler(async (req, res) => {
         context_count: aiGirlfriend.history.length,
         emotion: result.emotion || "平静",
         affinity: result.affinity ?? 35,
+        ...affinityPayload(result),
         emotionalState: result.emotionalState || null,
         inner_thought: thinkingField(result.innerThought),
         model_reasoning: thinkingField(result.modelReasoning),
@@ -88,6 +113,7 @@ router.post('/chat/stream', (req, res) => {
                 reply: result.reply || "",
                 emotion: result.emotion || "平静",
                 affinity: result.affinity ?? 35,
+                ...affinityPayload(result),
                 emotionalState: result.emotionalState || null,
                 special_action: result.special_action || null,
                 context_count: aiGirlfriend.history.length,

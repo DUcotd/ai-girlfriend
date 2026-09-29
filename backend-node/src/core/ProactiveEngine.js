@@ -21,6 +21,7 @@
 import TaskManager from './TaskManager.js';
 import LifeSimulator from './LifeSimulator.js';
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+import { dayKey } from '../utils/dayKey.js';
 import { getStageForAffinity } from './relationshipStages.js';
 import {
     PROACTIVE_TYPES,
@@ -61,11 +62,8 @@ const QUIET_HOURS = { from: 23 * 60 + 30, to: 7 * 60 };
 /** 用户多久没出现算「想念」 */
 const MISS_YOU_IDLE_MS = 2 * HOUR;
 
-/** 本地日期 key（YYYY-MM-DD，按本机时区） */
-function dayKey(d = new Date()) {
-    const p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
+// 本地自然日 key 已抽到 utils/dayKey.js：好感度日上限与本引擎每日配额共用同一口径。
+// （此前它是本文件私有函数，AffinityEngine 复用时会造成 core → core 的依赖方向。）
 
 const minutesOfDay = (d) => d.getHours() * 60 + d.getMinutes();
 

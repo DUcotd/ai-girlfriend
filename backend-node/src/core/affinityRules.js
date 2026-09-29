@@ -1,122 +1,154 @@
 /**
  * 好感度变化校验规则（纯函数）。
  *
- * 2026-09-28 重构：好感度要像现实中的人一样——
- * 1. 正向变化上限收紧到 +3（现实中好感是缓慢积累的）；
- * 2. 越界惩罚按阶段分级：关系越浅，用户说亲密的话扣得越多；
- * 3. 加分疲劳：近 24h 内已经涨过好感的话，新的正增长衰减直至归零，
- *    防止"每句话都 +1"式的通胀。
- * 阶段阈值以 relationshipStages.js 为准。
+ * 2026-09-30 重构要点（PRD P0-a / P0-c / P0-d / P1-c）：
+ * 1. 所有**非阶段参数**（单次上下限、超低保护、日上限、越界分档、负向惯性）
+ *    集中到顶部具名对象 AFFINITY_RULES，每项带取值理由；
+ *    所有**阶段判断**一律走 getStageForAffinity(affinity).stage，不再硬编码 35/60/70/80/90。
+ * 2. 词表收敛到 ./lexicon.js，本文件不再自持词表。
+ * 3. 返回值升级为 { change, trace }，trace 记录每条规则的「修正前 → 修正后 + 人话原因」，
+ *    使每次涨跌可回答「为什么变、被哪些规则改过」（PRD P0-d）。
+ * 4. 规则顺序固定：单次上限 → 硬拒绝 → 软拒绝/傲娇 → 越界 → 疲劳 → 超低保护
+ *    → 负向惯性 → 日上限（最后生效，才能正确反映「今天还剩多少额度」）。
+ *
+ * 不变量：rawChange + Σ(trace[i].to - trace[i].from) === change。
  */
 
-// 硬拒绝信号（任何阶段都是真实拒绝）
-const HARD_REJECTION = ['不太合适', '刚认识', '陌生', '不熟', '保持距离', '后退',
-                        '请不要这样', '别这样', '这样不好', '我们还不熟', '太突然了'];
-
-// 软拒绝/傲娇信号（高好感度时可能是调情）
-const SOFT_REJECTION = ['讨厌', '哼', '走开', '不理你', '不跟你说了', '烦人',
-                        '坏人', '大坏蛋', '过分', '欺负', '坏蛋', '不理你了', '哼唧'];
-
-// 轻度亲密（有好感的信号，朋友阶段可容忍）
-const MILD_INTIMACY = ['喜欢你', '想你', '喜欢你呀', '想你了'];
-
-// 重度亲密（恋人层级的言行，未到阶段就是越界）
-const DEEP_INTIMACY = ['爱你', '亲亲', '抱抱', '么么', '老婆', '老公', '宝贝', '亲爱的'];
-
-const anyIncludes = (text, words) => words.some(s => text.includes(s));
+import { getStageForAffinity } from './relationshipStages.js';
+import { anyIncludes, HARD_REJECTION, SOFT_REJECTION, DEEP_INTIMACY, MILD_INTIMACY } from './lexicon.js';
+import { applyGainFatigue } from './affinityFatigue.js';
 
 /**
- * 校验并修正 LLM 给出的好感度变化。
- *
- * @param {number} rawChange - LLM 输出的原始变化值
- * @param {string} userInput - 用户消息
- * @param {string} aiReply - AI 回复
- * @param {number} affinity - 当前好感度
- * @param {string} stage - 当前关系阶段（stranger/acquaintance/friend/close/lover）
- * @param {number} recentPositiveCount - 近 24h 内已生效的正增长次数（加分疲劳）
- * @returns {number} 修正后的变化值
+ * 好感度规则的具名参数（非阶段边界，集中于此）。
+ * 阶段边界（15/34/59/84）只存在于 relationshipStages.js。
  */
-export function validateAffinityChange(rawChange, userInput, aiReply, affinity, stage = 'stranger', recentPositiveCount = 0) {
-    // 正向最多 +3（里程碑级），负向最多 -10（一次伤害可以很大）
-    let change = Math.max(-10, Math.min(3, rawChange));
+export const AFFINITY_RULES = {
+    // —— 单次变化边界 ——
+    MAX_POSITIVE_PER_TURN: 3,    // 正向单次最多 +3：现实里好感是缓慢积累的
+    MAX_NEGATIVE_PER_TURN: -10,  // 负向单次最多 -10：一次伤害可以很大
 
-    const hasHardRejection = anyIncludes(aiReply, HARD_REJECTION);
-    const hasSoftRejection = anyIncludes(aiReply, SOFT_REJECTION);
-    const hasMildIntimacy = anyIncludes(userInput, MILD_INTIMACY);
-    const hasDeepIntimacy = anyIncludes(userInput, DEEP_INTIMACY);
-    const hasIntimacy = hasMildIntimacy || hasDeepIntimacy;
+    // —— 超低好感保护（心灰意冷时，一两句好话挽回有限）——
+    ULTRA_LOW_AFFINITY: 10,
+    ULTRA_LOW_POSITIVE_MULTIPLIER: 0.3,
 
-    // 规则1: 硬拒绝 → 永远不允许正向变化；用户还强行亲密则追加惩罚
-    if (hasHardRejection && change > 0) {
-        console.log(`[Affinity] Hard rejection detected, change ${change} → 0`);
-        change = 0;
-    }
-    if (hasHardRejection && hasIntimacy) {
-        change = Math.min(change, -2);
-        console.log(`[Affinity] Hard rejection + forced intimacy → penalty, change=${change}`);
-    }
+    // —— 每日正增长上限（本地自然日 00:00 重置；必须最后生效）——
+    DAILY_POSITIVE_CAP: 8,
 
-    // 规则2: 软拒绝 → 根据阶段判断（挚友/恋人阶段多半是傲娇调情）
-    if (hasSoftRejection) {
-        if ((stage === 'lover' || stage === 'close') && hasIntimacy) {
-            if (change < 0) {
-                change = Math.max(change, 0);
-                console.log(`[Affinity] Soft rejection at ${stage} stage → tsundere play, change → ${change}`);
-            }
-        } else if (change > 0) {
-            console.log(`[Affinity] Soft rejection at ${stage} stage → blocking positive change`);
-            change = 0;
+    // —— 越界惩罚：按 stage 名挂参数（阈值由 relationshipStages 决定）——
+    // 关系越浅、越界越冒犯；friend 阶段「喜欢你」已属自然表达不再罚，
+    // 仅恋人式言行（老婆/索吻等）扣分；close/lover 阶段亲密是被欢迎的。
+    OVERREACH_PENALTY: {
+        stranger:     { mild: -2, deep: -3 },
+        acquaintance: { mild: -2, deep: -3 },
+        friend:       { mild:  0, deep: -2 },
+        close:        { mild:  0, deep:  0 },
+        lover:        { mild:  0, deep:  0 },
+    },
+
+    // —— 负向惯性：深爱难以骤降（取消旧的 70/80/90 游离数字，改按阶段挂档）——
+    NEGATIVE_INERTIA: {
+        stranger: 1.0, acquaintance: 1.0, friend: 1.0, close: 0.5, lover: 0.2,
+    },
+
+    // —— 硬拒绝后仍强行亲密的追加惩罚 ——
+    HARD_REJECTION_FORCED_INTIMACY_PENALTY: -2,
+};
+
+/** 一条 trace 修正记录：{ rule, from, to, reason } */
+
+/**
+ * 校验并修正 LLM 给出的好感度变化（纯函数：不读文件、不读时间、不读全局状态）。
+ *
+ * @param {number} rawChange LLM 输出的原始变化值
+ * @param {string} userInput 用户消息（判越界/亲密）
+ * @param {string} aiReply AI 回复（判硬/软拒绝）
+ * @param {number} affinity 当前好感度（0-100；阶段由它派生）
+ * @param {number} recentPositiveCount 近 24h 已生效正增长次数（调用方注入）
+ * @param {number} dailyGainedToday 今日已累计正增长（调用方注入）
+ * @returns {{ change: number, trace: Array<{ rule: string, from: number, to: number, reason: string }> }}
+ */
+export function validateAffinityChange(
+    rawChange, userInput, aiReply, affinity,
+    recentPositiveCount = 0, dailyGainedToday = 0
+) {
+    const R = AFFINITY_RULES;
+    const stage = getStageForAffinity(affinity).stage;
+    let cur = Number.isFinite(rawChange) ? rawChange : 0;
+    const trace = [];
+
+    /** 只在真的变了时记录，保证不变量 rawChange + Σ(to-from) === change */
+    const rule = (name, next, reason) => {
+        if (next !== cur) {
+            trace.push({ rule: name, from: cur, to: next, reason });
+            cur = next;
+        }
+    };
+
+    // 0 单次上限
+    rule('single_turn_clamp',
+        Math.max(R.MAX_NEGATIVE_PER_TURN, Math.min(R.MAX_POSITIVE_PER_TURN, cur)),
+        `单次变化收敛到 ${R.MAX_NEGATIVE_PER_TURN}~+${R.MAX_POSITIVE_PER_TURN}`);
+
+    const input = userInput || '';
+    const reply = aiReply || '';
+    const hasHard = anyIncludes(reply, HARD_REJECTION);
+    const hasSoft = anyIncludes(reply, SOFT_REJECTION);
+    const deep = anyIncludes(input, DEEP_INTIMACY);
+    const mild = !deep && anyIncludes(input, MILD_INTIMACY);
+    const intimacy = deep || mild;
+
+    // 1 硬拒绝 → 不允许正向；用户还强行亲密则追加惩罚
+    if (hasHard) {
+        rule('hard_rejection', Math.min(0, cur), '她明确拒绝了，好感度不会因此上涨');
+        if (intimacy) {
+            rule('forced_intimacy_penalty', Math.min(cur, R.HARD_REJECTION_FORCED_INTIMACY_PENALTY),
+                '她明确拒绝后还强行亲密，扣分');
         }
     }
 
-    // 规则3: 越界惩罚 —— 用户说了超越当前关系阶段的亲密话语。
-    // 像现实中的人一样：关系越浅，越界越让人想后退。
-    if (hasIntimacy && !hasHardRejection) {
-        if (affinity < 35) {
-            // 陌生/初识阶段：任何亲密言行都让人不适
-            const floor = hasDeepIntimacy ? -3 : -2;
-            if (change > floor) {
-                change = floor;
-                console.log(`[Affinity] Stage violation: intimacy at affinity=${affinity} (<35), change → ${change}`);
-            }
-        } else if (affinity < 60 && hasDeepIntimacy) {
-            // 朋友阶段：恋人式言行（叫老婆/索吻等）进度太快，想后退
-            if (change > -1) {
-                change = -1;
-                console.log(`[Affinity] Stage violation: deep intimacy at friend stage (${affinity}), change → -1`);
-            }
-        }
-    }
-
-    // 规则4: 加分疲劳 —— 近 24h 已经涨过好感，新的正增长衰减。
-    // 现实中的好感不会连续快速地涨：1-2 次减半，3 次及以上归零。
-    if (change > 0 && recentPositiveCount > 0) {
-        const before = change;
-        if (recentPositiveCount >= 3) {
-            change = 0;
+    // 2 软拒绝 / 傲娇
+    if (hasSoft) {
+        if ((stage === 'close' || stage === 'lover') && intimacy) {
+            rule('tsundere_play', Math.max(cur, 0), '她只是傲娇，不阻断也不扣分');
         } else {
-            change = Math.round(change * 0.5);
+            rule('soft_rejection', Math.min(0, cur), '她在软拒绝，好感度不会上涨');
         }
-        console.log(`[Affinity] Gain fatigue (recent +${recentPositiveCount} in 24h): ${before} → ${change}`);
     }
 
-    // 规则5: 超低好感度保护（心灰意冷时，一两句好话挽回不了什么）
-    if (affinity < 10 && change > 0) {
-        change = Math.round(change * 0.3);
-        console.log(`[Affinity] Ultra-low affinity protection, change dampened to ${change}`);
-    }
-
-    // 规则6: 高好感度惯性（深爱难以骤降，与规则5对称）
-    if (affinity >= 70 && change < 0) {
-        if (affinity >= 90) {
-            change = Math.round(change * 0.15);
-        } else if (affinity >= 80) {
-            change = Math.round(change * 0.3);
-        } else {
-            change = Math.round(change * 0.5);
+    // 3 越界惩罚（用户说了超越当前阶段的亲密话）
+    if (intimacy && !hasHard) {
+        const pen = R.OVERREACH_PENALTY[stage];
+        const floor = deep ? pen.deep : pen.mild;
+        if (floor < 0) {
+            rule('overreach_penalty', Math.min(cur, floor),
+                deep ? '恋人式言行，关系还没到那一步，想后退'
+                     : '这么快说亲密的话，她有点别扭');
         }
-        console.log(`[Affinity] High affinity inertia (${affinity}), change dampened to ${change}`);
     }
 
-    return change;
+    // 4 加分疲劳（复用纯模块；仅正变化）
+    if (cur > 0 && recentPositiveCount > 0) {
+        const { change: next } = applyGainFatigue(cur, recentPositiveCount);
+        rule('gain_fatigue', next, `24 小时内已经涨过 ${recentPositiveCount} 次，这次涨幅收窄`);
+    }
+
+    // 5 超低好感保护
+    if (affinity < R.ULTRA_LOW_AFFINITY && cur > 0) {
+        rule('ultra_low_protection', Math.round(cur * R.ULTRA_LOW_POSITIVE_MULTIPLIER),
+            '她心灰意冷，一两句好话挽回有限');
+    }
+
+    // 6 负向惯性
+    if (cur < 0) {
+        rule('negative_inertia', Math.round(cur * R.NEGATIVE_INERTIA[stage]),
+            `关系已到「${stage}」，负面变化被惯性削弱`);
+    }
+
+    // 7 日上限（最后生效，反映「今天还剩多少额度」）
+    if (cur > 0) {
+        const remaining = Math.max(0, R.DAILY_POSITIVE_CAP - dailyGainedToday);
+        rule('daily_cap', Math.min(cur, remaining), `今天的好感额度只剩 ${remaining} 点`);
+    }
+
+    return { change: cur, trace };
 }
