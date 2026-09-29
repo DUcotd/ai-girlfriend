@@ -1,0 +1,44 @@
+sequenceDiagram
+    participant FE as 前端 chatStore
+    participant RT as routes/chat.js
+    participant AG as AiGirlfriend
+    participant AE as AffinityEngine
+    participant LE as lexicon+affinityRules
+    participant PE as ProactiveEngine
+    participant LLM as LLM
+
+    FE->>RT: POST /chat/stream {message}
+    RT->>PE: notifyUserActive()
+    RT->>AG: chatStream(message, onDelta)
+
+    Note over AG,AE: _prepare() 开头，顺序不可颠倒
+    AG->>AE: settleDecay(now)
+    AE->>AE: idle = now - lastUserActiveTime
+    alt idle >= 72h 且未到阶段下沿
+        AE->>AE: steps = floor(idle/rate); after = max(stage.min, affinity-steps)
+        AE->>AE: 写账本(rule=time_decay) + lastUserActiveTime += steps*rate
+    end
+    AE-->>AG: { affinity, applied }
+    AG->>AE: notifyUserActive(now)
+    Note right of AE: 刷新互动时间，开始新的 72h 计时
+
+    AG->>AG: ghost 判定 / 情绪基准 / 记忆检索 / 组装 prompt
+    AG->>LLM: chat.completions.create(stream)
+    loop 每个 delta
+        LLM-->>AG: chunk
+        AG-->>FE: SSE {type:'delta', text}
+    end
+
+    AG->>AG: _finalize(parsed)
+    AG->>AE: recordUserTurn(userInput, rawChange, replyText, now)
+    AE->>AE: pruneGainEvents(gainEvents, now, 24h) → recentPositiveCount
+    AE->>AE: _rollDayIfNeeded(now) → dailyGainedToday
+    AE->>LE: validateAffinityChange(raw, input, reply, affinity, recentCount, dailyGained)
+    LE-->>AE: { change, trace }
+    AE->>AE: affinity = clamp(0,100, before+change)
+    AE->>AE: change>0 → recordGain + daily.gained += change
+    AE->>AE: 追加账本(≤200) + _saveState()
+    AE-->>AG: { affinity, change, trace, meta }
+    AG-->>RT: result{ affinity, affinityTrace, affinityMeta, emotion, … }
+    RT-->>FE: SSE {type:'done', affinity, affinityTrace, stage, stageLabel, pointsToNextStage, recentChangeReason, …}
+    FE->>FE: applyMeta() 更新 store → CharacterPanel 重渲染

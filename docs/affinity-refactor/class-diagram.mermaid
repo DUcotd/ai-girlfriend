@@ -1,0 +1,77 @@
+classDiagram
+    class relationshipStages {
+        <<module>>
+        +RELATIONSHIP_STAGES: Stage[]
+        +getStageForAffinity(affinity) Stage
+        +getNextStage(affinity) Stage
+        +buildStageMeta(affinity) StageMeta
+    }
+    class lexicon {
+        <<module>>
+        +HARD_REJECTION: string[]
+        +SOFT_REJECTION: string[]
+        +DEEP_INTIMACY: string[]
+        +MILD_INTIMACY: string[]
+        +PRAISE_CRITICISM_TEASING_etc: string[]
+        +matchCategory(text) string
+        +anyIncludes(text, words) bool
+    }
+    class affinityFatigue {
+        <<module>>
+        +pruneGainEvents(events, now, windowMs) number[]
+        +recordGain(events, now) number[]
+        +applyGainFatigue(change, count) GainResult
+    }
+    class affinityRules {
+        <<module>>
+        +AFFINITY_RULES: RulesConfig
+        +validateAffinityChange(raw, input, reply, affinity, recentCount, dailyGained) ValidationResult
+    }
+    class AffinityEngine {
+        -affinity: number
+        -gainEvents: number[]
+        -lastUserActiveTime: number
+        -daily: DailyCounter
+        -ledger: LedgerEntry[]
+        +get affinity() number
+        +notifyUserActive(now)
+        +settleDecay(now) DecayResult
+        +recordUserTurn(input, raw, reply, now) TurnResult
+        +getLedger() LedgerEntry[]
+        +getMeta(now) StageMeta
+        +setAffinity(v) number
+        +reset() void
+    }
+    class EmotionEngine {
+        +analyzeInput(input, affinity) PadDelta
+        +updateBaselineForAffinity(affinity)
+    }
+    class AiGirlfriend {
+        +affinityEngine: AffinityEngine
+        +get affinity() number
+        +_prepare(input)
+        +_finalize(parsed, input, usage)
+        +getState() AppState
+    }
+    class ProactiveEngine {
+        +dayKey(d) string
+    }
+    class chatRouter {
+        <<route>>
+    }
+    class stateRouter {
+        <<route>>
+    }
+
+    affinityRules --> relationshipStages : 用阶段名
+    affinityRules --> lexicon : 取词
+    affinityRules --> affinityFatigue : 疲劳
+    EmotionEngine --> lexicon : 取词
+    EmotionEngine --> relationshipStages : 取阶段
+    AffinityEngine --> affinityRules : validate
+    AffinityEngine --> relationshipStages : 阶段/下沿
+    AffinityEngine --> ProactiveEngine : 复用 dayKey()
+    AiGirlfriend *-- AffinityEngine : 持有
+    AiGirlfriend --> EmotionEngine : 情绪
+    chatRouter --> AiGirlfriend
+    stateRouter --> AiGirlfriend
