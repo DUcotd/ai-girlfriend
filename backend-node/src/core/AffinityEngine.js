@@ -187,25 +187,30 @@ class AffinityEngine {
 
     /**
      * 下发前端的阶段元数据 + 提示字段（字段名与前端类型逐字一致）。
+     *
+     * 「最近一次变化」的口径是**最近一次真正发生的变化**（finalChange ≠ 0），
+     * 不是「最近一个回合」——因为一个回合完全可能 0 变化（寒暄等），此时不应
+     * 把面板上的原因/数字清空。
+     *
      * @returns {{
      *   stage:string, stageLabel:string, stageShortLabel:string,
      *   nextStage:string|null, nextStageLabel:string|null,
      *   pointsToNextStage:number, stageProgress:number,
-     *   recentChangeReason:string|null, decaying:boolean, dailyCapReached:boolean
+     *   recentChange:number, recentChangeReason:string|null,
+     *   decaying:boolean, dailyCapReached:boolean
      * }}
      */
     getMeta(now = Date.now()) {
         const meta = buildStageMeta(this._affinity);
         const stage = getStageForAffinity(this._affinity);
-        const last = this.ledger[this.ledger.length - 1];
-        const recentChangeReason = last && Array.isArray(last.trace) && last.trace.length > 0
-            ? last.trace[last.trace.length - 1].reason
-            : null;
+        const lastChanged = this._lastChangedEntry();
+        const recentChange = lastChanged ? lastChanged.finalChange : 0;
+        const recentChangeReason = this._reasonFor(lastChanged);
         const idle = now - this.lastUserActiveTime;
         const decaying = idle >= DECAY.START_MS && this._affinity > stage.min;
         const dailyCapReached = this.daily.gained >= AFFINITY_RULES.DAILY_POSITIVE_CAP;
 
-        return { ...meta, recentChangeReason, decaying, dailyCapReached };
+        return { ...meta, recentChange, recentChangeReason, decaying, dailyCapReached };
     }
 
     /** 回默认档位并清空事件/账本/当日（clearHistory 用） */
@@ -236,6 +241,31 @@ class AffinityEngine {
         if (this.ledger.length > LEDGER_MAX) {
             this.ledger.splice(0, this.ledger.length - LEDGER_MAX);
         }
+    }
+
+    /** 账本（时间升序）里最近一条**最终变化非 0** 的记录；无则 null */
+    _lastChangedEntry() {
+        for (let i = this.ledger.length - 1; i >= 0; i--) {
+            if (this.ledger[i].finalChange !== 0) return this.ledger[i];
+        }
+        return null;
+    }
+
+    /**
+     * 「最近一次变化」的可读原因。
+     *
+     * ⚠️ trace 的语义是「**被哪些规则改过**」——正常回合（无越界/拒绝/疲劳/超低保护等）
+     * trace 为空是**对的**，不能往 trace 里塞合成条目。但空 trace 不代表「没有变化」：
+     * 此时要按变化符号合成兜底文案，否则最常见的涨分路径会被前端误显示为「最近还没有变化」。
+     */
+    _reasonFor(entry) {
+        if (!entry) return null;
+        if (Array.isArray(entry.trace) && entry.trace.length > 0) {
+            return entry.trace[entry.trace.length - 1].reason;
+        }
+        if (entry.finalChange > 0) return '相处得不错，她对你的好感上升了';
+        if (entry.finalChange < 0) return '这次相处让她有点失落';
+        return null;
     }
 
     _loadState() {

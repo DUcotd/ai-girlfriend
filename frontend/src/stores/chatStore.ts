@@ -51,6 +51,8 @@ interface ChatState {
   stageMeta: AffinityStageMeta | null;
   /** 最近一次好感度修正轨迹（取末条 to 的符号做涨跌着色） */
   affinityTrace: AffinityTraceEntry[];
+  /** 最近一次**真正发生**的好感度变化量（无规则介入时也非 0） */
+  recentChange: number;
   /** 最近一次变化的可读原因 */
   recentReason: string | null;
   /** 是否处于时间衰减中 */
@@ -81,6 +83,7 @@ export const useChatStore = create<ChatState>()((set, get) => {
     const meta = pickStageMeta(data);
     if (meta) set({ stageMeta: meta });
     if (Array.isArray(data.affinityTrace)) set({ affinityTrace: data.affinityTrace });
+    if (typeof data.recentChange === "number") set({ recentChange: data.recentChange });
     if (data.recentChangeReason !== undefined) set({ recentReason: data.recentChangeReason });
     if (typeof data.decaying === "boolean") set({ decaying: data.decaying });
     if (typeof data.dailyCapReached === "boolean") set({ dailyCapReached: data.dailyCapReached });
@@ -129,6 +132,7 @@ export const useChatStore = create<ChatState>()((set, get) => {
     emotionalState: null,
     stageMeta: null,
     affinityTrace: [],
+    recentChange: 0,
     recentReason: null,
     decaying: false,
     dailyCapReached: false,
@@ -183,6 +187,7 @@ export const useChatStore = create<ChatState>()((set, get) => {
         if (meta) {
           set({
             stageMeta: meta,
+            recentChange: state.recentChange ?? 0,
             recentReason: state.recentChangeReason ?? null,
             decaying: state.decaying ?? false,
             dailyCapReached: state.dailyCapReached ?? false,

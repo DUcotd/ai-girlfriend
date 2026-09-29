@@ -38,6 +38,7 @@ function affinityPayload(result) {
         nextStageLabel: meta.nextStageLabel,
         pointsToNextStage: meta.pointsToNextStage,
         stageProgress: meta.stageProgress,
+        recentChange: meta.recentChange,
         recentChangeReason: meta.recentChangeReason,
         decaying: meta.decaying,
         dailyCapReached: meta.dailyCapReached,

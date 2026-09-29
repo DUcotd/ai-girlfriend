@@ -216,6 +216,7 @@ export const api = {
             nextStageLabel: payload.nextStageLabel ?? null,
             pointsToNextStage: payload.pointsToNextStage ?? 0,
             stageProgress: payload.stageProgress ?? 0,
+            recentChange: payload.recentChange ?? 0,
             recentChangeReason: payload.recentChangeReason ?? null,
             decaying: payload.decaying ?? false,
             dailyCapReached: payload.dailyCapReached ?? false,

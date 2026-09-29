@@ -324,6 +324,34 @@ try {
         assert.strictEqual(typeof r.meta.stageLabel, 'string');
         assert.strictEqual(typeof r.meta.stageProgress, 'number');
     });
+
+    // ==================== 12. 变化原因（无规则介入的常见路径） ====================
+    // 回归：trace 只记录「被哪些规则改过」，正常涨分（无越界/拒绝/疲劳）trace 为空。
+    // 若用 trace 当唯一原因来源，会导致「涨了分却显示没有变化」——这是日常最常走的路径。
+    console.log('变化原因:');
+    check('无规则命中时 recentChange / 原因不回退为「没有变化」', () => {
+        const e = freshEngine();
+        e.setAffinity(35);
+        // 输入与回复都不含任何词表命中，rawChange=2 → 无规则介入
+        const r = e.recordUserTurn('今天天气不错', 2, '嗯嗯', NOW);
+        assert.strictEqual(r.change, 2);
+        assert.strictEqual(e.getLedger().at(-1).trace.length, 0, 'trace 语义不变：无规则介入即空');
+        const meta = e.getMeta(NOW);
+        assert.strictEqual(meta.recentChange, 2);
+        assert.ok(meta.recentChangeReason && meta.recentChangeReason.length > 0,
+            'recentChangeReason 应走兜底文案而非 null');
+    });
+    check('0 变化回合保留上一次真实变化值与原因', () => {
+        const e = freshEngine();
+        e.setAffinity(35);
+        e.recordUserTurn('今天天气不错', 2, '嗯嗯', NOW);
+        const firstReason = e.getMeta(NOW).recentChangeReason;
+        const r2 = e.recordUserTurn('嗯嗯', 0, '好', NOW + 1000);   // 本回合 0 变化
+        assert.strictEqual(r2.change, 0);
+        const meta2 = e.getMeta(NOW + 1000);
+        assert.strictEqual(meta2.recentChange, 2, '仍是上一次真实变化值');
+        assert.strictEqual(meta2.recentChangeReason, firstReason, '仍是上一次原因');
+    });
 } finally {
     // 清理测试落盘（含 settleDecay 存盘产生的文件），不污染真实数据
     try { fs.unlinkSync(testFilePath); } catch { /* 忽略 */ }

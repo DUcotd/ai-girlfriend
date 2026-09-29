@@ -30,7 +30,7 @@ export default function CharacterPanel({ currentActivity }: CharacterPanelProps)
     const affinity = useChatStore((s) => s.affinity);
     const emotionalState = useChatStore((s) => s.emotionalState);
     const stageMeta = useChatStore((s) => s.stageMeta);
-    const affinityTrace = useChatStore((s) => s.affinityTrace);
+    const recentChange = useChatStore((s) => s.recentChange);
     const recentReason = useChatStore((s) => s.recentReason);
     const decaying = useChatStore((s) => s.decaying);
     const dailyCapReached = useChatStore((s) => s.dailyCapReached);
@@ -72,7 +72,7 @@ export default function CharacterPanel({ currentActivity }: CharacterPanelProps)
 
             <AffinityReason
                 recentReason={recentReason}
-                trace={affinityTrace}
+                recentChange={recentChange}
                 decaying={decaying}
                 dailyCapReached={dailyCapReached}
             />

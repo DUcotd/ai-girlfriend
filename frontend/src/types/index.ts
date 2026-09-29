@@ -55,7 +55,9 @@ export interface AppState extends AffinityStageMeta {
   historyCount: number;
   memoryCount: number;
   emotionalState: EmotionalState | null;
-  /** 最近一次变化的可读原因（账本末条 trace 的 reason） */
+  /** 最近一次**真正发生**的好感度变化量（无规则介入时也非 0；从未变化为 0） */
+  recentChange: number;
+  /** 最近一次变化的可读原因（无规则介入时由后端按符号合成兜底文案） */
   recentChangeReason: string | null;
   /** 是否处于时间衰减中 */
   decaying: boolean;
@@ -76,8 +78,10 @@ export interface ChatResponse extends AffinityStageMeta {
   inner_thought?: string | null;
   /** 模型自己的推理链 CoT，仅用于排障，前端不使用（也不该展示） */
   model_reasoning?: string | null;
-  /** 好感度修正轨迹（可空数组） */
+  /** 好感度修正轨迹（可空数组；仅记录**规则介入**，正常回合为空） */
   affinityTrace?: AffinityTraceEntry[];
+  /** 最近一次**真正发生**的好感度变化量 */
+  recentChange: number;
   /** 最近一次变化的可读原因 */
   recentChangeReason: string | null;
   /** 是否处于时间衰减中 */
