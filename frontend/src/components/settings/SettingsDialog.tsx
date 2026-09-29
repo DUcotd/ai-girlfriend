@@ -156,7 +156,9 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
 
     const handleResetAll = async () => {
         try {
-            await api.clearHistory();
+            // 走 /reset（完全重置语义）：清对话 + 记忆 + 好感度。
+            // 注意不要用 clearHistory——那只是「新对话」，不会动记忆与好感度。
+            await api.resetAll();
             remove("affinity");
             showToast("小爱已完全重置！", "success");
             setTimeout(() => window.location.reload(), 1000);
@@ -281,7 +283,14 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
             <ConfirmDialog
                 isOpen={showResetConfirm}
                 title="完全重置小爱"
-                message="确定要完全重置小爱吗？\n这将清除所有聊天记录、记忆和好感度！\n此操作无法撤销！"
+                message={
+                    "确定要完全重置小爱吗？这将清空：\n" +
+                    "· 好感度（回到初始档位）\n" +
+                    "· 全部长期记忆\n" +
+                    "· 全部对话记录\n\n" +
+                    "此操作不可恢复！\n" +
+                    "（若只想清掉对话画面、保留好感度与记忆，请用顶部工具栏的「新对话」。）"
+                }
                 confirmText="确认重置"
                 cancelText="取消"
                 type="danger"

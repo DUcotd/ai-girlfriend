@@ -213,7 +213,7 @@ class AffinityEngine {
         return { ...meta, recentChange, recentChangeReason, decaying, dailyCapReached };
     }
 
-    /** 回默认档位并清空事件/账本/当日（clearHistory 用） */
+    /** 回默认档位并清空事件/账本/当日（AiGirlfriend.resetAll()「完全重置」用；「新对话」不走这里） */
     reset() {
         this._affinity = DEFAULT_AFFINITY;
         this.gainEvents = [];

@@ -670,13 +670,34 @@ class AiGirlfriend {
         return this.history.filter(msg => msg.role === 'user' || msg.role === 'assistant');
     }
 
+    /**
+     * 只清对话历史 —— 这是「新对话」的语义。
+     *
+     * 为什么只清历史：用户点「新对话」的诉求只是「别让前面的对话碍眼」，
+     * 好感度与长期记忆必须保留，否则用户只是想清理画面就会丢掉整段关系。
+     * 历史上这里顺手调了 affinityEngine.reset() + memory.clearMemory()，
+     * 导致「开个新对话」被当成「格式化人格」——那正是要拆开的两种语义。
+     * 需要把关系一起抹掉的场景走 resetAll()。
+     */
     clearHistory() {
         this.history = [{ role: "system", content: this.systemPrompt }];
-        this.affinityEngine.reset();
         this._saveState();
+    }
+
+    /**
+     * 完全重置：清对话历史 + 好感度 + 长期记忆（设置页「完全重置」的语义）。
+     *
+     * 与 clearHistory() 的区别就在「要不要抹掉整段关系」。affinityEngine.reset()
+     * 与 memory.clearMemory() 各自会落盘，这里最后再补一次 _saveState() 把
+     * history 一并收尾，保证三份数据同批落盘。
+     */
+    resetAll() {
+        this.history = [{ role: "system", content: this.systemPrompt }];
+        this.affinityEngine.reset();
         if (this.memory) {
             this.memory.clearMemory();
         }
+        this._saveState();
     }
 
     getSystemPrompt() {

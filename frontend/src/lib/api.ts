@@ -81,7 +81,11 @@ export const api = {
 
   getHistory: () => request<import("@/types").Message[]>("/history"),
 
+  /** 只清对话历史，保留好感度与记忆（「新对话」用） */
   clearHistory: () => request<{ status: string }>("/history", { method: "DELETE" }),
+
+  /** 完全重置：清空对话历史 + 记忆 + 好感度（设置页的「完全重置」用；「新对话」不要用它） */
+  resetAll: () => request<{ status: string }>("/reset", { method: "POST" }),
 
   getMemories: () => request<MemoryItem[]>("/memories"),
 

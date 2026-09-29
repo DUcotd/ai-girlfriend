@@ -20,7 +20,7 @@ export default function SettingsAdvancedTab({ onReset }: SettingsAdvancedTabProp
                     🔄 完全重置小爱 (不可逆)
                 </Button>
                 <p className="text-center text-[10px] text-status-danger/80">
-                    这将清空所有对话历史、向量化存储和角色好感度。
+                    这将清空好感度、全部长期记忆与全部对话记录，此操作不可恢复。
                 </p>
             </div>
 

@@ -62,7 +62,10 @@ interface ChatState {
   setAffinity: (value: number) => void;
   sendMessage: (text: string) => Promise<void>;
   fetchHistory: () => Promise<void>;
-  clearChat: () => Promise<void>;
+  /** 「新对话」：只清对话记录，保留好感度与记忆 */
+  newConversation: () => Promise<void>;
+  /** 「完全重置」：清对话 + 记忆 + 好感度，并复位本地 state（设置页用） */
+  resetEverything: () => Promise<void>;
   syncState: () => Promise<void>;
   /** 主动消息：先显示「思考中」，再按字数延迟出场（语义与原 page.tsx 编排一致） */
   appendProactiveMessage: (message: ProactiveMessage) => void;
@@ -166,15 +169,39 @@ export const useChatStore = create<ChatState>()((set, get) => {
       }
     },
 
-    clearChat: async () => {
+    /**
+     * 「新对话」：只清对话记录。
+     *
+     * 后端 DELETE /history 现在只清历史，好感度与记忆都不动，所以这里**绝不能**
+     * 再碰 affinity / stageMeta / recentReason / recentChange / affinityTrace，
+     * 也不该调 syncState()——那会多发一次请求，还会让人误以为刚发生了重置。
+     */
+    newConversation: async () => {
       try {
         await api.clearHistory();
         set({ messages: [] });
-        // 后端 DELETE /history 会把好感度重置为默认档与新阶段元数据，
-        // 这里必须重新同步，否则面板还停在被清空前的旧值（既有的面板不同步 bug）。
-        await get().syncState();
       } catch {
         useUiStore.getState().pushToast("清空失败", "error");
+      }
+    },
+
+    /**
+     * 「完全重置」：后端抹掉历史 + 记忆 + 好感度后，把本地 state 一并整体复位，
+     * 并同步落盘的 affinity，避免刷新前 UI 还停在旧值。供设置页使用。
+     */
+    resetEverything: async () => {
+      try {
+        await api.resetAll();
+        set({
+          messages: [],
+          affinity: 35,
+          stageMeta: null,
+          recentReason: null,
+          recentChange: 0,
+        });
+        setStoredAffinity(35);
+      } catch {
+        useUiStore.getState().pushToast("重置失败", "error");
       }
     },
 

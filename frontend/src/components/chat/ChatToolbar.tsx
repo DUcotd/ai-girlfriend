@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { Brain, ClipboardList, Download, Palette, MessageSquarePlus, Settings } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { DialogName } from "@/app/dialogs";
+import ConfirmDialog from "../ui/ConfirmDialog";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
 
@@ -18,25 +20,47 @@ const ACTIONS: { dialog?: DialogName; icon: LucideIcon; label: string }[] = [
 
 export default function ChatToolbar() {
   const openDialog = useUiStore((s) => s.openDialog);
-  const clearChat = useChatStore((s) => s.clearChat);
+  const newConversation = useChatStore((s) => s.newConversation);
+  // 「新对话」会清空对话记录，先弹确认——它只是清画面，不动记忆与好感度
+  const [showNewConfirm, setShowNewConfirm] = useState(false);
+
+  const handleNewConversation = () => {
+    setShowNewConfirm(false);
+    void newConversation();
+  };
 
   return (
-    <header className="flex h-16 items-center justify-between border-b border-line-subtle/50 px-6 backdrop-blur-sm">
-      <div />
-      <div className="flex gap-1">
-        {ACTIONS.map(({ dialog, icon: Icon, label }) => (
-          <button
-            key={label}
-            type="button"
-            aria-label={label}
-            title={label}
-            onClick={() => (dialog ? openDialog(dialog) : void clearChat())}
-            className="rounded-full p-2 text-content-secondary transition-all hover:bg-surface-1/70 hover:text-accent-strong active:scale-95 dark:hover:text-accent-1"
-          >
-            <Icon size={20} />
-          </button>
-        ))}
-      </div>
-    </header>
+    <>
+      <header className="flex h-16 items-center justify-between border-b border-line-subtle/50 px-6 backdrop-blur-sm">
+        <div />
+        <div className="flex gap-1">
+          {ACTIONS.map(({ dialog, icon: Icon, label }) => (
+            <button
+              key={label}
+              type="button"
+              aria-label={label}
+              title={label}
+              onClick={() => (dialog ? openDialog(dialog) : setShowNewConfirm(true))}
+              className="rounded-full p-2 text-content-secondary transition-all hover:bg-surface-1/70 hover:text-accent-strong active:scale-95 dark:hover:text-accent-1"
+            >
+              <Icon size={20} />
+            </button>
+          ))}
+        </div>
+      </header>
+
+      {/* 确认弹窗渲染为 header 的兄弟节点：父级若带 transform，会把子级 fixed
+          相对弹窗定位而非 viewport（本项目踩过），故与 header 平级而非嵌套其中。 */}
+      <ConfirmDialog
+        isOpen={showNewConfirm}
+        title="开始新对话？"
+        message={"只会清空当前的对话记录。\n小爱的记忆与好感度都会保留。"}
+        confirmText="开始新对话"
+        cancelText="取消"
+        type="normal"
+        onConfirm={handleNewConversation}
+        onCancel={() => setShowNewConfirm(false)}
+      />
+    </>
   );
 }
