@@ -28,17 +28,43 @@ export interface EmotionalState {
   shouldGhost: boolean;
 }
 
+/** 后端下发的阶段元数据（字段名与后端 buildStageMeta() 逐字一致；前端零阈值） */
+export interface AffinityStageMeta {
+  stage: string;
+  stageLabel: string;
+  stageShortLabel: string;
+  nextStage: string | null;
+  nextStageLabel: string | null;
+  pointsToNextStage: number;
+  /** 当前阶段内 0-1 进度 */
+  stageProgress: number;
+}
+
+/** 一条好感度修正记录（可追溯「为什么变、被哪些规则改过」） */
+export interface AffinityTraceEntry {
+  rule: string;
+  from: number;
+  to: number;
+  reason: string;
+}
+
 /** GET /state */
-export interface AppState {
+export interface AppState extends AffinityStageMeta {
   affinity: number;
   nickname: string;
   historyCount: number;
   memoryCount: number;
   emotionalState: EmotionalState | null;
+  /** 最近一次变化的可读原因（账本末条 trace 的 reason） */
+  recentChangeReason: string | null;
+  /** 是否处于时间衰减中 */
+  decaying: boolean;
+  /** 今日正向涨分是否已达上限 */
+  dailyCapReached: boolean;
 }
 
 /** POST /chat 响应 */
-export interface ChatResponse {
+export interface ChatResponse extends AffinityStageMeta {
   reply: string | null;
   token_usage?: Record<string, number>;
   context_count?: number;
@@ -50,6 +76,14 @@ export interface ChatResponse {
   inner_thought?: string | null;
   /** 模型自己的推理链 CoT，仅用于排障，前端不使用（也不该展示） */
   model_reasoning?: string | null;
+  /** 好感度修正轨迹（可空数组） */
+  affinityTrace?: AffinityTraceEntry[];
+  /** 最近一次变化的可读原因 */
+  recentChangeReason: string | null;
+  /** 是否处于时间衰减中 */
+  decaying: boolean;
+  /** 今日正向涨分是否已达上限 */
+  dailyCapReached: boolean;
 }
 
 /** GET /chat/proactive 单条主动消息 */

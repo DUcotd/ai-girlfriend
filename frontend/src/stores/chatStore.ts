@@ -2,7 +2,14 @@ import { create } from "zustand";
 import { streamSendMessage } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
 import { setStoredAffinity } from "@/lib/storage";
-import type { ChatResponse, EmotionalState, Message, ProactiveMessage } from "@/types";
+import type {
+  AffinityStageMeta,
+  AffinityTraceEntry,
+  ChatResponse,
+  EmotionalState,
+  Message,
+  ProactiveMessage,
+} from "@/types";
 import { useUiStore } from "./uiStore";
 
 /** 消息 id：稳定且唯一，供列表 key 与 memo 复用判断 */
@@ -13,6 +20,24 @@ const nextMessageId = () => `m${++messageSeq}`;
 const withIds = (list: Message[]): Message[] =>
   list.map((m) => (m.id ? m : { ...m, id: nextMessageId() }));
 
+/**
+ * 从响应/状态的平铺字段里挑出阶段元数据。
+ * stage 缺失（旧后端 / 首帧未同步）时返回 null，交给组件保持空占位——
+ * 组件里**禁止**用本地阈值兜底（那正是本次要消灭的第三份阈值镜像）。
+ */
+function pickStageMeta(data: Partial<AffinityStageMeta>): AffinityStageMeta | null {
+  if (!data.stage) return null;
+  return {
+    stage: data.stage,
+    stageLabel: data.stageLabel ?? "",
+    stageShortLabel: data.stageShortLabel ?? "",
+    nextStage: data.nextStage ?? null,
+    nextStageLabel: data.nextStageLabel ?? null,
+    pointsToNextStage: data.pointsToNextStage ?? 0,
+    stageProgress: data.stageProgress ?? 0,
+  };
+}
+
 /** 主动消息 typing 延时器：模块级，避免组件卸载后仍触发 set */
 let proactiveTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -22,6 +47,16 @@ interface ChatState {
   affinity: number;
   emotion: string;
   emotionalState: EmotionalState | null;
+  /** 后端下发的阶段元数据（零阈值展示）；首帧为 null，等到 syncState/首次对话后填充 */
+  stageMeta: AffinityStageMeta | null;
+  /** 最近一次好感度修正轨迹（取末条 to 的符号做涨跌着色） */
+  affinityTrace: AffinityTraceEntry[];
+  /** 最近一次变化的可读原因 */
+  recentReason: string | null;
+  /** 是否处于时间衰减中 */
+  decaying: boolean;
+  /** 今日正向涨分是否已达上限 */
+  dailyCapReached: boolean;
   setAffinity: (value: number) => void;
   sendMessage: (text: string) => Promise<void>;
   fetchHistory: () => Promise<void>;
@@ -41,6 +76,14 @@ export const useChatStore = create<ChatState>()((set, get) => {
     if (data.emotion) set({ emotion: data.emotion });
     if (typeof data.affinity === "number") get().setAffinity(data.affinity);
     if (data.emotionalState) set({ emotionalState: data.emotionalState });
+
+    // 阶段元数据 / 变化轨迹 / 衰减与日上限提示（服务端派生量，前端原样消费）
+    const meta = pickStageMeta(data);
+    if (meta) set({ stageMeta: meta });
+    if (Array.isArray(data.affinityTrace)) set({ affinityTrace: data.affinityTrace });
+    if (data.recentChangeReason !== undefined) set({ recentReason: data.recentChangeReason });
+    if (typeof data.decaying === "boolean") set({ decaying: data.decaying });
+    if (typeof data.dailyCapReached === "boolean") set({ dailyCapReached: data.dailyCapReached });
   };
 
   const pushMessage = (msg: Omit<Message, "id"> & { id?: string }) =>
@@ -84,6 +127,11 @@ export const useChatStore = create<ChatState>()((set, get) => {
     affinity: 35,
     emotion: "平静",
     emotionalState: null,
+    stageMeta: null,
+    affinityTrace: [],
+    recentReason: null,
+    decaying: false,
+    dailyCapReached: false,
 
     setAffinity: (value) => {
       set({ affinity: value });
@@ -118,6 +166,9 @@ export const useChatStore = create<ChatState>()((set, get) => {
       try {
         await api.clearHistory();
         set({ messages: [] });
+        // 后端 DELETE /history 会把好感度重置为默认档与新阶段元数据，
+        // 这里必须重新同步，否则面板还停在被清空前的旧值（既有的面板不同步 bug）。
+        await get().syncState();
       } catch {
         useUiStore.getState().pushToast("清空失败", "error");
       }
@@ -128,6 +179,15 @@ export const useChatStore = create<ChatState>()((set, get) => {
         const state = await api.getState();
         if (typeof state.affinity === "number") get().setAffinity(state.affinity);
         if (state.emotionalState) set({ emotionalState: state.emotionalState });
+        const meta = pickStageMeta(state);
+        if (meta) {
+          set({
+            stageMeta: meta,
+            recentReason: state.recentChangeReason ?? null,
+            decaying: state.decaying ?? false,
+            dailyCapReached: state.dailyCapReached ?? false,
+          });
+        }
       } catch {
         // 后端未启动时不阻断页面渲染
       }

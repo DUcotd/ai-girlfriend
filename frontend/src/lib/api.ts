@@ -2,6 +2,7 @@
  * 后端 API 客户端 —— 所有 fetch 调用集中在此，组件不再自己拼 URL。
  */
 import type {
+  AffinityTraceEntry,
   AppState,
   ChatResponse,
   CurrentActivity,
@@ -74,6 +75,9 @@ async function request<T>(
 export const api = {
   // ---------- 状态 / 历史 / 记忆 ----------
   getState: () => request<AppState>("/state"),
+
+  /** 好感度变更账本（时间升序，≤200 条）；路由挂根路径，无 /api 前缀 */
+  getAffinityLedger: () => request<AffinityTraceEntry[]>("/affinity/ledger"),
 
   getHistory: () => request<import("@/types").Message[]>("/history"),
 
@@ -202,6 +206,19 @@ export const api = {
             //（丢失的后果是气泡旁的「心声」图标永远不出现），漏映射过一次，别再删
             inner_thought: payload.inner_thought ?? null,
             model_reasoning: payload.model_reasoning ?? null,
+            // 好感度阶段元数据 + 变化轨迹：ChatResponse 现在继承 AffinityStageMeta，
+            // 这些字段必须逐一映射，否则 store 读不到、面板会一直是空占位。
+            affinityTrace: payload.affinityTrace ?? [],
+            stage: payload.stage,
+            stageLabel: payload.stageLabel,
+            stageShortLabel: payload.stageShortLabel,
+            nextStage: payload.nextStage ?? null,
+            nextStageLabel: payload.nextStageLabel ?? null,
+            pointsToNextStage: payload.pointsToNextStage ?? 0,
+            stageProgress: payload.stageProgress ?? 0,
+            recentChangeReason: payload.recentChangeReason ?? null,
+            decaying: payload.decaying ?? false,
+            dailyCapReached: payload.dailyCapReached ?? false,
           };
         } else if (payload.type === "error") {
           throw new Error(payload.detail || "stream failed");
