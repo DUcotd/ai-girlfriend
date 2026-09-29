@@ -4,20 +4,13 @@
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { aiGirlfriend, proactiveEngine, updateVoiceEngine } from '../services/container.js';
+import { PROACTIVE_TYPES, PROACTIVE_GROUPS, toPublicTypeInfo } from '../core/proactiveTypes.js';
 
 const router = Router();
 
-// 主动消息类型目录（供前端设置页渲染）
-const PROACTIVE_TYPES = [
-    { id: 'morning_greeting', label: 'Good morning', description: 'Sent at 8 AM' },
-    { id: 'night_greeting', label: 'Good night', description: 'Sent at 10 PM' },
-    { id: 'task_reminder', label: 'Task reminder', description: '15 min before deadline' },
-    { id: 'miss_you', label: 'Missing you', description: 'Sent when inactive for a while' },
-    { id: 'mood_check', label: 'Mood check', description: 'Check in during afternoon/evening' },
-    { id: 'memory_share', label: 'Memory share', description: 'Share a past memory' },
-    { id: 'random_chat', label: 'Random chat', description: 'Spontaneous chat' },
-    { id: 'life_update', label: 'Life update', description: 'What I was doing while you were away' }
-];
+// 主动消息类型目录：真源在 core/proactiveTypes.js（引擎与前端共用同一份定义），
+// 路由只做裁剪，不再自己维护一张表。
+const PROACTIVE_TYPE_INFOS = PROACTIVE_TYPES.map(toPublicTypeInfo);
 
 router.post('/config', (req, res) => {
     const { api_key, base_url, model_name, tts_api_key, embedding_api_key, embedding_base_url, embedding_model_name } = req.body;
@@ -47,7 +40,9 @@ router.get('/config/status', (req, res) => {
 router.get('/config/proactive', (req, res) => {
     res.json({
         config: proactiveEngine.getConfig(),
-        availableTypes: PROACTIVE_TYPES
+        availableTypes: PROACTIVE_TYPE_INFOS,
+        // 新增：设置页按分组渲染类型列表，分组定义同样来自唯一事实源
+        groups: PROACTIVE_GROUPS,
     });
 });
 

@@ -572,8 +572,14 @@ class AiGirlfriend {
         const scenarioPrompt = buildProactivePrompt(reason, data, this.affinity);
 
         const messages = [
-            // 同样剥掉 thought，只把 role/content 交给 LLM
-            ...this.history.slice(-10).map(m => ({ role: m.role, content: m.content })),
+            // 人设 system prompt 固定带上：此前用 history.slice(-10)，历史短时才会
+            // 恰好包含它、历史长了就被挤掉，导致主动消息的人设时有时无。
+            { role: "system", content: this.systemPrompt },
+            // 同样剥掉 thought 与 system，只把最近 10 条真实对话交给 LLM
+            ...this.history
+                .filter(m => m.role !== 'system')
+                .slice(-10)
+                .map(m => ({ role: m.role, content: m.content })),
             { role: "system", content: buildProactiveDirective(reason, this.affinity, contextInfo) },
             { role: "system", content: buildProactivePersonaDirective(scenarioPrompt, this.affinity) }
         ];
@@ -634,6 +640,33 @@ class AiGirlfriend {
         }
 
         return context;
+    }
+
+    /**
+     * 把小爱主动发出的消息写进对话历史。
+     *
+     * 为什么需要：
+     * 1. 上下文 —— 用户回复主动消息（"早呀"）时，模型要能看到自己刚才说了什么，
+     *    否则会答非所问（此前主动消息只存在于前端 UI，后端历史里没有）。
+     * 2. 一致性 —— 刷新页面会重新拉 /history，不写历史的话主动消息会凭空消失。
+     *
+     * 注意：只追加历史 + 落盘，不触发情绪/好感度变化——那两条链路的职责在 chat()。
+     */
+    recordProactiveMessage(text, reason = 'random_chat') {
+        if (!text) return;
+        this.history.push({ role: 'assistant', content: text });
+
+        const nonSystem = this.history.filter(m => m.role !== 'system');
+        if (nonSystem.length > MAX_HISTORY) {
+            this.history = [{ role: 'system', content: this.systemPrompt }, ...nonSystem.slice(-MAX_HISTORY)];
+        }
+
+        try {
+            this._saveState();
+        } catch (e) {
+            console.error(`[Proactive] saveState failed: ${e.message}`);
+        }
+        console.log(`[Proactive] Message recorded to history (${reason})`);
     }
 
     // ==================== 访问器与配置 ====================
