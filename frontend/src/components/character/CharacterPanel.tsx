@@ -52,16 +52,21 @@ export default function CharacterPanel({ currentActivity }: CharacterPanelProps)
         ? `${stageMeta.stageLabel} · ${emotionLabels[currentEmotion]}`
         : emotionLabels[currentEmotion];
 
+    /*
+     * overflow-y-auto + scrollbar-gutter:stable（硬规则③）：侧栏高度随视口变化，
+     * 内容超高时可纵向滚动兜底，且滚动条出现时内容不会横跳。
+     * 只开纵向：不设 overflow-x-hidden，避免裁掉 hover:scale-105 的立绘与光晕。
+     */
     return (
-        <Card className="flex h-full flex-col p-6">
-            <div className="mb-4 text-center">
+        <Card className="flex h-full flex-col overflow-y-auto p-6 [scrollbar-gutter:stable]">
+            <div className="mb-3 text-center">
                 <h2 className="gradient-text text-2xl font-bold">小爱</h2>
                 <p className="mt-1 text-sm text-content-secondary">{subtitle}</p>
             </div>
 
             <AffinityHearts affinity={affinity} />
 
-            <div className="mb-6">
+            <div className="mb-4">
                 <div className="mb-1 flex justify-between text-xs text-content-secondary">
                     <span>好感度</span>
                     <span>{affinity}/100</span>

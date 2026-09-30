@@ -2,6 +2,12 @@
  * localStorage 集中管理 —— 所有读写集中在此，避免 key 字符串散落在组件里。
  */
 
+import {
+  clampChatNumber,
+  normalizeReasoningEffort,
+  parseOptionalChatNumber,
+} from "./chatParams";
+import type { AdvancedChatConfig } from "./chatParams";
 import { DEFAULT_PROVIDER } from "./providers";
 
 /**
@@ -42,6 +48,11 @@ const KEYS = {
   enabledTypes: "enabledTypes",
   /** 通知权限是否已问过（只问一次，避免每次进页面都弹） */
   notificationAsked: "notificationAsked",
+  // 以下四项为「高级选项」（设置页 → 通用 → 高级选项），语义见 lib/chatParams.ts
+  maxPromptHistory: "maxPromptHistory",
+  temperature: "temperature",
+  maxTokens: "maxTokens",
+  reasoningEffort: "reasoningEffort",
 } as const;
 
 export const StorageKeys = KEYS;
@@ -51,7 +62,12 @@ export function isSetupComplete(): boolean {
   return Boolean(read(KEYS.apiKey) && read(KEYS.hasCompletedSetup));
 }
 
-/** 读取当前 LLM 配置（用于启动时同步给后端） */
+/**
+ * 读取当前 LLM 配置（用于启动时同步给后端）。
+ *
+ * 高级选项四项都在这里补默认值/钳制：localStorage 可能被手改或跨版本残留脏值，
+ * 读取即归一化，保证下发到后端的一定是合法值。
+ */
 export function getChatConfig() {
   return {
     apiKey: read(KEYS.apiKey) || "",
@@ -61,7 +77,27 @@ export function getChatConfig() {
     embApiKey: read(KEYS.embApiKey) || undefined,
     embBaseUrl: read(KEYS.embBaseUrl) || undefined,
     embModelName: read(KEYS.embModelName) || undefined,
+    // 高级选项四项：读取即归一化（补默认 + 钳制）
+    ...getAdvancedChatConfig(),
   };
+}
+
+/** 只读取「高级选项」四项（设置页初始化用，语义同 getChatConfig 的末四项） */
+export function getAdvancedChatConfig(): AdvancedChatConfig {
+  return {
+    maxPromptHistory: clampChatNumber(read(KEYS.maxPromptHistory), "maxPromptHistory"),
+    temperature: clampChatNumber(read(KEYS.temperature), "temperature"),
+    maxTokens: parseOptionalChatNumber(read(KEYS.maxTokens), "maxTokens"),
+    reasoningEffort: normalizeReasoningEffort(read(KEYS.reasoningEffort)),
+  };
+}
+
+/** 写回「高级选项」四项（空 maxTokens 与空 reasoningEffort 都写成空串 = 不传） */
+export function setAdvancedChatConfig(cfg: AdvancedChatConfig): void {
+  write(KEYS.maxPromptHistory, String(cfg.maxPromptHistory));
+  write(KEYS.temperature, String(cfg.temperature));
+  write(KEYS.maxTokens, cfg.maxTokens ? String(cfg.maxTokens) : "");
+  write(KEYS.reasoningEffort, cfg.reasoningEffort);
 }
 
 /** 主题应用与读取 */

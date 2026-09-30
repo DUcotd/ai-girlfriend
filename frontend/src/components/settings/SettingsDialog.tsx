@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Settings, MessageSquare, Mic, Brain, ShieldAlert, Bell } from "lucide-react";
+import { Settings, MessageSquare, Mic, Brain, Palette, ShieldAlert, Bell } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import Button from "../ui/Button";
@@ -9,14 +9,18 @@ import ConfirmDialog from "../ui/ConfirmDialog";
 import Dialog from "../ui/Dialog";
 import { useToast } from "../ui/Toast";
 import { api } from "@/lib/api";
-import { get, remove, set } from "@/lib/storage";
+import { get, getAdvancedChatConfig, remove, set, setAdvancedChatConfig } from "@/lib/storage";
 import { DEFAULT_PROVIDER } from "@/lib/providers";
+import { normalizeAdvancedConfig } from "@/lib/chatParams";
+import type { AdvancedChatConfig } from "@/lib/chatParams";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { usePersonality } from "@/hooks/usePersonality";
 import { cn } from "@/lib/cn";
 import type { ProactiveGroupInfo, ProactiveTypeInfo, TtsEngine } from "@/types";
 import SettingsAdvancedTab from "./tabs/SettingsAdvancedTab";
 import SettingsGeneralTab from "./tabs/SettingsGeneralTab";
 import SettingsMemoryTab from "./tabs/SettingsMemoryTab";
+import SettingsPersonalityTab from "./tabs/SettingsPersonalityTab";
 import SettingsProactiveTab from "./tabs/SettingsProactiveTab";
 import SettingsVoiceTab from "./tabs/SettingsVoiceTab";
 
@@ -24,19 +28,20 @@ interface SettingsDialogProps {
     onClose: () => void;
 }
 
-type SettingsTab = "general" | "voice" | "memory" | "proactive" | "advanced";
+type SettingsTab = "general" | "voice" | "memory" | "personality" | "proactive" | "advanced";
 
 const tabs: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
     { id: "general", label: "通用", icon: MessageSquare },
     { id: "voice", label: "语音", icon: Mic },
     { id: "memory", label: "记忆", icon: Brain },
+    { id: "personality", label: "性格", icon: Palette },
     { id: "proactive", label: "主动", icon: Bell },
     { id: "advanced", label: "系统", icon: ShieldAlert },
 ];
 
 /**
  * 设置弹窗外壳：持有全部配置状态与保存/重置逻辑，
- * 五个页签的展示拆分在 ./tabs/ 下。
+ * 六个页签的展示拆分在 ./tabs/ 下。
  */
 export default function SettingsDialog({ onClose }: SettingsDialogProps) {
     // 初始值直接从 localStorage 惰性读取（storage 层已做 SSR 保护）
@@ -48,9 +53,16 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
     const [embApiKey, setEmbApiKey] = useState(() => get("embApiKey") || "");
     const [embBaseUrl, setEmbBaseUrl] = useState(() => get("embBaseUrl") || "https://api.siliconflow.cn/v1");
     const [embModelName, setEmbModelName] = useState(() => get("embModelName") || "BAAI/bge-large-zh-v1.5");
+    // 高级选项四项（storage 读取时已钳制/补默认，这里拿到的就是合法值）
+    const [advanced, setAdvanced] = useState<AdvancedChatConfig>(getAdvancedChatConfig);
     const [activeTab, setActiveTab] = useState<SettingsTab>("general");
     const [isLoading, setIsLoading] = useState(false);
     const [showResetConfirm, setShowResetConfirm] = useState(false);
+    const [showPersonalityResetConfirm, setShowPersonalityResetConfirm] = useState(false);
+
+    // 性格状态与提交（即时提交，不走「保存全部配置」）；
+    // 挂在弹窗层级，性格页签只做展示，「恢复默认预设」确认框才能渲染为 Dialog 的兄弟节点。
+    const personality = usePersonality();
 
     // 主动消息配置
     const [proactiveEnabled, setProactiveEnabled] = useState(
@@ -105,9 +117,18 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         };
     }, []);
 
+    /** 高级选项增量变更（页签只上报改动的字段） */
+    const patchAdvanced = (patch: Partial<AdvancedChatConfig>) => {
+        setAdvanced((prev) => ({ ...prev, ...patch }));
+    };
+
     const handleSave = async () => {
         setIsLoading(true);
+        // 保存前再钳一次：输入框失焦已钳过，这里是防「改完直接点保存」的漏网值
+        const safeAdvanced = normalizeAdvancedConfig(advanced);
+
         // 保存到本地
+        setAdvancedChatConfig(safeAdvanced);
         set("apiKey", apiKey);
         set("baseUrl", baseUrl);
         set("modelName", modelName);
@@ -133,6 +154,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 embApiKey,
                 embBaseUrl,
                 embModelName,
+                ...safeAdvanced,
             });
 
             await api.updateProactiveConfig({
@@ -152,6 +174,13 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         } finally {
             setIsLoading(false);
         }
+    };
+
+    /** 性格「恢复默认预设」确认后的执行体（清账本 + 恢复 gentle，不动好感度/记忆/对话） */
+    const handlePersonalityReset = async () => {
+        const ok = await personality.reset();
+        setShowPersonalityResetConfirm(false);
+        if (ok) showToast("已恢复默认预设 🌸", "success");
     };
 
     const handleResetAll = async () => {
@@ -190,7 +219,9 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 }
             >
                 {/* Sidebar Tabs */}
-                <div className="flex w-32 flex-col gap-2 border-r border-line-subtle bg-surface-2/30 p-3">
+                {/* 6 个竖排按钮必须装进 h-[420px]：py-2 + gap-1.5（原 5 Tab 用的 py-3 + gap-2
+                    会溢出约 28px，最后一个按钮被裁切） */}
+                <div className="flex w-32 flex-col gap-1.5 border-r border-line-subtle bg-surface-2/30 p-3">
                     {tabs.map((tab) => (
                         <button
                             key={tab.id}
@@ -198,7 +229,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                             className={cn(
                                 // border 常驻（未激活用 transparent），避免激活态增删边框改变高度，
                                 // 点击切换时下方按钮会整体位移（UI 抽动）
-                                "flex flex-col items-center justify-center gap-1.5 rounded-2xl border py-3",
+                                "flex flex-col items-center justify-center gap-1.5 rounded-2xl border py-2",
                                 "transition-colors duration-fast ease-out-expo",
                                 activeTab === tab.id
                                     ? "border-line-subtle bg-surface-1 text-accent-strong shadow-sm dark:text-accent-1"
@@ -233,6 +264,8 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                                     onApiKeyChange={setApiKey}
                                     onBaseUrlChange={setBaseUrl}
                                     onModelNameChange={setModelName}
+                                    advanced={advanced}
+                                    onAdvancedChange={patchAdvanced}
                                 />
                             )}
 
@@ -253,6 +286,13 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                                     onEmbApiKeyChange={setEmbApiKey}
                                     onEmbBaseUrlChange={setEmbBaseUrl}
                                     onEmbModelNameChange={setEmbModelName}
+                                />
+                            )}
+
+                            {activeTab === "personality" && (
+                                <SettingsPersonalityTab
+                                    personality={personality}
+                                    onRequestReset={() => setShowPersonalityResetConfirm(true)}
                                 />
                             )}
 
@@ -296,6 +336,22 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 type="danger"
                 onConfirm={handleResetAll}
                 onCancel={() => setShowResetConfirm(false)}
+            />
+
+            {/* 性格「恢复默认预设」确认框：必须渲染为 Dialog 的兄弟节点——
+                Modal 的 transform 会让子级 fixed 相对弹窗定位，嵌套会错位 */}
+            <ConfirmDialog
+                isOpen={showPersonalityResetConfirm}
+                title="恢复默认预设"
+                message={
+                    "将把小爱的性格恢复为「温柔」默认档，并清空全部性格变化记录。\n" +
+                    "好感度、记忆与对话记录不受影响。"
+                }
+                confirmText="确认恢复"
+                cancelText="取消"
+                type="danger"
+                onConfirm={handlePersonalityReset}
+                onCancel={() => setShowPersonalityResetConfirm(false)}
             />
         </>
     );

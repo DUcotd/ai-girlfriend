@@ -11,7 +11,7 @@ export default function AffinityHearts({ affinity }: AffinityHeartsProps) {
     const hearts = Array.from({ length: 5 }, (_, i) => affinity >= (i + 1) * 20);
 
     return (
-        <div className="mb-4 flex justify-center gap-1">
+        <div className="mb-3 flex justify-center gap-1">
             {hearts.map((filled, idx) => (
                 <span
                     key={idx}

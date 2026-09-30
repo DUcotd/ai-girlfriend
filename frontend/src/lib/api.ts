@@ -7,10 +7,14 @@ import type {
   ChatResponse,
   CurrentActivity,
   MemoryItem,
+  PersonalityLedgerEntry,
+  PersonalityState,
+  PersonalityUpdatePayload,
   ProactiveConfig,
   ProactiveMessage,
   Task,
 } from "@/types";
+import type { ReasoningEffort } from "./chatParams";
 
 export const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -32,9 +36,28 @@ export interface UiChatConfig {
   embApiKey?: string;
   embBaseUrl?: string;
   embModelName?: string;
+  /** 发给 LLM 的最近历史条数（对应后端 config.chat.maxPromptHistory，默认 30） */
+  maxPromptHistory?: number;
+  /** 采样温度（0–2，默认 0.75） */
+  temperature?: number;
+  /** 最大输出 tokens；留空（undefined / 0）表示不传该参数 */
+  maxTokens?: number;
+  /** 思考强度；空串 = 不传（普通模型收到会 400，故默认空） */
+  reasoningEffort?: ReasoningEffort;
 }
 
-/** camelCase UI 配置 → 后端 /config 契约（snake_case）；空串归一为 undefined。 */
+/**
+ * camelCase UI 配置 → 后端 /config 契约（snake_case）；空串归一为 undefined。
+ *
+ * ⚠️ 高级参数同理：后端 POST /config 只解构 snake_case（max_prompt_history 等），
+ * camelCase 会被静默忽略。新增 UI 字段时这里必须同步加映射。
+ *
+ * ⚠️⚠️ 高级参数**绝不能**写 `|| undefined`：max_tokens 的「不限制」就是 0、
+ * reasoning_effort 的「不传」就是空串，两者都是 falsy，会被吞成 undefined，
+ * JSON.stringify 丢掉整个字段 → 后端 `_applyChatParams` 对 undefined 一律跳过 →
+ * 旧值（如 high / 1024）永远改不回来，用户只能重启后端（2026-10 BUG-1 回归）。
+ * 需要「清空」语义的字段一律用 `?? 清空值`。
+ */
 export function toBackendConfigPayload(cfg: UiChatConfig) {
   return {
     api_key: cfg.apiKey || undefined,
@@ -44,6 +67,14 @@ export function toBackendConfigPayload(cfg: UiChatConfig) {
     embedding_api_key: cfg.embApiKey || undefined,
     embedding_base_url: cfg.embBaseUrl || undefined,
     embedding_model_name: cfg.embModelName || undefined,
+    // 这两项没有「清空」语义：undefined（调用方没给，如首启向导只发 Key/URL/模型）
+    // 就整项省略，让后端保留当前值；给了则原值下发——temperature: 0 必须能发出去。
+    max_prompt_history: cfg.maxPromptHistory,
+    temperature: cfg.temperature,
+    // 这两项必须显式下发「清空值」：undefined 也要压成 0 / ""，
+    // 否则用户把思考强度改回「不传」、最大输出清空后，后端仍停在 high / 1024。
+    max_tokens: cfg.maxTokens ?? 0,
+    reasoning_effort: cfg.reasoningEffort ?? "",
   };
 }
 
@@ -144,6 +175,31 @@ export const api = {
       { method: "POST", body: JSON.stringify({ reason }) }
     ),
 
+  // ---------- 性格 ----------
+  /**
+   * 完整公开性格状态（GET /personality）。
+   * ⚠️ 与 /config/proactive 同理：这个路由族就是 camelCase 契约（挂根路径、无 /api 前缀），
+   * 不要走 syncConfig 的 snake_case 映射。
+   */
+  getPersonality: () => request<PersonalityState>("/personality"),
+
+  /** 更新性格：presetId → traits → flags 依次生效；未知维度 / presetId 返回 400 */
+  updatePersonality: (payload: PersonalityUpdatePayload) =>
+    request<PersonalityState>("/personality", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  /** 性格变化账本（时间升序，≤200 条，空时为 []） */
+  getPersonalityLedger: () => request<PersonalityLedgerEntry[]>("/personality/ledger"),
+
+  /** 仅重置性格为默认预设并清空账本；不影响好感度、记忆与对话记录 */
+  resetPersonality: () =>
+    request<{ status: string } & PersonalityState & { ledger: PersonalityLedgerEntry[] }>(
+      "/personality/reset",
+      { method: "POST" }
+    ),
+
   // ---------- 聊天 ----------
   sendChat: (message: string) =>
     request<ChatResponse>("/chat", {
@@ -224,6 +280,8 @@ export const api = {
             recentChangeReason: payload.recentChangeReason ?? null,
             decaying: payload.decaying ?? false,
             dailyCapReached: payload.dailyCapReached ?? false,
+            // 任务动作必须与非流式 ChatResponse 同步，否则 AI 建单无法进入 taskStore。
+            taskResult: payload.taskResult ?? null,
           };
         } else if (payload.type === "error") {
           throw new Error(payload.detail || "stream failed");

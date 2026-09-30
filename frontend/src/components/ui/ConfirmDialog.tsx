@@ -57,13 +57,15 @@ export default function ConfirmDialog({
                         className="fixed inset-0 z-[200] bg-black/40 backdrop-blur-sm"
                     />
 
-                    {/* Dialog */}
+                    {/* Dialog —— 居中平移必须交给 framer-motion（x/y 百分比）：
+                        Tailwind v3 的 -translate 靠 transform 属性，会被 framer-motion
+                        的内联 transform 覆盖，导致弹窗左上角对齐屏幕中心（踩过）。 */}
                     <motion.div
-                        initial={{ opacity: 0, scale: 0.9, y: 20 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                        initial={{ opacity: 0, scale: 0.9, x: "-50%", y: "-42%" }}
+                        animate={{ opacity: 1, scale: 1, x: "-50%", y: "-50%" }}
+                        exit={{ opacity: 0, scale: 0.9, x: "-50%", y: "-42%" }}
                         transition={{ type: "spring", damping: 25, stiffness: 300 }}
-                        className="fixed left-1/2 top-1/2 z-[201] w-[90%] max-w-[360px] -translate-x-1/2 -translate-y-1/2"
+                        className="fixed left-1/2 top-[40%] z-[201] w-[90%] max-w-[360px]"
                     >
                         <div className="space-y-4 rounded-[28px] border border-accent-1/20 bg-surface-1/95 p-5 text-content-primary shadow-modal backdrop-blur-[30px]">
                             {/* Header */}

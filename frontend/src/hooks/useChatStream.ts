@@ -1,5 +1,6 @@
 import { api } from "@/lib/api";
-import { useUiStore } from "@/stores/uiStore";
+import { useTaskStore } from "@/stores/taskStore";
+import { toast, useUiStore } from "@/stores/uiStore";
 import type { ChatResponse } from "@/types";
 
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -29,6 +30,25 @@ export interface StreamHandlers {
   applyMeta: (data: Partial<ChatResponse>) => void;
 }
 
+/** Applies a task action returned with the completed chat response. */
+function settleTaskResult(data: ChatResponse): void {
+  const result = data.taskResult;
+  if (result === null || result === undefined) return;
+
+  if (result.ok) {
+    useTaskStore.getState().applyTaskResult(result);
+    const title = result.task?.title?.trim() || "新任务";
+    const timeHint =
+      result.reason === "bad_due_time" ? "（时间没听清，先不设提醒）" : "";
+    toast(`小爱帮你记下了：${title} ✨${timeHint}`, "success");
+    return;
+  }
+
+  if (result.action !== "none") {
+    toast("小爱没太听清，你再说一次？", "info");
+  }
+}
+
 /**
  * 发送管线：SSE 流式优先，非超时错误回退 /chat；60s AbortController 超时。
  * 行为契约与原 useChat.sendMessage 逐行一致（占位气泡由调用方提前放好）；
@@ -41,8 +61,9 @@ export async function streamSendMessage(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  const settle = (data: ChatResponse) => {
+  const settle = (data: ChatResponse): void => {
     handlers.applyMeta(data);
+    settleTaskResult(data);
     if (data.special_action === "ghosting") {
       handlers.markGhosting();
       return;
@@ -73,6 +94,8 @@ export async function streamSendMessage(
       }
     }
 
-    handlers.finishWith(isTimeout ? "⏰ 响应时间过长，请重试..." : "⚠️ 连接中断...");
+    handlers.finishWith(
+      isTimeout ? "⏰ 响应时间过长，请重试..." : "⚠️ 连接中断..."
+    );
   }
 }

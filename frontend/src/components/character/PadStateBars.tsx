@@ -11,11 +11,11 @@ interface PadStateBarsProps {
 }
 
 /**
- * PAD 三维情绪面板（Pleasure/Arousal/Dominance）。默认折叠，点击标题行展开。
+ * PAD 三维情绪面板（Pleasure/Arousal/Dominance）。默认展开，点击标题行收起。
  * 轴向配色是数据可视化语义（正/负极），不随主题色相变化；轨道吃 token。
  */
 export default function PadStateBars({ emotionalState }: PadStateBarsProps) {
-    const [expanded, setExpanded] = useState(false);
+    const [expanded, setExpanded] = useState(true);
     const { P, A, D } = emotionalState.current;
 
     const axes = [
@@ -41,7 +41,7 @@ export default function PadStateBars({ emotionalState }: PadStateBarsProps) {
     ];
 
     return (
-        <div className="mt-6 rounded-xl border border-line-subtle bg-surface-2/60 p-3 text-xs">
+        <div className="mt-4 rounded-xl border border-line-subtle bg-surface-2/60 p-3 text-xs">
             <button
                 type="button"
                 onClick={() => setExpanded((v) => !v)}

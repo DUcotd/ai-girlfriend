@@ -18,7 +18,7 @@ export default function EmotionBadges({
     emotionalState,
 }: EmotionBadgesProps) {
     return (
-        <div className="mt-4 flex flex-wrap justify-center gap-2">
+        <div className="mt-2 flex flex-wrap justify-center gap-2">
             <Badge>
                 {emotionEmojis[currentEmotion]} {emotionLabels[currentEmotion]}
             </Badge>

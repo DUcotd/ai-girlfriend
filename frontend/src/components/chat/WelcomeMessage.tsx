@@ -65,7 +65,7 @@ export default function WelcomeMessage({ onQuickStart }: WelcomeMessageProps) {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.5 }}
-                className="grid w-full max-w-sm grid-cols-2 gap-3"
+                className="grid w-full max-w-md grid-cols-2 gap-4"
             >
                 {quickStarters.map((item, idx) => (
                     <motion.button
@@ -86,7 +86,7 @@ export default function WelcomeMessage({ onQuickStart }: WelcomeMessageProps) {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.7 }}
-                className="mt-8 flex items-center gap-2 text-xs text-content-muted"
+                className="mt-6 flex items-center gap-2 text-xs text-content-muted"
             >
                 <MessageCircle size={14} />
                 <span>点击上方按钮或直接输入消息开始聊天</span>

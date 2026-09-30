@@ -49,13 +49,13 @@ export default function CharacterAvatar({ emotion, onCycle }: CharacterAvatarPro
         <>
             {/* 光晕 */}
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <div className="h-64 w-64 rounded-full bg-gradient-to-br from-accent-1/30 to-accent-2/30 blur-2xl" />
+                <div className="h-56 w-56 rounded-full bg-gradient-to-br from-accent-1/30 to-accent-2/30 blur-2xl" />
             </div>
 
             <div className="relative z-10 text-center">
                 {/* 外层：hover 缩放 + 点击循环切换情绪；内层单独跑呼吸动画，避免 transform 互相覆盖 */}
                 <div
-                    className="relative h-60 w-60 cursor-pointer rounded-full transition-transform duration-fast ease-out-expo hover:scale-105"
+                    className="relative h-52 w-52 cursor-pointer rounded-full transition-transform duration-fast ease-out-expo hover:scale-105"
                     onClick={() => {
                         const nextIdx = (EMOTION_ORDER.indexOf(emotion) + 1) % EMOTION_ORDER.length;
                         onCycle(EMOTION_ORDER[nextIdx]);
