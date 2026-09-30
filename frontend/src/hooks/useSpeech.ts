@@ -5,6 +5,7 @@ import { speakBus } from "@/hooks/useChatStream";
 import { api, BACKEND_URL } from "@/lib/api";
 import { speakLocal } from "@/lib/speech";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useUiStore } from "@/stores/uiStore";
 
 /**
  * TTS 朗读：云端（后端 OpenAI TTS）或本地（浏览器 Web Speech API）。
@@ -31,8 +32,9 @@ export function useSpeech() {
       if (!text) return;
 
       if (engine === "local") {
-        speakLocal(text);
         setIsSpeaking(true);
+        // onend 复位 speaking 状态：此前本地分支没有任何复位路径
+        speakLocal(text, () => setIsSpeaking(false));
         return;
       }
 
@@ -44,8 +46,15 @@ export function useSpeech() {
         audio.onended = () => setIsSpeaking(false);
         audio.onerror = () => setIsSpeaking(false);
         await audio.play();
-      } catch {
+      } catch (e: unknown) {
         setIsSpeaking(false);
+        // 云端 TTS 失败此前完全静默：key 未配置/无效/无额度时用户点了没任何反应。
+        // 语音模式自动朗读与主动消息朗读也走这里，必须给一条可感知的提示
+        console.warn("[Speech] TTS failed:", e);
+        useUiStore.getState().pushToast(
+          e instanceof Error && e.message ? `朗读失败：${e.message}` : "朗读失败",
+          "error",
+        );
       }
     },
     [engine]

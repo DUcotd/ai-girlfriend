@@ -19,9 +19,10 @@ interface MemoryDialogProps {
 export default function MemoryDialog({ onClose }: MemoryDialogProps) {
     // 注意：本组件使用共享类型 MemoryItem（见 @/types），不再本地重复定义
     const [memories, setMemories] = useState<MemoryItem[]>([]);
-    const [affinity, setAffinity] = useState(35);
+    const [affinity, setAffinity] = useState<number | null>(null);
     const [nickname, setNickname] = useState("");
     const [isLoading, setIsLoading] = useState(true);
+    const [loadFailed, setLoadFailed] = useState(false);
     const [activeTab, setActiveTab] = useState<"memories" | "settings">("memories");
     const [showClearConfirm, setShowClearConfirm] = useState(false);
 
@@ -39,13 +40,17 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
     };
 
     const handleSaveSettings = async () => {
+        if (affinity === null) return;
         // 同步到会话状态（好感度心心/进度条立即刷新），再落后端
         useChatStore.getState().setAffinity(affinity);
-        onClose();
         try {
             await api.updateState({ affinity, nickname });
+            onClose();
         } catch (e) {
+            // 保存失败必须可见：此前先关弹窗再静默吞错，用户误以为已保存，
+            // 本地 UI 与后端持久化分叉直到刷新才暴露
             console.error("Save failed", e);
+            showToast("保存失败，请检查后端连接", "error");
         }
     };
 
@@ -57,19 +62,23 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
             .then(([list, state]) => {
                 if (cancelled) return;
                 setMemories(list);
-                setAffinity(state.affinity || 35);
+                // ?? 而非 ||：0 是合法好感度，|| 会把它显示成 35，保存时再把 0 覆写成 35
+                setAffinity(typeof state.affinity === "number" ? state.affinity : 35);
                 setNickname(state.nickname || "");
                 setIsLoading(false);
             })
             .catch((e) => {
                 if (cancelled) return;
                 console.error("Failed to fetch data", e);
+                setLoadFailed(true);
                 setIsLoading(false);
+                // 拉取失败必须可见：否则网络错误被渲染成「暂无记忆」，误导用户记忆已空
+                showToast("记忆加载失败，请检查后端连接", "error");
             });
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [showToast]);
 
     const formatTime = (timestamp: number) => {
         return new Date(timestamp * 1000).toLocaleString("zh-CN");
@@ -108,7 +117,9 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
                         </div>
                     ) : activeTab === "memories" ? (
                         <div className="space-y-3">
-                            {memories.length === 0 ? (
+                            {loadFailed ? (
+                                <div className="py-8 text-center text-status-danger">加载失败，请检查后端连接后重开弹窗</div>
+                            ) : memories.length === 0 ? (
                                 <div className="py-8 text-center text-content-secondary">暂无记忆</div>
                             ) : (
                                 memories.map((mem) => (
@@ -119,6 +130,8 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
                                 ))
                             )}
                         </div>
+                    ) : affinity === null ? (
+                        <div className="py-8 text-center text-status-danger">状态加载失败，请检查后端连接后重开弹窗</div>
                     ) : (
                         <div className="space-y-4">
                             <div className="rounded-xl bg-surface-2/60 p-4">

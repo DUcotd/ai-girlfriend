@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { streamSendMessage } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
-import { setStoredAffinity } from "@/lib/storage";
+import { getStoredAffinity, setStoredAffinity } from "@/lib/storage";
 import type {
   AffinityStageMeta,
   AffinityTraceEntry,
@@ -64,8 +64,6 @@ interface ChatState {
   fetchHistory: () => Promise<void>;
   /** 「新对话」：只清对话记录，保留好感度与记忆 */
   newConversation: () => Promise<void>;
-  /** 「完全重置」：清对话 + 记忆 + 好感度，并复位本地 state（设置页用） */
-  resetEverything: () => Promise<void>;
   syncState: () => Promise<void>;
   /** 主动消息：先显示「思考中」，再按字数延迟出场（语义与原 page.tsx 编排一致） */
   appendProactiveMessage: (message: ProactiveMessage) => void;
@@ -130,7 +128,9 @@ export const useChatStore = create<ChatState>()((set, get) => {
   return {
     messages: [],
     isLoading: false,
-    affinity: 35,
+    // 首帧先取 localStorage 的镜像，避免离线/后端未就绪时永远显示默认 35；
+    // 在线时 syncState 会立刻用后端真值校正
+    affinity: getStoredAffinity() ?? 35,
     emotion: "平静",
     emotionalState: null,
     stageMeta: null,
@@ -147,6 +147,10 @@ export const useChatStore = create<ChatState>()((set, get) => {
 
     sendMessage: async (text) => {
       if (!text.trim()) return;
+      // 重入保护：上一轮流式进行中时忽略新的发送请求。
+      // 语音「自动发送」此前没有这层闸，AI 回复期间完成录音转写会并发第二条流，
+      // appendDelta/finishWith 都无条件操作最后一条 assistant，两条回复内容串位混写
+      if (get().isLoading) return;
 
       pushMessage({ role: "user", content: text });
       set({ isLoading: true });
@@ -186,29 +190,16 @@ export const useChatStore = create<ChatState>()((set, get) => {
     },
 
     /**
-     * 「完全重置」：后端抹掉历史 + 记忆 + 好感度后，把本地 state 一并整体复位，
-     * 并同步落盘的 affinity，避免刷新前 UI 还停在旧值。供设置页使用。
+     * 「完全重置」的实现保留在设置页（api.resetAll + 整页刷新）；
+     * store 层不再维护第二套复位逻辑（此前 resetEverything 零调用且复位不全，已删除）。
      */
-    resetEverything: async () => {
-      try {
-        await api.resetAll();
-        set({
-          messages: [],
-          affinity: 35,
-          stageMeta: null,
-          recentReason: null,
-          recentChange: 0,
-        });
-        setStoredAffinity(35);
-      } catch {
-        useUiStore.getState().pushToast("重置失败", "error");
-      }
-    },
-
     syncState: async () => {
       try {
         const state = await api.getState();
         if (typeof state.affinity === "number") get().setAffinity(state.affinity);
+        // 回填主情绪标签：后端 /state 现在下发平铺 emotion，刷新后徽章/立绘
+        // 立即复位为真实情绪，而不是停在初始「平静」映射出的「😊 开心」
+        if (state.emotion) set({ emotion: state.emotion });
         if (state.emotionalState) set({ emotionalState: state.emotionalState });
         const meta = pickStageMeta(state);
         if (meta) {

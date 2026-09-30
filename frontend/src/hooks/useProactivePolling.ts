@@ -19,6 +19,7 @@ const REASON_ICONS: Record<string, string> = {
   task_reminder: "📝",
   random_chat: "✨",
   memory_share: "💭",
+  life_update: "🏡",
 };
 
 /**
@@ -58,16 +59,22 @@ export function useProactivePolling({
     let cancelled = false;
 
     const poll = async () => {
-      if (cancelled || document.hidden) return;
+      if (cancelled) return;
+      // 页面隐藏时也要照常拉取：桌面通知的承诺（切走后收通知）就在这里兑现。
+      // 此前入口处 document.hidden 直接 return，而通知分支又只在取到消息后执行，
+      // 两者互相矛盾——通知代码永不可达，整个功能实际不存在
       try {
         const message = await api.fetchProactiveMessage();
         if (message) {
           onMessageRef.current(message);
-          if (useUiStore.getState().voiceMode) speakBus.speak(message.content);
+          // 语音朗读只对看得见的页面播：页面隐藏时宁可静默，等用户回来自己看
+          if (useUiStore.getState().voiceMode && !document.hidden) {
+            speakBus.speak(message.content);
+          }
 
           // 页面不可见时发桌面通知 + 提示音
-          if (document.hidden && Notification.permission === "granted") {
-            new Notification(REASON_ICONS[message.reason] || "Xiao Ai", {
+          if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+            new Notification(`${REASON_ICONS[message.reason] || "Xiao Ai"} 小爱`, {
               body: message.content,
               icon: "/favicon.ico",
               tag: "proactive-message",

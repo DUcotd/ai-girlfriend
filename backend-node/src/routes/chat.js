@@ -6,6 +6,7 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 import { fail } from '../middleware/validate.js';
 import { aiGirlfriend, proactiveEngine } from '../services/container.js';
 import { config } from '../config.js';
+import { PROACTIVE_TYPE_IDS } from '../core/proactiveTypes.js';
 
 const router = Router();
 
@@ -72,6 +73,8 @@ router.post('/chat', asyncHandler(async (req, res) => {
         affinity: result.affinity ?? 35,
         ...affinityPayload(result),
         emotionalState: result.emotionalState || null,
+        // 与 /chat/stream 的 done 保持同构：前端回退到非流式后仍靠它识别 ghosting
+        special_action: result.special_action || null,
         inner_thought: thinkingField(result.innerThought),
         model_reasoning: thinkingField(result.modelReasoning),
         ...taskPayload(result),
@@ -156,8 +159,21 @@ router.get('/chat/proactive/status', (req, res) => {
 
 router.post('/chat/proactive/trigger', asyncHandler(async (req, res) => {
     const { reason = 'random_chat', data = {} } = req.body;
-    await proactiveEngine.trigger(reason, data);
-    res.json({ status: "triggered", reason, queueSize: proactiveEngine.messageQueue.length });
+    // reason 白名单：未知值会按 FALLBACK_TYPE 生成却按原始字符串记账，重启后被静默丢弃
+    const safeReason = typeof reason === 'string' && PROACTIVE_TYPE_IDS.includes(reason)
+        ? reason
+        : 'random_chat';
+    const ok = await proactiveEngine.trigger(safeReason, data && typeof data === 'object' ? data : {});
+    // trigger() 在 LLM 挂/队列满/同类在途时返回 false：失败必须让前端知道，
+    // 而不是回 200 让用户对着一个永远不会出现的消息等
+    if (!ok) {
+        return res.status(503).json({
+            status: "failed",
+            reason: safeReason,
+            detail: "触发失败：总开关已关闭、同类消息生成中或队列已满，请稍后再试",
+        });
+    }
+    res.json({ status: "triggered", reason: safeReason, queueSize: proactiveEngine.messageQueue.length });
 }));
 
 export default router;

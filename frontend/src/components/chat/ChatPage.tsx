@@ -49,9 +49,10 @@ export default function ChatPage() {
 
   // 录音转写结果：自动发送或填入输入框
   const handleTranscribed = useCallback((text: string) => {
-    if (useUiStore.getState().autoSendVoice) {
+    if (useUiStore.getState().autoSendVoice && !useChatStore.getState().isLoading) {
       void useChatStore.getState().sendMessage(text);
     } else {
+      // 自动发送撞上 AI 回复进行中时退化为填入输入框，转写结果不丢
       setInput(text);
     }
   }, []);
@@ -60,7 +61,12 @@ export default function ChatPage() {
   const handleFirstRunComplete = () => {
     completeFirstRun();
     const config = getChatConfig();
-    if (config.apiKey) api.syncConfig(config).catch(() => {});
+    if (config.apiKey || config.ttsApiKey) {
+      api.syncConfig(config).catch((e: unknown) => {
+        console.warn("[FirstRun] syncConfig failed:", e);
+        useUiStore.getState().pushToast("配置同步失败，请确认后端已启动", "error");
+      });
+    }
   };
 
   const handleSend = () => {

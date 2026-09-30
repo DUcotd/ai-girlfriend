@@ -70,7 +70,8 @@ export default function VoiceButton({ text, size = 16, engine = "openai" }: Voic
                 setState("idle");
             }
         } catch (e) {
-            // 鉴权类错误给出可操作的提示，其余仅打日志
+            // 后端现在会把 4xx 的 detail（key 未配置/无效）原样透传，关键字分支可以命中；
+            // 其余（网络错误等）也必须有反馈，不能让用户点了没任何反应
             const msg = (e instanceof Error ? e.message : "").toLowerCase();
             if (
                 msg.includes("api key") ||
@@ -80,6 +81,7 @@ export default function VoiceButton({ text, size = 16, engine = "openai" }: Voic
                 toast("语音功能需要 OpenAI 官方 API 密钥，请在设置中配置有效且有余量的 TTS 密钥 ✨", "error");
             } else {
                 console.error("TTS failed", e);
+                toast("语音服务暂时不可用，请稍后再试", "error");
             }
             setState("idle");
         }

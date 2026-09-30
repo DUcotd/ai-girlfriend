@@ -7,7 +7,7 @@
  * - D (Dominance): 优势度 [-1, 1] 掌控/顺从
  */
 
-import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+import { readJson, writeJson } from '../utils/jsonStore.js';
 import { RELATIONSHIP_STAGES, getStageForAffinity } from './relationshipStages.js';
 import {
     anyIncludes, DEEP_INTIMACY, MILD_INTIMACY, PRAISE, CRITICISM, TEASING,
@@ -43,9 +43,7 @@ const TIER_PAD = {
 class EmotionEngine {
     static AFFINITY_TIERS = RELATIONSHIP_STAGES.map(t => ({ ...t, ...TIER_PAD[t.stage] }));
 
-    constructor(statePath = null) {
-        this.statePath = statePath || dataPath(STATE_FILE);
-
+    constructor() {
         this.baseline = { P: 0.3, A: 0.1, D: -0.1 };
         this.state = { P: 0.3, A: 0.1, D: -0.1 };
 
@@ -122,7 +120,10 @@ class EmotionEngine {
 
         this._saveState();
 
-        console.log(`[Emotion] Delta applied: P:${delta.P?.toFixed(2) || 0} A:${delta.A?.toFixed(2) || 0} D:${delta.D?.toFixed(2) || 0}`);
+        // delta 分量可能是 LLM 给的字符串数值（如 "P": "+0.1"），toFixed 会抛 TypeError
+        // 并把整轮回复作废——这里只做展示，一律安全格式化
+        const fmt = (v) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(2) : String(v));
+        console.log(`[Emotion] Delta applied: P:${fmt(delta.P)} A:${fmt(delta.A)} D:${fmt(delta.D)}`);
         console.log(`[Emotion] New state: P:${this.state.P.toFixed(2)} A:${this.state.A.toFixed(2)} D:${this.state.D.toFixed(2)}`);
 
         return this.state;

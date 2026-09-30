@@ -512,14 +512,7 @@ class PersonalityDrift {
         return ranked.length > 0 ? ranked : ['温和'];
     }
 
-    /** 保留旧调试入口语义，返回完整双值状态与内部统计副本。 */
-    getFullState() {
-        return {
-            baseline: cloneTraits(this.baseline),
-            current: cloneTraits(this.current),
-            stats: JSON.parse(JSON.stringify(this.stats)),
-        };
-    }
+    // （getFullState 已删除：全仓无调用者的旧调试入口，见 2026-09-30 全量功能验证 F42。）
 
     // ==================== 内部：规则应用与统计 ====================
 

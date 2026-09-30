@@ -66,6 +66,7 @@ export default function ChatInput({
                 <RecordButton
                     isRecording={isRecording}
                     recordingTime={recordingTime}
+                    disabled={isLoading}
                     onToggle={toggleRecording}
                 />
 

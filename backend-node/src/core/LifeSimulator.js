@@ -121,12 +121,15 @@ class LifeSimulator {
         this.activityHistory = data.history || [];
 
         // 恢复当前活动（如果还在有效期内）
-        if (data.current && data.currentEnd) {
-            const endTime = new Date(data.currentEnd).getTime();
-            if (Date.now() < endTime) {
+        // currentStart 也要一并校验：缺失/非法时 new Date() 会得到 Invalid Date，
+        // 后续 toISOString() 抛 RangeError 且在定时器回调里变成进程崩溃
+        if (data.current && data.currentEnd && data.currentStart) {
+            const startTime = new Date(data.currentStart);
+            const endTime = new Date(data.currentEnd);
+            if (!Number.isNaN(startTime.getTime()) && !Number.isNaN(endTime.getTime()) && Date.now() < endTime.getTime()) {
                 this.currentActivity = data.current;
-                this.activityStartTime = new Date(data.currentStart);
-                this.activityEndTime = new Date(data.currentEnd);
+                this.activityStartTime = startTime;
+                this.activityEndTime = endTime;
             }
         }
 

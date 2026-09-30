@@ -64,9 +64,11 @@ export function toBackendConfigPayload(cfg: UiChatConfig) {
     base_url: cfg.baseUrl || undefined,
     model_name: cfg.modelName || undefined,
     tts_api_key: cfg.ttsApiKey || undefined,
-    embedding_api_key: cfg.embApiKey || undefined,
-    embedding_base_url: cfg.embBaseUrl || undefined,
-    embedding_model_name: cfg.embModelName || undefined,
+    // 嵌入三件套用 ??：空串 = 用户想清空（回退「使用主 Key」），必须原样送达后端，
+    // 由后端归一化成 null。`|| undefined` 会把空串吞掉，清空在运行时永远不生效。
+    embedding_api_key: cfg.embApiKey ?? undefined,
+    embedding_base_url: cfg.embBaseUrl ?? undefined,
+    embedding_model_name: cfg.embModelName ?? undefined,
     // 这两项没有「清空」语义：undefined（调用方没给，如首启向导只发 Key/URL/模型）
     // 就整项省略，让后端保留当前值；给了则原值下发——temperature: 0 必须能发出去。
     max_prompt_history: cfg.maxPromptHistory,
@@ -130,11 +132,8 @@ export const api = {
     }),
 
   // ---------- 配置 ----------
-  updateConfig: (payload: Record<string, unknown>) =>
-    request<{ status: string; current_model?: string }>("/config", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
+  // （updateConfig 已删除：它接收裸 payload、绕过 snake_case 映射，是「静默失效」的footgun；
+  //   所有下发路径统一走 syncConfig。）
 
   /** 下发 UI 配置（camelCase）——自动完成字段映射，所有调用方都用它，勿直发 camelCase */
   syncConfig: (cfg: UiChatConfig) =>

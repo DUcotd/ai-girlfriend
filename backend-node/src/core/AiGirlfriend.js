@@ -537,7 +537,16 @@ class AiGirlfriend {
 
             const parsed = this._parseReplyText(fullContent, userInput, { cot, monologue, metadata, reasoning: reasoningText });
             // 以实际流式展示给用户的正文为准，保证界面显示与历史记录一致
-            if (visibleText.trim()) parsed.replyText = visibleText.trim();
+            if (visibleText.trim()) {
+                parsed.replyText = visibleText.trim();
+            } else if (parsed.innerThought || parsed.modelReasoning) {
+                // 正文为空（模型只输出了独白/CoT/元数据）时，_parseReplyText 的正则剥离
+                // 分支被 hints 短路，标签原文会残留在 replyText 里直接下发到气泡——补一刀
+                parsed.replyText = parsed.replyText
+                    .replace(/<monologue>[\s\S]*?<\/monologue>/g, "")
+                    .replace(/<think>[\s\S]*?<\/think>/g, "")
+                    .trim();
+            }
             return this._finalize(parsed, userInput, null, { nudgeTaskIds });
         } catch (e) {
             console.error(`Chat Stream Error: ${e}`);
@@ -662,6 +671,16 @@ class AiGirlfriend {
             if (match) {
                 replyText = replyText.replace(match[0], "").trim();
                 metadataJson = match[1];
+            } else {
+                // 未闭合的 <metadata>（生成被 max_tokens 截断在 metadata 中间）：
+                // 流式路径会把残片收进 metadata hint、不进气泡；非流式这里对齐同一行为，
+                // 否则截断的 JSON 原文会直接展示给用户
+                const unclosed = replyText.match(/<metadata>\s*([\s\S]*)$/s)
+                    || raw.match(/<metadata>\s*([\s\S]*)$/s);
+                if (unclosed) {
+                    metadataJson = unclosed[1];
+                    replyText = replyText.replace(/<metadata>[\s\S]*$/s, "").trim();
+                }
             }
         }
 
@@ -847,6 +866,9 @@ class AiGirlfriend {
             nickname: this.nickname || "亲爱的",
             historyCount: this.history.filter(m => m.role !== 'system').length,
             memoryCount: this.memory ? this.memory.memories.length : 0,
+            // 平铺情绪标签：前端刷新后 syncState 直接回填主徽章，
+            // 不用等下一条消息的 chat 响应才校正
+            emotion: this.emotionEngine ? this.emotionEngine.getEmotionLabel() : null,
             emotionalState: this.emotionEngine ? this.emotionEngine.getFullState() : null,
             // 平铺阶段元数据 + recentChangeReason / decaying / dailyCapReached，
             // 前端 /state 与 /chat 响应共用同一份字段（前端零阈值）。
@@ -869,17 +891,28 @@ class AiGirlfriend {
             this.modelName = config.modelName;
             changed = true;
         }
-        if (config.embeddingApiKey !== undefined && config.embeddingApiKey !== this.embeddingApiKey) {
-            this.embeddingApiKey = config.embeddingApiKey;
-            changed = true;
+        // 嵌入配置允许「清空回退」：前端把输入框清空会送来空串，
+        // 这里归一化成 null，Memory 层随即回退到「使用主 Key」的语义
+        if (config.embeddingApiKey !== undefined) {
+            const nextKey = config.embeddingApiKey === '' ? null : config.embeddingApiKey;
+            if (nextKey !== this.embeddingApiKey) {
+                this.embeddingApiKey = nextKey;
+                changed = true;
+            }
         }
-        if (config.embeddingBaseUrl !== undefined && config.embeddingBaseUrl !== this.embeddingBaseUrl) {
-            this.embeddingBaseUrl = config.embeddingBaseUrl;
-            changed = true;
+        if (config.embeddingBaseUrl !== undefined) {
+            const nextUrl = config.embeddingBaseUrl === '' ? null : config.embeddingBaseUrl;
+            if (nextUrl !== this.embeddingBaseUrl) {
+                this.embeddingBaseUrl = nextUrl;
+                changed = true;
+            }
         }
-        if (config.embeddingModelName !== undefined && config.embeddingModelName !== this.embeddingModelName) {
-            this.embeddingModelName = config.embeddingModelName;
-            changed = true;
+        if (config.embeddingModelName !== undefined) {
+            const nextModel = config.embeddingModelName === '' ? null : config.embeddingModelName;
+            if (nextModel !== this.embeddingModelName) {
+                this.embeddingModelName = nextModel;
+                changed = true;
+            }
         }
 
         // 高级选项（上下文条数 / 温度 / 最大输出 / 思考强度）：写运行时 config.chat，

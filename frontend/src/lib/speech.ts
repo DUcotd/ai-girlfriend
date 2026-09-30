@@ -17,9 +17,12 @@ function pickChineseVoice(): SpeechSynthesisVoice | null {
   );
 }
 
-/** 浏览器本地朗读 */
-export function speakLocal(text: string): void {
-  if (!("speechSynthesis" in window)) return;
+/** 浏览器本地朗读；onEnd 在朗读自然结束（或出错）时回调，供调用方复位 speaking 状态 */
+export function speakLocal(text: string, onEnd?: () => void): void {
+  if (!("speechSynthesis" in window)) {
+    onEnd?.();
+    return;
+  }
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = "zh-CN";
@@ -27,6 +30,10 @@ export function speakLocal(text: string): void {
   utterance.pitch = 1.2;
   const voice = pickChineseVoice();
   if (voice) utterance.voice = voice;
+  if (onEnd) {
+    utterance.onend = onEnd;
+    utterance.onerror = onEnd;
+  }
   window.speechSynthesis.speak(utterance);
 }
 

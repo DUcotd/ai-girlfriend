@@ -54,6 +54,8 @@ export interface AppState extends AffinityStageMeta {
   nickname: string;
   historyCount: number;
   memoryCount: number;
+  /** 平铺情绪标签（来自 EmotionEngine.getEmotionLabel()），刷新后回填主徽章用 */
+  emotion?: string;
   emotionalState: EmotionalState | null;
   /** 最近一次**真正发生**的好感度变化量（无规则介入时也非 0；从未变化为 0） */
   recentChange: number;

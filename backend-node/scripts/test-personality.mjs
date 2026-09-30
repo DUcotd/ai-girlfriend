@@ -763,14 +763,24 @@ try {
 
 // ==================== API 契约（G 组 P0：路由层直测，真实数据零写入） ====================
 console.log('API 契约:');
-// 动态导入 container：其构造对真实数据只读，但 ProactiveEngine.start() 会把刚读到的
-// 配置原样回写 proactive_state.json（内容等价、mtime 变化）。为做到「真实数据分毫不动」，
-// 导入前先备份该文件原始字节，停掉定时器后在 finally 中原样还原。
+// 动态导入 container：其构造对真实数据只读，但 container 导入会实例化 ProactiveEngine，
+// 随后 stop() 触发 _saveState() 回写 proactive_state.json（内容等价、mtime 变化）。
+// 为做到「真实数据分毫不动」，导入前先备份该文件原始字节，停掉定时器后在 finally 中
+// 原样还原。文件可能不存在（.gitignore 忽略 data/，新 clone / CI 上从未跑过后端），
+// 读取必须有 ENOENT 容错——此前顶层裸 readFileSync 会让整个 npm test 在此崩溃，
+// 后面 7 条 API 契约用例全部不执行；finally 也只在原文件存在时还原。
 // 路由闭包每次请求都动态读取 aiGirlfriend.personalityDrift，替换为测试引擎后，
 // 全部 POST 写的都是 personality_state.test.json。
 // node:fetch(undici) 不走系统代理，127.0.0.1 随机端口不会被本机 HTTP 代理 502。
 const proactiveStateUrl = new URL('../data/proactive_state.json', import.meta.url);
-const proactiveStateBackup = fs.readFileSync(proactiveStateUrl);
+let proactiveStateBackup = null;
+let hadProactiveState = false;
+try {
+    proactiveStateBackup = fs.readFileSync(proactiveStateUrl);
+    hadProactiveState = true;
+} catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+}
 const { default: personalityRoutes } = await import('../src/routes/personalityRoutes.js');
 const { aiGirlfriend, proactiveEngine } = await import('../src/services/container.js');
 proactiveEngine.stop();
@@ -873,7 +883,12 @@ try {
 } finally {
     apiServer.close();
     apiServer.closeAllConnections?.();
-    fs.writeFileSync(proactiveStateUrl, proactiveStateBackup); // 还原 container 导入期间的等价回写
+    if (hadProactiveState && proactiveStateBackup !== null) {
+        // 还原 container 导入 + stop() 期间的等价回写；原文件不存在时删掉测试产生的
+        fs.writeFileSync(proactiveStateUrl, proactiveStateBackup);
+    } else {
+        try { fs.unlinkSync(proactiveStateUrl); } catch { /* 文件本就不存在 */ }
+    }
     removeTestFile();
 }
 

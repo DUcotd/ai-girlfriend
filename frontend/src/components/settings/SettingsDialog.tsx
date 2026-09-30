@@ -78,7 +78,18 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
     });
     const [enabledTypes, setEnabledTypes] = useState<string[]>(() => {
         const saved = get("enabledTypes");
-        if (saved) return JSON.parse(saved);
+        if (saved) {
+            // 脏值/跨版本残留会让裸 JSON.parse 抛异常、整个设置弹窗渲染崩溃；
+            // 解析结果还必须是字符串数组才算合法
+            try {
+                const parsed: unknown = JSON.parse(saved);
+                if (Array.isArray(parsed) && parsed.every((t) => typeof t === "string")) {
+                    return parsed as string[];
+                }
+            } catch {
+                // fall through to default
+            }
+        }
         // 与 backend/src/core/proactiveTypes.js 的 defaultEnabled 保持镜像；
         // 挂载后会被服务端下发的列表覆盖，这里只是后端不可用时的兜底。
         return ['morning_greeting', 'night_greeting', 'task_reminder',

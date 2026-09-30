@@ -61,6 +61,13 @@ router.get('/state', (req, res) => {
 
 router.post('/state', (req, res) => {
     const { affinity, nickname } = req.body;
+    // 与 chat.js / tasks.js 同一套校验惯例：类型不对回 400，而不是静默忽略还报 updated
+    if (fail(res, affinity !== undefined && typeof affinity !== 'number',
+        'affinity must be a number')) return;
+    if (fail(res, nickname !== undefined && typeof nickname !== 'string',
+        'nickname must be a string')) return;
+    if (fail(res, typeof nickname === 'string' && nickname.length > 50,
+        'nickname must be at most 50 characters')) return;
     const newState = aiGirlfriend.updateState({ affinity, nickname });
     res.json({ status: "updated", ...newState });
 });

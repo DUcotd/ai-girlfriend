@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import SakuraEffect from "@/components/effects/SakuraEffect";
+import MotionProvider from "@/components/ui/MotionProvider";
 import ToastViewport from "@/components/ui/ToastViewport";
 import "./globals.css";
 import "../styles/tokens.css";
@@ -29,7 +30,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body className="antialiased">
-        {children}
+        <MotionProvider>{children}</MotionProvider>
         <SakuraEffect />
         <ToastViewport />
       </body>

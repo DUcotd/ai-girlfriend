@@ -38,7 +38,8 @@ backend-node/
 │   │   ├── tasks.js         /tasks CRUD
 │   │   ├── audio.js         /audio/speak、/audio/transcribe
 │   │   ├── state.js         /history、/memories、/state、/system_prompt
-│   │   └── life.js          /life/*
+│   │   ├── life.js          /life/*
+│   │   └── personalityRoutes.js  /personality 状态与预设
 │   ├── middleware/          统一错误处理、异步包装、参数校验
 │   ├── services/
 │   │   └── container.js     单例服务容器 + 停机清理
@@ -61,16 +62,16 @@ frontend/
 └── src/
     ├── app/                 入口装配（layout / page / globals.css）
     ├── components/
-    │   ├── ui/              通用原语（Button / Dialog / Card / Switch …，全吃设计 token）
+    │   ├── ui/              通用原语（Button / Dialog / Card / Switch …；中性黑白与语义色均走 token）
     │   ├── chat/            聊天页（ChatPage / ChatInput 胶囊 dock / 消息气泡 / 工具栏）
     │   ├── character/       角色面板（立绘 / 好感度 / 情绪徽章 / PAD 状态）
-    │   ├── settings/        设置弹窗（通用 / 语音 / 记忆 / 主动 / 系统 五页签）
+    │   ├── settings/        设置弹窗（通用 / 语音 / 记忆 / 性格 / 主动 / 系统 六页签）
     │   ├── wizard/          首启引导（欢迎 / API 配置 / 完成，三步）
     │   ├── dialogs/         业务弹窗（任务 / 记忆 / 导出）
     │   ├── voice/           语音控件（朗读按钮 / 录音波形）
     │   ├── theme/           主题切换弹窗
     │   └── effects/         背景特效（樱花飘落）
-    ├── stores/              zustand 状态真源（chat / settings / ui / theme）
+    ├── stores/              zustand 状态（chat / settings(ttsEngine) / ui / theme；其余配置经 lib/storage 平铺存取）
     ├── hooks/               业务逻辑（聊天流 / 主动轮询 / 语音 / 录音 / 自动滚动）
     ├── lib/                 API 客户端、localStorage、cn、通知音、浏览器语音
     ├── styles/              设计 token 三层（tokens 尺度 / themes 主题×模式 / utilities 装饰）
@@ -78,19 +79,24 @@ frontend/
 ```
 
 **主题系统**：`data-theme`（sakura / starry / ocean / forest 四色相）× `data-mode`（light / dark）
-正交组合共 8 种，全部颜色经 CSS 变量走 token，组件不写死色值；支持系统
-`prefers-reduced-motion`（禁装饰动画、压缩过渡）。
+正交组合共 8 种，界面颜色一律经 CSS 变量走 token；两处有意例外：PAD 三维条的轴向
+正负配色（数据可视化语义，不随主题色相变化）与主题选择器的预览渐变（需要展示
+「目标主题」的颜色）。支持系统 `prefers-reduced-motion`（禁全部装饰动画、压缩过渡，
+framer-motion 经 MotionConfig reducedMotion="user" 跟随）。
 
 ## 数据存放
 
-所有运行时数据统一写入 `backend-node/data/`（不再依赖启动目录）：
+所有运行时数据统一写入 `backend-node/data/`（不再依赖启动目录），各文件在首次
+发生相应事件时才落盘：
 
 | 文件 | 内容 |
 |------|------|
-| `state.json` | 好感度、昵称、对话历史 |
+| `state.json` | 昵称、对话历史、模型配置（baseUrl / modelName 等） |
+| `affinity_state.json` | 好感度（AffinityEngine 自持） |
 | `memory.json` | 向量记忆 |
 | `emotion_state.json` | PAD 情绪状态 |
 | `personality_state.json` | 性格特质与交互统计 |
+| `proactive_state.json` | 主动消息配置、当日配额、冷却与待送队列 |
 | `life_log.json` | 日常活动模拟记录 |
 | `tasks.json` | 任务清单 |
 
@@ -103,16 +109,22 @@ frontend/
 | POST | `/chat` | 发送消息（非流式） |
 | POST | `/chat/stream` | 发送消息，SSE 流式返回正文 |
 | GET | `/chat/proactive` | 取一条主动消息（无则 204） |
-| POST | `/chat/proactive/trigger` | 手动触发主动消息 |
-| GET/POST | `/config` | 模型 / API 配置 |
+| POST | `/chat/proactive/trigger` | 手动触发主动消息（reason 需在类型目录内） |
+| GET | `/chat/proactive/status` | 主动消息引擎运行时状态 |
+| POST | `/config` | 模型 / API 配置（无 GET；回显走 `/config/status`） |
 | GET | `/config/status` | 配置状态 |
 | GET/POST | `/config/proactive` | 主动消息配置 |
 | GET/POST/PUT/DELETE | `/tasks` | 任务清单 |
 | GET | `/tasks/summary` `/tasks/due` | 任务统计 / 即将到期 |
 | GET/DELETE | `/history` | 对话历史 |
+| POST | `/reset` | 完全重置（历史 + 记忆 + 好感度；「新对话」用 DELETE /history） |
 | GET/DELETE | `/memories` | 向量记忆 |
 | GET/POST | `/state` | 好感度 / 昵称 |
+| GET | `/affinity/ledger` | 好感度变更账本 |
 | GET/POST | `/system_prompt` | 人设 prompt |
+| GET/POST | `/personality` | 性格状态 / 更新（预设 / 七维 / 开关） |
+| GET | `/personality/ledger` | 性格变化账本 |
+| POST | `/personality/reset` | 恢复默认预设并清空账本 |
 | GET | `/life/current` `/life/history` | 当前活动 / 活动历史 |
 | POST | `/audio/speak` `/audio/transcribe` | TTS / 语音转文字 |
 

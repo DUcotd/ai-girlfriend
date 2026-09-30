@@ -128,12 +128,17 @@
 
 /* ---------- 动效偏好：用户系统开启「减少动态效果」时 ---------- */
 @media (prefers-reduced-motion: reduce) {
-  /* 装饰动画直接禁：樱花 / 星星 / 录音脉冲 / 立绘呼吸与渐隐 */
+  /* 装饰动画直接禁：樱花 / 星星 / 录音脉冲 / 立绘呼吸与渐隐，
+     以及 Tailwind 内置的 pulse / bounce / spin-slow（思考提示、加载光斑、旋转图标等） */
   .sakura-petal,
   .star,
   .pulse-ring,
   .animate-breathe,
-  .animate-avatar-fade-out {
+  .animate-avatar-fade-out,
+  .animate-pulse,
+  .animate-bounce,
+  .animate-spin-slow,
+  .animate-spin {
     animation: none !important;
   }
 

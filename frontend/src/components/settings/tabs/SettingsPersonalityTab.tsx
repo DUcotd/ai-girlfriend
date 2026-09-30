@@ -26,10 +26,19 @@ export default function SettingsPersonalityTab({
   personality,
   onRequestReset,
 }: SettingsPersonalityTabProps) {
-  const { state } = personality;
+  const { state, loading, loadFailed } = personality;
+
+  // 拉取失败：显示错误态与重试指引，而不是把失败渲染成永久的「正在读取」
+  if (loadFailed) {
+    return (
+      <p className="min-h-[160px] pt-10 text-center text-[11px] text-status-danger">
+        性格状态读取失败，请检查后端连接后重新打开设置
+      </p>
+    );
+  }
 
   // 尚未拉取到后端状态（首次打开弹窗的短暂瞬间）
-  if (!state) {
+  if (!state || loading) {
     return (
       <p className="min-h-[160px] pt-10 text-center text-[11px] text-content-muted">
         正在读取性格状态…

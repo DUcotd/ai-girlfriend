@@ -263,6 +263,9 @@ class ProactiveEngine {
         const wasInactive = inactiveTime > 30 * MIN;
         const inactiveMinutes = Math.floor(inactiveTime / MIN);
         this.lastUserActiveTime = Date.now();
+        // 总开关：这是 check() 之外的第二个触发入口，此前不查 enabled，
+        // 关掉总开关后「欢迎回来」仍会真实调 LLM 生成入队
+        if (!this.config.enabled) return;
         if (!wasInactive || !this.canTrigger('life_update')) return;
 
         // 深夜不打扰：回来很晚也只记时间，不发「欢迎回来」
@@ -468,6 +471,10 @@ class ProactiveEngine {
      *          （任务提醒的去重标记必须在入队成功后才写，否则失败的那条会被永久跳过）。
      */
     async trigger(reason, data = {}) {
+        // 总开关：手动触发（POST /chat/proactive/trigger）与自动检查共用这一道闸。
+        // 此前只有 check() 查 enabled，API 层与欢迎回来路径都能绕过总开关。
+        if (!this.config.enabled) return false;
+
         const type = getProactiveType(reason) || FALLBACK_TYPE;
 
         // 同一类型不并发生成（手动触发与定时轮询可能同时命中）

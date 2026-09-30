@@ -36,6 +36,8 @@ export default function TaskDialog({ onClose }: TaskDialogProps) {
   useEffect(() => {
     void fetchTasks().catch((error: unknown) => {
       console.error("Failed to fetch tasks", error);
+      // 拉取失败必须有反馈：空列表与「真的没有任务」不可区分，会误导用户任务全没了
+      toast("任务加载失败，请检查后端连接", "error");
     });
   }, [fetchTasks]);
 

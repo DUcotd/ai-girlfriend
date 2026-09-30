@@ -60,3 +60,6 @@ bug-vulnerability-scan-report.md
 
 # 本地调试截图
 backend-node/diag-*.png
+
+# 本地修复备份（2026-09-30 修复前的源码快照，不入库）
+fix-backup-20260930/

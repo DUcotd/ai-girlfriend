@@ -37,7 +37,9 @@ export default function Toast({ message, type, onClose, duration = 3000 }: Toast
             initial={{ opacity: 0, y: -20, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -10, scale: 0.95 }}
-            className={`fixed right-4 top-4 z-[100] flex items-center gap-3 rounded-2xl border bg-surface-1/95 px-4 py-3 shadow-lg backdrop-blur-sm ${borders[type]}`}
+            // 定位交给外层 ToastViewport（按 idx 堆叠）；这里再写 fixed top/right
+            // 会自成包含块、让外层的堆叠偏移失效，多条 toast 全部叠在同一点
+            className={`flex items-center gap-3 rounded-2xl border bg-surface-1/95 px-4 py-3 shadow-lg backdrop-blur-sm ${borders[type]}`}
         >
             {icons[type]}
             <span className="text-sm text-content-primary">{message}</span>

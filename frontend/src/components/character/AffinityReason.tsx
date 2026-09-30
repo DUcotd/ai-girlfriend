@@ -32,9 +32,9 @@ export default function AffinityReason({
 }: AffinityReasonProps) {
   const deltaClass =
     recentChange > 0
-      ? "text-emerald-500"
+      ? "text-status-success"
       : recentChange < 0
-        ? "text-red-500"
+        ? "text-status-danger"
         : "text-content-secondary";
 
   const hint = decaying

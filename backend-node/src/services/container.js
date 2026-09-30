@@ -14,6 +14,7 @@ export const aiGirlfriend = new AiGirlfriend();
 export const voiceEngine = { current: new VoiceEngine({}) };
 
 export function updateVoiceEngine({ apiKey }) {
+    voiceEngine.current.stop?.();
     voiceEngine.current = new VoiceEngine({ apiKey });
 }
 
@@ -22,4 +23,5 @@ export const proactiveEngine = new ProactiveEngine(aiGirlfriend);
 /** 优雅停机：清理所有后台定时器 */
 export function shutdownServices() {
     proactiveEngine.stop();
+    voiceEngine.current.stop?.();
 }

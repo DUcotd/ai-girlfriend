@@ -23,6 +23,8 @@ export interface PersonalityController {
    */
   now: number | null;
   loading: boolean;
+  /** 挂载拉取失败：Tab 据此显示错误态，而不是把失败渲染成永久的「正在读取」 */
+  loadFailed: boolean;
   /** 拖动滑块：乐观更新 + 300ms debounce 合并提交 */
   setDim: (dim: PersonalityDimKey, value: number) => void;
   /** 切换预设：取消 pending 的滑块改动，单独一拍提交 { presetId } */
@@ -49,6 +51,7 @@ export function usePersonality(): PersonalityController {
   const patchBaseline = usePersonalityStore((s) => s.patchBaseline);
 
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [now, setNow] = useState<number | null>(null);
 
   // ⚠️ ref 只在事件回调 / effect 中读写，不在 render 期访问（React 19 Compiler 红线）
@@ -147,12 +150,16 @@ export function usePersonality(): PersonalityController {
       .catch((e) => {
         if (cancelled) return;
         setLoading(false);
+        setLoadFailed(true);
         console.error("Failed to fetch personality:", e);
+        // 失败必须可见：否则 Tab 对 state===null 一律渲染「正在读取…」，
+        // 用户看到的是永不结束的假加载
+        showToast("性格状态读取失败，请检查后端连接", "error");
       });
     return () => {
       cancelled = true;
     };
-  }, [applyState, applyLedger]);
+  }, [applyState, applyLedger, showToast]);
 
   // 卸载时清理未触发的 debounce 定时器
   useEffect(() => {
@@ -161,5 +168,5 @@ export function usePersonality(): PersonalityController {
     };
   }, []);
 
-  return { state, ledger, now, loading, setDim, applyPreset, setFlags, reset };
+  return { state, ledger, now, loading, loadFailed, setDim, applyPreset, setFlags, reset };
 }

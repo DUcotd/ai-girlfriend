@@ -13,8 +13,9 @@
  *    OVERDUE_GRACE_MS / OVERDUE_WINDOW），ProactiveEngine 从这里取，避免两处各写一份。
  */
 import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs';
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
-import { startOfLocalDay, toDate } from './taskTime.js';
+import { parseDueTime, startOfLocalDay, toDate } from './taskTime.js';
 
 const TASKS_FILE = 'tasks.json';
 
@@ -118,7 +119,23 @@ class TaskManager {
      * 只有真的有字段被补齐时才写盘一次（Q6）。
      */
     _load() {
-        const raw = readJson(TASKS_FILE, []);
+        // readJson 对「文件不存在」与「存在但损坏」都返回 fallback；损坏时若直接以空列表
+        // 继续，下一次写盘会用空数组覆盖原文件、任务全部丢失——先把损坏文件隔离留存
+        const fileExisted = fs.existsSync(this.tasksPath);
+        const raw = readJson(TASKS_FILE, null);
+        if (fileExisted && !Array.isArray(raw)) {
+            const quarantine = `${this.tasksPath}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+            try {
+                fs.renameSync(this.tasksPath, quarantine);
+                console.error(
+                    `[TaskManager] tasks.json 已损坏且无法解析，已隔离留存到 ${quarantine}；本次以空任务列表启动。`
+                );
+            } catch (e) {
+                console.error(
+                    `[TaskManager] tasks.json 已损坏且隔离失败（${e.message}）；在手工修复该文件前，任何写盘都会覆盖原数据！`
+                );
+            }
+        }
         const list = Array.isArray(raw) ? raw : [];
 
         let dirty = false;
@@ -153,6 +170,14 @@ class TaskManager {
             picked[field] = source[field];
         }
         if (typeof picked.title === 'string') picked.title = picked.title.trim();
+        // 时间字段统一归一化成 ISO 8601 落盘（前端 datetime-local 发来的是本地写法）；
+        // 解析失败的保留原值，由路由层拒绝
+        for (const field of ['dueTime', 'reminderTime']) {
+            if (typeof picked[field] === 'string' && picked[field].trim()) {
+                const parsed = parseDueTime(picked[field]);
+                if (parsed.ok) picked[field] = parsed.iso;
+            }
+        }
         if (typeof picked.source === 'string') {
             // Q5：source 只认 'ai'，其余一律 'manual'
             picked.source = picked.source === 'ai' ? 'ai' : 'manual';
@@ -207,7 +232,13 @@ class TaskManager {
         if (index === -1) return null;
 
         const picked = this._pickWritable(updates);
+        // 改期 = 这轮提醒周期重新开始：清掉「已提醒」标记，
+        // 否则新到期日的 due/overdue 提醒会被旧标记永久抑制
+        const rescheduled =
+            (picked.dueTime !== undefined && picked.dueTime !== this.tasks[index].dueTime) ||
+            (picked.reminderTime !== undefined && picked.reminderTime !== this.tasks[index].reminderTime);
         const updated = { ...this.tasks[index], ...picked };
+        if (rescheduled) updated.reminderState = {};
         this.tasks[index] = updated;
         this.saveTasks();
         console.log(`[TaskManager] Task updated: ${String(id).slice(0, 8)} (${Object.keys(picked).join(', ') || 'no writable field'})`);

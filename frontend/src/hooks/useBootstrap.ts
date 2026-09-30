@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { get, getChatConfig, isSetupComplete, set } from "@/lib/storage";
 import { useChatStore } from "@/stores/chatStore";
+import { useUiStore } from "@/stores/uiStore";
 
 /**
  * 一次性客户端引导：首启判定、通知权限、状态/历史拉取、配置下发后端。
@@ -32,10 +33,15 @@ export function useBootstrap() {
     void syncState();
     void fetchHistory();
 
-    // 已有配置时同步给后端（后端配置仅存于内存，重启后需要重新下发）
+    // 已有配置时同步给后端（后端配置仅存于内存，重启后需要重新下发）。
+    // 只配了语音 Key、没配主 Key 的场景也要下发，否则 tts_api_key 永远到不了后端
     const config = getChatConfig();
-    if (config.apiKey) {
-      api.syncConfig(config).catch(() => {});
+    if (config.apiKey || config.ttsApiKey) {
+      api.syncConfig(config).catch((e: unknown) => {
+        console.warn("[Bootstrap] syncConfig failed:", e);
+        // 静默吞掉的话用户要等到发消息报错才会发现后端没就绪
+        useUiStore.getState().pushToast("配置同步失败，请确认后端已启动", "error");
+      });
     }
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
