@@ -1,0 +1,113 @@
+classDiagram
+    class Task {
+        +string id
+        +string title
+        +string description
+        +string dueTime
+        +string reminderTime
+        +boolean completed
+        +string createdAt
+        +string source
+        +ReminderState reminderState
+    }
+    class ReminderState {
+        +string dueRemindedAt
+        +string customRemindedAt
+        +string overdueRemindedAt
+        +string dialogMentionedAt
+    }
+    class TaskActionResult {
+        +string action
+        +boolean ok
+        +Task task
+        +string reason
+    }
+    class taskTime {
+        <<module>>
+        +parseDueTime(input) ParseResult
+        +formatTaskDue(iso, now) string
+        +isSameLocalDay(a, b) boolean
+        +minutesOfDay(d) number
+    }
+    class taskActions {
+        <<module>>
+        +ENABLED_ACTIONS Set
+        +normalizeTaskAction(raw) TaskAction[]
+        +executeTaskAction(raw, opts) TaskActionResult
+        +matchTask(criteria, opts) MatchResult
+    }
+    class TaskManager {
+        -Task[] tasks
+        -string tasksPath
+        +_load() Task[]
+        +saveTasks() void
+        +addTask(taskData) Task
+        +updateTask(id, updates) Task
+        +deleteTask(id) Task
+        +getPendingTasks() Task[]
+        +getDueSoonTasks(minutes) Task[]
+        +getReminderCandidates(now) Candidate[]
+        +markReminded(id, kind, at) Task
+        +getTodayTasks(now) Task[]
+        +getSummary() Summary
+    }
+    class taskPrompt {
+        <<module>>
+        +buildTaskContextText(tasks, now) string
+        +buildTaskActionInstruction() string
+        +buildTaskNudgeText(tasks, now) string
+    }
+    class AiGirlfriend {
+        +_prepare(userInput) PrepareResult
+        +_parseReplyText(full, input, hints) Parsed
+        +_finalize(parsed, input, usage, opts) Result
+        +generateProactiveMessage(reason, data) Msg
+    }
+    class ProactiveEngine {
+        -number dailyMessageCount
+        +_runCheck() Promise
+        +canTrigger(type) boolean
+        +_isQuotaExempt(typeId) boolean
+        +_hasQuota() boolean
+        +trigger(reason, data) Promise~boolean~
+        +_pruneQueue() void
+        -pickReminderCandidate(list, now) Candidate
+    }
+    class ChatRoutes {
+        <<module>>
+        +affinityPayload(result) object
+        +taskPayload(result) object
+    }
+    class taskStore {
+        <<zustand>>
+        +Task[] tasks
+        +boolean loading
+        +fetchTasks() Promise
+        +addTask(payload) Promise
+        +toggleTask(id, completed) Promise
+        +removeTask(id) Promise
+        +applyTaskResult(result) void
+    }
+    class taskView {
+        <<module>>
+        +isOverdue(task, now) boolean
+        +isTodayTask(task, now) boolean
+        +pickTodayTasks(tasks, now) Task[]
+        +sortTasks(tasks, now) Task[]
+    }
+
+    Task "1" *-- "1" ReminderState : 组合
+    TaskManager "1" o-- "*" Task : 持有/持久化(data/tasks.json)
+    taskActions ..> TaskManager : addTask/updateTask/deleteTask
+    taskActions ..> taskTime : parseDueTime
+    taskActions ..> TaskActionResult : 产出
+    AiGirlfriend ..> taskActions : _finalize 内 executeTaskAction
+    AiGirlfriend ..> taskPrompt : buildTaskContextText/Instruction
+    AiGirlfriend ..> TaskManager : 读取待办注入上下文
+    ProactiveEngine ..> TaskManager : getReminderCandidates/markReminded
+    ProactiveEngine ..> AiGirlfriend : generateProactiveMessage
+    ChatRoutes ..> AiGirlfriend : chat/chatStream
+    ChatRoutes ..> TaskActionResult : taskPayload 下发
+    taskStore ..> TaskActionResult : applyTaskResult
+    taskStore ..> taskView : 排序/今日筛选
+    taskView ..> Task : 只读

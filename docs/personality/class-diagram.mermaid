@@ -1,0 +1,108 @@
+classDiagram
+    class PersonalityDims {
+        <<module>>
+        +PERSONALITY_DIMS: DimMeta[]
+        +DIM_KEYS: string[]
+        +DEFAULT_TRAITS: Record
+        +isDimKey(k) bool
+    }
+    class PersonalityPresets {
+        <<module>>
+        +PERSONALITY_PRESETS: Preset[]
+        +DEFAULT_PRESET_ID: string
+        +getPreset(id) Preset
+    }
+    class Lexicon {
+        <<module>>
+        +RELATIONSHIP_LEXICON: array
+        +matchCategory(text) string
+        +anyIncludes(text, words) bool
+        +DEPENDENCY: string[]
+        +REASSURANCE: string[]
+        +APOLOGY: string[]
+    }
+    class PersonalityFatigue {
+        <<module>>
+        +pruneRuleHits(hits, now, win) Record
+        +recordRuleHit(hits, ruleId, now) Record
+        +fatigueMultiplier(count) number
+    }
+    class PersonalityRules {
+        <<module>>
+        +PERSONALITY_RULES: object
+        +buildSignals(input, ctx) Signals
+        +buildDayStats(stats, now) DayStats
+        +computeDrift(signals, ctx) DriftResult
+        +applyDailyCap(changes, accum, max) Result
+        +clampCurrent(v, baseline, band) number
+        +applyBaselinePull(cur, base, rate) Record
+        +computeBaselineAdapt(args) AdaptResult
+        +tierIndex(v) int
+    }
+    class PersonalityPrompt {
+        <<module>>
+        +DIM_TIER_TEXT: Record
+        +buildPersonalityPrompt(args) string
+    }
+    class PersonalityDrift {
+        -stateFile: string
+        -version: number
+        -presetId: string
+        -baseline: Record
+        -current: Record
+        -driftEnabled: bool
+        -baselineAdaptEnabled: bool
+        -stats: Stats
+        -daily: Daily
+        -ruleHits: Record
+        -adapt: Record
+        -ledger: LedgerEntry[]
+        -lastSettledDay: string
+        +settleDaily(now) object
+        +recordUserTurn(input, ctx, now) object
+        +applyManual(traits) State
+        +applyPreset(presetId) State
+        +setFlags(flags) State
+        +reset() object
+        +getPublicState() State
+        +getLedger() LedgerEntry[]
+        +getPromptInjection() string
+        +getDominantTraits() string[]
+        -_loadState() void
+        -_saveState() void
+        -_appendLedger(entry) void
+        -_rollDayIfNeeded(now) Record
+    }
+    class AiGirlfriend {
+        +personalityDrift: PersonalityDrift
+        +affinityEngine: AffinityEngine
+        +emotionEngine: EmotionEngine
+        -_prepare(input) Promise
+        -_finalize(parsed, input, usage) object
+        +resetAll() void
+    }
+    class PersonalityRoutes {
+        <<router>>
+        +GET_personality(req, res)
+        +POST_personality(req, res)
+        +GET_ledger(req, res)
+        +POST_reset(req, res)
+    }
+    class RelationshipStages {
+        <<module>>
+        +getStageForAffinity(a) Stage
+    }
+
+    PersonalityRules ..> PersonalityDims : 消费顺序与 key
+    PersonalityRules ..> Lexicon : 词表匹配
+    PersonalityRules ..> PersonalityFatigue : 疲劳系数
+    PersonalityRules ..> RelationshipStages : 阶段门控（禁字面量）
+    PersonalityPresets ..> PersonalityDims : traits 覆盖 7 维
+    PersonalityPrompt ..> PersonalityDims : 5 档文案按维度
+    PersonalityDrift ..> PersonalityRules : 编排（单向）
+    PersonalityDrift ..> PersonalityPresets : 预设取值
+    PersonalityDrift ..> PersonalityFatigue : ruleHits 裁窗
+    PersonalityDrift ..> PersonalityPrompt : 组装注入段落
+    PersonalityDrift ..> PersonalityDims : 维度真源
+    AiGirlfriend *-- PersonalityDrift : 持有单例
+    PersonalityRoutes ..> AiGirlfriend : aiGirlfriend.personalityDrift

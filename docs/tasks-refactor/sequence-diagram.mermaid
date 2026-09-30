@@ -1,0 +1,89 @@
+%% 图 1：对话建单链路（用户说「明天下午3点提醒我开会」→ 建单 → toast）
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant FE as useChatStream(streamSendMessage)
+    participant R as routes/chat.js
+    participant AI as AiGirlfriend
+    participant LLM as 大模型
+    participant TA as core/taskActions.js
+    participant TM as core/TaskManager.js
+    participant ST as stores/taskStore
+    participant TS as uiStore.toast
+
+    U->>FE: 明天下午3点提醒我开会
+    FE->>R: POST /chat/stream {message}
+    R->>AI: chatStream(message, onDelta)
+    AI->>TM: getPendingTasks() / getSummary()
+    TM-->>AI: 待办列表
+    AI->>AI: _prepare(): taskText=buildTaskContextText(含 [短id])
+    AI->>AI: buildSystemContext(+taskActionText)  ← 既有文案不变
+    AI->>LLM: 一次 messages 请求（唯一一次网络往返）
+    LLM-->>AI: <monologue>…正文…<metadata>{...,"task_action":{...}}</metadata>
+    AI->>AI: _parseReplyText() → parsed.taskAction
+    AI->>AI: _finalize(parsed, userInput, null)
+    AI->>TA: executeTaskAction(taskAction)
+    TA->>TA: normalizeTaskAction() → toArray() → 取第一条
+    alt action 不在 ENABLED_ACTIONS / 为 none
+        TA-->>AI: null（P0 行为与老模型完全一致）
+    else action = add
+        TA->>TA: title 为空? → {ok:false, reason:"missing_title"}
+        TA->>TA: parseDueTime(dueTime)
+        alt 时间解析失败
+            TA->>TM: addTask({title, dueTime:null, source:"ai"})
+            TM-->>TA: task
+            TA-->>AI: {action:"add", ok:true, task, reason:"bad_due_time"}
+        else 正常
+            TA->>TM: addTask({title, dueTime:ISO, source:"ai"})
+            TM->>TM: saveTasks()（tmp+rename 原子写 data/tasks.json）
+            TM-->>TA: task
+            TA-->>AI: {action:"add", ok:true, task}
+        end
+    end
+    AI-->>R: result { reply, ..., taskResult }
+    R->>R: taskPayload(result)（两处 done 共用）
+    R-->>FE: SSE {type:"done", taskResult}
+    FE->>FE: settle(data)
+    FE->>ST: applyTaskResult(taskResult)
+    ST-->>ST: upsert(task)（列表即时更新，弹窗未打开也生效）
+    alt ok = true
+        FE->>TS: toast("小爱帮你记下了：开会 ✨", "success")
+    else ok = false
+        FE->>TS: toast("小爱没太听清，你再说一次？", "info")
+    end
+
+
+%% 图 2：提醒链路（check() → getReminderCandidates → trigger → markReminded）
+sequenceDiagram
+    autonumber
+    participant T as setInterval(60s)
+    participant PE as ProactiveEngine
+    participant TM as TaskManager
+    participant AI as AiGirlfriend
+    participant Q as messageQueue
+    participant FE as GET /chat/proactive
+
+    T->>PE: check()（_checking 单飞）
+    PE->>PE: _resetDailyCountIfNeeded()
+    PE->>PE: hasQuota = _hasQuota()   ← 不再是全局 return
+    PE->>PE: ① 定时问候（仅当 hasQuota）
+    PE->>PE: ② canTrigger("task_reminder")（冷却 5min，不占配额、不看深夜）
+    PE->>TM: getReminderCandidates(now)
+    TM-->>PE: [{task,kind:"overdue"}, {task,kind:"custom"}, {task,kind:"due"}]
+    PE->>PE: pickReminderCandidate()：overdue 限 07:00–23:00，取第一条
+    alt 有候选
+        PE->>AI: await trigger("task_reminder", {task, kind})
+        AI->>AI: buildProactivePrompt(reason, {task, kind}) → 三套语气之一
+        AI-->>PE: {reply, emotion}
+        PE->>Q: push({content, reason, priority:100, expiresAt: now+15min})
+        PE->>PE: if(!quotaExempt) dailyMessageCount++    ← 豁免
+        PE-->>PE: return true
+        PE->>TM: markReminded(task.id, kind, now)
+        TM->>TM: reminderState[kind→*RemindedAt] = now；saveTasks()
+    else 无候选 / 入队失败
+        PE-->>PE: return false（不标记，下轮 60s 后重试）
+    end
+    PE->>PE: if(!hasQuota || quiet) return   ← 两道闸下移到自发消息之前
+    PE->>PE: ③ 情绪关怀 / ④ 想念 / ⑤ 回忆 / ⑥ 随机闲聊（原逻辑不动）
+    FE->>PE: consumeMessage()
+    PE-->>FE: 提醒气泡（reason="task_reminder"）

@@ -1,0 +1,65 @@
+%% 一次对话：每日结算（_prepare 开头）+ 即时漂移（_finalize）
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant R as routes/chat.js
+    participant AG as AiGirlfriend
+    participant PD as PersonalityDrift
+    participant PR as personalityRules(纯函数)
+    participant AE as AffinityEngine
+    participant LLM as LLM
+
+    U->>R: POST /chat/stream { message }
+    R->>AG: chatStream(userInput, onDelta)
+    AG->>AG: _doChatStream → _prepare(userInput)
+
+    rect rgb(240,248,255)
+    Note over AG,PD: ★ 缺陷修复 A：settleDaily 必须在 ghosting 早退之前
+    AG->>PD: settleDaily(Date.now())
+    PD->>PD: _rollDayIfNeeded(now)（跨自然日清 daily.accum）
+    alt lastSettledDay != todayKey
+        PD->>PD: 更新 stats（totalDays/activeDays/consecutiveInactiveDays）
+        PD->>PR: buildDayStats(stats, now)
+        PR-->>PD: DayStats
+        PD->>PR: computeDrift(dayStats, { mode:'pattern', ... })
+        PR-->>PD: { changes, hits }
+        PD->>PR: applyDailyCap(changes, accum, 3.0)
+        PR-->>PD: { changes, accum }
+        PD->>PD: 逐维 clampCurrent(v, baseline, 15)
+        PD->>PR: applyBaselinePull(current, baseline, 0.08)
+        PR-->>PD: 新 current（不计入日上限、不写账本）
+        PD->>PR: computeBaselineAdapt({ baseline, current, adapt, now })
+        PR-->>PD: { moves, nextAdapt }
+        PD->>PD: _appendLedger(...) + _saveState()
+    end
+    PD-->>AG: { settled, changes, adapted }
+    end
+
+    AG->>AG: if (emotionEngine.shouldGhost()) return done
+    AG->>AE: settleDecay / notifyUserActive
+    AG->>AG: 记忆检索（唯一阻塞网络往返 #1）
+    AG->>PD: getPromptInjection()
+    PD->>PD: buildPersonalityPrompt(5档 + 底色 + 最近原因)
+    PD-->>AG: 性格段落
+    AG->>LLM: 生成（阻塞往返 #2）
+    LLM-->>AG: reply + metadata
+    AG->>AG: _finalize(parsed, userInput, usage)
+
+    rect rgb(255,250,240)
+    Note over AG,PR: ★ 缺陷修复 B：sentiment 用 autoDelta.P 兜底，并传内容信号
+    AG->>AG: autoDelta = emotionEngine.analyzeInput(userInput, affinity)
+    AG->>AE: recordUserTurn(userInput, affinityChange, replyText)
+    AG->>PD: recordUserTurn(userInput, { sentiment: emotionDelta?.P ?? autoDelta.P, affinity, affinityChange })
+    PD->>PR: buildSignals(userInput, { sentiment, stage, affinityChange })
+    PR-->>PD: Signals（category / 3张新词表 / 情绪词表 / isLongTalk）
+    PD->>PR: computeDrift(signals, { mode:'instant', totalMessages, fatigueCounts })
+    PR-->>PD: { changes, hits }
+    PD->>PR: applyDailyCap(changes, accum, 3.0)
+    PD->>PD: 逐维 clampCurrent(...) + round1
+    PD->>PD: 写账本（changes 非空才写）+ 更新 ruleHits/stats/recentTurns + _saveState()
+    PD-->>AG: { current, changes, hits }
+    end
+
+    AG-->>R: { reply, emotion, affinity, ... }
+    R-->>U: SSE delta / done
+    AG->>AG: _persistAfterReply()（记忆 embedding + 落盘，后台）
