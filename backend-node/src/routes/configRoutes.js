@@ -13,14 +13,25 @@ const router = Router();
 const PROACTIVE_TYPE_INFOS = PROACTIVE_TYPES.map(toPublicTypeInfo);
 
 router.post('/config', (req, res) => {
-    const { api_key, base_url, model_name, tts_api_key, embedding_api_key, embedding_base_url, embedding_model_name } = req.body;
+    // ⚠️ 这里只解构 snake_case：前端 syncConfig 已把 camelCase 转成这套名字，
+    // 直接发 camelCase 会被静默忽略（字段收不到、界面看起来「没生效」）。
+    const {
+        api_key, base_url, model_name, tts_api_key,
+        embedding_api_key, embedding_base_url, embedding_model_name,
+        // 高级选项（设置页 → 通用 → 高级选项）
+        max_prompt_history, temperature, max_tokens, reasoning_effort,
+    } = req.body;
     const result = aiGirlfriend.updateConfig({
         apiKey: api_key,
         baseUrl: base_url,
         modelName: model_name,
         embeddingApiKey: embedding_api_key,
         embeddingBaseUrl: embedding_base_url,
-        embeddingModelName: embedding_model_name
+        embeddingModelName: embedding_model_name,
+        maxPromptHistory: max_prompt_history,
+        temperature,
+        maxTokens: max_tokens,
+        reasoningEffort: reasoning_effort
     });
     if (tts_api_key || api_key) {
         updateVoiceEngine({ apiKey: tts_api_key || api_key });
@@ -33,7 +44,9 @@ router.get('/config/status', (req, res) => {
         isConfigured: !!aiGirlfriend.apiKey,
         hasEmbeddingConfig: !!aiGirlfriend.embeddingApiKey,
         currentModel: aiGirlfriend.modelName || null,
-        baseUrl: aiGirlfriend.baseUrl || null
+        baseUrl: aiGirlfriend.baseUrl || null,
+        // 高级选项当前生效值（前端设置页从 localStorage 回显，这里供排查/核对用）
+        chat: aiGirlfriend.getChatParams()
     });
 });
 

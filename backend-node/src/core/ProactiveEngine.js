@@ -16,9 +16,15 @@
  *    不再要求恰好落在整点后 5 分钟内——进程启动稍晚就会整天不发。
  * 7. check() / trigger() 单飞：LLM 生成慢于轮询间隔时不再叠加并发请求。
  * 8. getStatus() 暴露足够前端渲染的状态（今日已发/上限/静音时段/各类下次可发时间）。
+ *
+ * 任务清单系统重构追加：
+ * 9. 支持 `quotaExempt` 类型：每日配额闸从「_runCheck 开头一行 return」改成「一个标志位」，
+ *    trigger() 不 ++、_pruneQueue() 不退还。任务提醒是用户自己设的，不该被配额吃掉。
+ * 10. 任务提醒改为消费 TaskManager.getReminderCandidates()（overdue > custom > due），
+ *     **await trigger() 返回 true（真的入队了）才写去重标记**，失败下轮重试。
  */
 
-import TaskManager from './TaskManager.js';
+import TaskManager, { REMINDER_KIND, OVERDUE_WINDOW } from './TaskManager.js';
 import LifeSimulator from './LifeSimulator.js';
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
 import { dayKey } from '../utils/dayKey.js';
@@ -69,6 +75,28 @@ const minutesOfDay = (d) => d.getHours() * 60 + d.getMinutes();
 
 const hhmm = (mins) =>
     `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+
+/**
+ * 从候选里挑一条发出去。
+ *
+ * 候选已按 overdue > custom > due 排好序，这里只做**时段**过滤：
+ * 逾期提醒是「补漏」性质，凌晨 3 点说「你昨天的事没做」是骚扰，限 07:00–23:00；
+ * 到期前与自定义提醒是即时性的，保持全天可发（沿用既有的 quietExempt 语义）。
+ *
+ * @param {Array<{task: object, kind: string}>} candidates - TaskManager.getReminderCandidates() 结果
+ * @param {Date} now
+ * @returns {{task: object, kind: string}|null}
+ */
+function pickReminderCandidate(candidates, now) {
+    const nowMinutes = minutesOfDay(now);
+    const inOverdueWindow = nowMinutes >= OVERDUE_WINDOW.from && nowMinutes <= OVERDUE_WINDOW.to;
+
+    for (const candidate of candidates) {
+        if (candidate.kind === REMINDER_KIND.overdue && !inOverdueWindow) continue;
+        return candidate;
+    }
+    return null;
+}
 
 class ProactiveEngine {
     constructor(aiGirlfriend) {
@@ -291,6 +319,16 @@ class ProactiveEngine {
 
     // ==================== 冷却与配额 ====================
 
+    /** 该类型是否豁免每日配额（任务提醒：用户自己设的，不该被配额吃掉） */
+    _isQuotaExempt(typeId) {
+        return !!getProactiveType(typeId)?.quotaExempt;
+    }
+
+    /** 今天还剩配额吗 */
+    _hasQuota() {
+        return this.dailyMessageCount < this.getDailyLimit();
+    }
+
     canTrigger(type) {
         if (!this.config.enabledTypes.includes(type)) return false;
         const cooldown = this.triggerCooldowns[type] ?? HOUR;
@@ -318,7 +356,10 @@ class ProactiveEngine {
         const kept = [];
         for (const m of this.messageQueue) {
             if (m.expiresAt && m.expiresAt <= now) {
-                this.dailyMessageCount = Math.max(0, this.dailyMessageCount - 1);
+                // 豁免类型从来没占过配额，退回去会让计数变负/偏小（变相超发）
+                if (!this._isQuotaExempt(m.reason)) {
+                    this.dailyMessageCount = Math.max(0, this.dailyMessageCount - 1);
+                }
                 console.log(`[ProactiveEngine] Dropped expired message: ${m.reason} (ttl exceeded)`);
             } else {
                 kept.push(m);
@@ -345,29 +386,41 @@ class ProactiveEngine {
 
     async _runCheck() {
         this._resetDailyCountIfNeeded();
-        if (this.dailyMessageCount >= this.getDailyLimit()) return;
+        // 配额不再是一道「全局闸」（此前第 2 行直接 return，配额打满后连用户自己设的
+        // 任务提醒都发不出去）。它降级为一个标志位，由每种触发自己决定要不要看。
+        const hasQuota = this._hasQuota();
 
         const now = new Date();
         const nowMinutes = minutesOfDay(now);
         const quiet = this.isQuietHours(now);
 
-        // ① 定时问候：时间窗内每天一次（优先级最高）
-        for (const type of PROACTIVE_TYPES) {
-            if (!type.window || !type.dailyOnce) continue;
-            if (!this._inWindow(nowMinutes, type.window)) continue;
-            if (this._sentToday(type.id)) continue;
-            if (!this.canTrigger(type.id)) continue;
-            return this.trigger(type.id);
+        // ① 定时问候：时间窗内每天一次（优先级最高，占配额）
+        if (hasQuota) {
+            for (const type of PROACTIVE_TYPES) {
+                if (!type.window || !type.dailyOnce) continue;
+                if (!this._inWindow(nowMinutes, type.window)) continue;
+                if (this._sentToday(type.id)) continue;
+                if (!this.canTrigger(type.id)) continue;
+                return this.trigger(type.id);
+            }
         }
 
-        // ② 任务提醒：不受免打扰限制（快到期的待办该说就说）
+        // ② 任务提醒：quotaExempt —— 不看 hasQuota，也不受深夜免打扰限制。
+        // 位置很关键：必须在下面的 `if (!hasQuota || quiet) return;` **之前**。
         if (this.canTrigger('task_reminder')) {
-            const dueSoon = TaskManager.getDueSoonTasks(15);
-            if (dueSoon.length > 0) return this.trigger('task_reminder', { task: dueSoon[0] });
+            const hit = pickReminderCandidate(TaskManager.getReminderCandidates(now), now);
+            if (hit) {
+                const ok = await this.trigger('task_reminder', { task: hit.task, kind: hit.kind });
+                // 只有真的入队了才记「已提醒」；LLM 挂了/队列满时不标记，下轮 60s 后重试
+                if (ok) {
+                    TaskManager.markReminded(hit.task.id, hit.kind, new Date().toISOString());
+                }
+                return;
+            }
         }
 
-        // 深夜免打扰：以下都是「自发」消息，夜深了不打扰
-        if (quiet) return;
+        // 两道闸下移：从这里往下都是「自发」消息，占配额且深夜不打扰
+        if (!hasQuota || quiet) return;
 
         // ③ 情绪关怀（窗口内概率触发）
         const moodType = getProactiveType('mood_check');
@@ -408,19 +461,25 @@ class ProactiveEngine {
 
     // ==================== 生成与入队 ====================
 
+    /**
+     * 生成一条主动消息并入队。
+     *
+     * @returns {Promise<boolean>} true = 入队成功。调用方据此决定是否记账
+     *          （任务提醒的去重标记必须在入队成功后才写，否则失败的那条会被永久跳过）。
+     */
     async trigger(reason, data = {}) {
         const type = getProactiveType(reason) || FALLBACK_TYPE;
 
         // 同一类型不并发生成（手动触发与定时轮询可能同时命中）
-        if (this._inflight.has(type.id)) return;
+        if (this._inflight.has(type.id)) return false;
 
         this._pruneQueue();
-        if (this.messageQueue.length >= this.maxQueueSize) return;
+        if (this.messageQueue.length >= this.maxQueueSize) return false;
 
         this._inflight.add(type.id);
         try {
             const message = await this.aiGirlfriend.generateProactiveMessage(reason, data);
-            if (!message || !message.reply) return;
+            if (!message || !message.reply) return false;
 
             this.messageQueue.push({
                 id: `${Date.now()}-${type.id}`,
@@ -435,15 +494,18 @@ class ProactiveEngine {
 
             this.lastTriggerTime = Date.now();
             this.lastTriggerByType[reason] = Date.now();
-            this.dailyMessageCount++;
+            // 豁免类型不占配额（同时也不能被 _pruneQueue 退还）
+            if (!type.quotaExempt) this.dailyMessageCount++;
             if (type.dailyOnce) this.sentDays[reason] = dayKey();
 
             // 写进对话历史：小爱要记得自己说过什么，用户回复主动消息时模型才看得到上下文
             this.aiGirlfriend.recordProactiveMessage?.(message.reply, reason);
 
             this._saveState();
+            return true;
         } catch (e) {
             console.error("[ProactiveEngine] Trigger failed:", e.message || e);
+            return false;
         } finally {
             this._inflight.delete(type.id);
         }

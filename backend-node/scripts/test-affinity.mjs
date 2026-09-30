@@ -40,9 +40,33 @@ function check(name, fn) {
 
 const TEST_FILE = 'affinity_state.test.json';
 const testFilePath = dataPath(TEST_FILE);
-/** 干净的引擎：先删测试文件，避免上一用例的落盘污染 */
+/**
+ * 删除测试状态文件；失败（非 ENOENT）绝不吞错。
+ * 本机沙箱 safe-delete 配额触顶时 unlinkSync 会被静默拦截（错误无 e.code），
+ * 残留文件会把上一用例/上一轮的状态读回引擎，造成确定性污染。
+ * 降级方案：覆写为 {"version":2}（与性格测试同款）——
+ * AffinityEngine 对未知字段一律忽略、全部回落默认值，等价于干净状态；
+ * 且 writeFileSync 不受删除配额影响。
+ */
+function forceUnlink(p) {
+    try {
+        fs.unlinkSync(p);
+        return true;
+    } catch (e) {
+        if (e.code === 'ENOENT') return true;
+        console.error(`[test] unlink 失败(${e.code ?? e.message})，降级为覆写空状态: ${p}`);
+        try {
+            fs.writeFileSync(p, '{"version":2}');
+            return true;
+        } catch {
+            return false;
+        }
+    }
+}
+
+/** 干净的引擎：先清测试文件，避免上一用例的落盘污染 */
 function freshEngine() {
-    try { fs.unlinkSync(testFilePath); } catch { /* 不存在即忽略 */ }
+    forceUnlink(testFilePath);
     return new AffinityEngine(TEST_FILE);
 }
 /** trace 不变量：rawChange + Σ(to-from) === change */
@@ -354,7 +378,7 @@ try {
     });
 } finally {
     // 清理测试落盘（含 settleDecay 存盘产生的文件），不污染真实数据
-    try { fs.unlinkSync(testFilePath); } catch { /* 忽略 */ }
+    forceUnlink(testFilePath);
 }
 
 // ==================== 汇总 ====================

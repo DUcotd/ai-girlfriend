@@ -12,6 +12,7 @@ import taskRoutes from './routes/tasks.js';
 import audioRoutes from './routes/audio.js';
 import stateRoutes from './routes/state.js';
 import lifeRoutes from './routes/life.js';
+import personalityRoutes from './routes/personalityRoutes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 export function createApp() {
@@ -41,6 +42,7 @@ export function createApp() {
     app.use('/', audioRoutes);
     app.use('/', stateRoutes);
     app.use('/', lifeRoutes);
+    app.use('/', personalityRoutes);
 
     app.use(errorHandler);
 

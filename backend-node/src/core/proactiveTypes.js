@@ -21,6 +21,7 @@
  *   dailyOnce    —— true 表示每天最多发一次（配合 window 做「定时问候」）
  *   ttl          —— 队列存活毫秒：超时未送达即丢弃并退还当日配额
  *   quietExempt  —— true 表示深夜免打扰时段仍可发送
+ *   quotaExempt  —— true 表示**不计入每日主动消息配额**（也不退还配额）
  *   defaultEnabled —— 首次运行（未落盘）时的默认勾选状态
  */
 
@@ -82,9 +83,14 @@ export const PROACTIVE_TYPES = [
         icon: '📝',
         group: 'task',
         priority: 100,
-        baseCooldown: 30 * MIN,
+        // 30min → 5min：去重已交给 Task.reminderState（按「任务 × 提醒类型」记账），
+        // 这里的冷却只剩「防同一时刻连发多条」的刷屏作用。
+        baseCooldown: 5 * MIN,
         ttl: 15 * MIN,
         quietExempt: true,
+        // 用户自己设的提醒不该被「今天主动消息发够了」吃掉（D6）。
+        // 与之配套的两处改动在 ProactiveEngine：trigger() 不 ++、_pruneQueue() 不退配额。
+        quotaExempt: true,
         defaultEnabled: true,
     },
     {
@@ -176,6 +182,8 @@ export const FALLBACK_TYPE = {
     baseCooldown: 2 * HOUR,
     ttl: 60 * MIN,
     quietExempt: false,
+    // 未知 reason 一律按「占配额」处理（保守方向：宁可少发，不可超发）
+    quotaExempt: false,
     defaultEnabled: true,
 };
 

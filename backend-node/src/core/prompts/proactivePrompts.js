@@ -6,6 +6,7 @@
  * （陌生/初识/朋友/挚友/恋人），与主对话的关系阶段保持一致。
  */
 import { getStageForAffinity } from '../relationshipStages.js';
+import { formatTaskDue } from '../taskTime.js';
 
 /** 好感度数值 → 阶段短标签（陌生/初识/朋友/挚友/恋人） */
 export function getAffinityLevel(affinity) {
@@ -75,7 +76,7 @@ export function buildProactivePrompt(reason, data = {}, affinity = 35) {
     const prompts = {
         morning_greeting: pickByLevel(morningPrompts, affinityLevel),
         night_greeting: pickByLevel(nightPrompts, affinityLevel),
-        task_reminder: `用户有一个待办任务「${data.task?.title || '未知任务'}」快到截止日期了。请以关心的语气提醒用户，不要显得催促或给压力，而是用温柔鼓励的方式。`,
+        task_reminder: buildTaskReminderPrompt(data.task, data.kind, affinityLevel),
         random_chat: buildRandomChatPrompt(affinityLevel, hour),
         miss_you: pickByLevel(missYouPrompts(inactiveDesc(data.inactiveMinutes || 0)), affinityLevel),
         mood_check: pickByLevel(moodCheckPrompts(hour < 18 ? "今天" : "这几天"), affinityLevel),
@@ -84,6 +85,63 @@ export function buildProactivePrompt(reason, data = {}, affinity = 35) {
     };
 
     return prompts[reason] || "请主动找用户说一句话，可以是问候、分享心情或简单的闲聊。";
+}
+
+/**
+ * 到期前提醒（due）：温柔地催一下，体现「我帮你记着呢」。
+ */
+const taskDuePrompts = (title, dueText) => ({
+    "陌生": `用户的待办「${title}」快到时间了（${dueText}）。礼貌地提醒一句，语气克制，不要显得太熟。`,
+    "初识": `用户的待办「${title}」快到时间了（${dueText}）。友善地提醒他一句，可以顺带问问准备好了没有。`,
+    "朋友": `提醒一下用户「${title}」快到点了（${dueText}），像朋友那样自然，带一句加油，不要啰嗦。`,
+    "挚友": `撒娇地提醒用户「${title}」快到时间啦（${dueText}），可以说你一直帮他记着呢，提醒一句就够，别反复催。`,
+    "恋人": `用甜甜的语气提醒宝贝「${title}」快到了（${dueText}），告诉他你一直替他记着，只提醒一次，不要有压力。`
+});
+
+/**
+ * 自定义提醒时刻（custom）：用户自己设的点到了，语气比 due 更轻巧。
+ */
+const taskCustomPrompts = (title, dueText) => ({
+    "陌生": `到了用户自己设的提醒时间，他的待办是「${title}」（${dueText}）。礼貌地提一句就好。`,
+    "初识": `到了用户让你提醒他的时间啦，事情是「${title}」（${dueText}）。友善地告诉他一声。`,
+    "朋友": `你答应过要提醒他的啦，现在是「${title}」的时间（${dueText}）。像朋友一样自然地提一句。`,
+    "挚友": `叮咚~你答应过提醒他的「${title}」到时间了（${dueText}），俏皮地喊他一声，可以撒个娇。`,
+    "恋人": `宝贝让你提醒的「${title}」到时间啦（${dueText}），用甜蜜的语气提醒他，表现出你一直惦记着他的事。`
+});
+
+/**
+ * 逾期提醒（overdue）：关心而非责备 —— 凌晨三点说「你昨天的事没做」是骚扰，
+ * 白天提一句也要先假设对方是太忙了。
+ */
+const taskOverduePrompts = (title, dueText) => ({
+    "陌生": `用户的待办「${title}」已经过了时间（${dueText}）还没完成。礼貌地提一句，不要追问原因。`,
+    "初识": `用户的待办「${title}」已经过了时间（${dueText}）。友善地问一句是不是太忙了，不要给压力。`,
+    "朋友": `「${title}」已经过时间了（${dueText}），像朋友那样随口提一句，问问要不要改到别的时候，别念叨。`,
+    "挚友": `「${title}」好像超过时间啦（${dueText}），温柔地问一句是不是忙忘了，帮他想下一步就好，绝不责怪。`,
+    "恋人": `宝贝的「${title}」超过时间啦（${dueText}），心疼地问一句是不是太累了，表示你会陪他一起补上，绝不催促。`
+});
+
+/**
+ * 任务提醒：三套语气按 kind 分流（due / custom / overdue）。
+ *
+ * 为什么不复用一句「快到截止日期了」：逾期了还说「快到了」是错误信息，
+ * 而到期前用关切的语气、逾期用「是不是太忙了」的语气，这两件事的措辞必须分开（PRD Q3）。
+ *
+ * @param {object} task - TaskManager 的任务实体
+ * @param {'due'|'custom'|'overdue'} kind - 提醒类型
+ * @param {string} affinityLevel - 阶段短标签
+ * @returns {string}
+ */
+export function buildTaskReminderPrompt(task, kind, affinityLevel) {
+    const title = task?.title || '未知任务';
+    const dueText = formatTaskDue(task?.dueTime);
+
+    let prompt;
+    if (kind === 'overdue') prompt = pickByLevel(taskOverduePrompts(title, dueText), affinityLevel);
+    else if (kind === 'custom') prompt = pickByLevel(taskCustomPrompts(title, dueText), affinityLevel);
+    else prompt = pickByLevel(taskDuePrompts(title, dueText), affinityLevel);
+
+    return `${prompt}\n只说这一件就好，不要罗列任务清单，不要道歉式铺垫，符合当前关系阶段(${affinityLevel})。`;
 }
 
 function buildRandomChatPrompt(affinityLevel, hour) {

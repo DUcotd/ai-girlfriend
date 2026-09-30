@@ -45,6 +45,17 @@ function affinityPayload(result) {
     };
 }
 
+/**
+ * 组装任务动作结果字段。
+ *
+ * 与 affinityPayload 同一手法：/chat 与 /chat/stream 的 done 是两处**独立手写**的
+ * object 字面量，必须共用这个 helper，否则「流式有、非流式没有」的老毛病会重现。
+ * 老模型不输出 task_action（或走 ghosting/兜底路径）时恒为 null，前端行为完全不变。
+ */
+function taskPayload(result) {
+    return { taskResult: result.taskResult ?? null };
+}
+
 router.post('/chat', asyncHandler(async (req, res) => {
     const { message } = req.body;
     if (!aiGirlfriend.apiKey) return res.status(400).json({ detail: "API Key not configured" });
@@ -63,6 +74,7 @@ router.post('/chat', asyncHandler(async (req, res) => {
         emotionalState: result.emotionalState || null,
         inner_thought: thinkingField(result.innerThought),
         model_reasoning: thinkingField(result.modelReasoning),
+        ...taskPayload(result),
     });
 }));
 
@@ -120,6 +132,7 @@ router.post('/chat/stream', (req, res) => {
                 context_count: aiGirlfriend.history.length,
                 inner_thought: thinkingField(result.innerThought),
                 model_reasoning: thinkingField(result.modelReasoning),
+                ...taskPayload(result),
             });
             res.end();
         })

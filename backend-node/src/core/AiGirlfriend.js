@@ -10,13 +10,15 @@
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
 import Memory from './Memory.js';
-import TaskManager from './TaskManager.js';
+import TaskManager, { REMINDER_KIND, REMINDER_FIELD } from './TaskManager.js';
 import EmotionEngine from './EmotionEngine.js';
 import PersonalityDrift from './PersonalityDrift.js';
 import AffinityEngine from './AffinityEngine.js';
 import { PERSONA_SYSTEM_PROMPT, buildSystemContext } from './prompts/systemPrompt.js';
 import { buildRelationshipContext } from './prompts/relationshipContext.js';
 import { buildProactivePrompt, buildProactiveDirective, buildProactivePersonaDirective } from './prompts/proactivePrompts.js';
+import { buildTaskContextText, buildTaskActionInstruction, buildTaskNudgeText, pickNudgeTasks } from './prompts/taskPrompt.js';
+import { executeTaskAction } from './taskActions.js';
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
 import { config } from '../config.js';
 import { createStreamFilter, splitDelta, extractReasoning } from './streamFilter.js';
@@ -25,6 +27,12 @@ dotenv.config();
 
 const STATE_FILE = 'state.json';
 const MAX_HISTORY = 200;
+
+/**
+ * 对话内提及同一任务的防抖窗口（P1-2）。
+ * 「每次注入软提醒就标记」会让用户在同一场对话里被同一条任务反复念叨。
+ */
+const DIALOG_MENTION_DEBOUNCE_MS = 24 * 60 * 60 * 1000;
 
 class AiGirlfriend {
     constructor(config = {}) {
@@ -154,8 +162,79 @@ class AiGirlfriend {
     // ==================== 对话主流程 ====================
 
     /**
+     * 组装 LLM 请求参数（主对话：非流式与流式共用）。
+     *
+     * temperature 取 config.chat.temperature（设置页「高级选项」可调，默认 0.75）。
+     * max_tokens / reasoning_effort 只在配置非空时才带上——它们不是所有厂商都认，
+     * 传了不认的字段轻则被忽略、重则 400，所以「不传」比「传默认值」安全。
+     * 若确实设了 reasoning_effort 而厂商不支持，请求会直接报错，日志里能看到，
+     * 这里不做降级重试（用户改回「不传」即可）。
+     */
+    _buildChatParams(messages) {
+        const params = {
+            model: this.modelName,
+            messages,
+            temperature: config.chat.temperature
+        };
+        if (config.chat.maxTokens > 0) {
+            params.max_tokens = config.chat.maxTokens;
+        }
+        if (config.chat.reasoningEffort) {
+            params.reasoning_effort = config.chat.reasoningEffort;
+        }
+        return params;
+    }
+
+    /**
+     * 把设置页下发的高级参数写进运行时 config.chat（全局单例，进程内生效）。
+     * 非法值一律忽略（保留原值），避免一条脏配置把整个对话链路打挂。
+     *
+     * @returns {boolean} 是否真的发生了变更
+     */
+    _applyChatParams({ maxPromptHistory, temperature, maxTokens, reasoningEffort } = {}) {
+        let changed = false;
+
+        /** @returns {boolean} 写入是否生效 */
+        const setNumber = (key, raw, min, max) => {
+            if (raw === undefined || raw === null || raw === '') return false;
+            const n = Number(raw);
+            if (!Number.isFinite(n)) return false;
+            const next = Math.min(max, Math.max(min, n));
+            if (config.chat[key] === next) return false;
+            config.chat[key] = next;
+            return true;
+        };
+
+        if (setNumber('maxPromptHistory', maxPromptHistory, 1, 500)) changed = true;
+        if (setNumber('temperature', temperature, 0, 2)) changed = true;
+        // maxTokens: 0 是合法值，语义为「不传 max_tokens」
+        if (setNumber('maxTokens', maxTokens, 0, 1_000_000)) changed = true;
+
+        if (reasoningEffort !== undefined && reasoningEffort !== null) {
+            const next = ['low', 'medium', 'high'].includes(reasoningEffort) ? reasoningEffort : '';
+            if (config.chat.reasoningEffort !== next) {
+                config.chat.reasoningEffort = next;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    /** 供 /config/status 回显的高级参数当前值 */
+    getChatParams() {
+        return {
+            maxPromptHistory: config.chat.maxPromptHistory,
+            temperature: config.chat.temperature,
+            maxTokens: config.chat.maxTokens,
+            reasoningEffort: config.chat.reasoningEffort
+        };
+    }
+
+    /**
      * 构造发送给 LLM 的消息：system prompt + 最近 N 条历史。
      * 完整历史仍保留在 this.history 并落盘，这里只裁剪 prompt 以加快生成。
+     * 条数 N 即 config.chat.maxPromptHistory（设置页「高级选项」可改）。
      */
     _buildPromptMessages() {
         // history 里的 assistant 消息可能带 thought（内心独白），只对前端有意义，
@@ -209,10 +288,13 @@ class AiGirlfriend {
      * @returns {{done?: object, messagesToSend?: Array}} done 存在表示无需调用 LLM
      */
     async _prepare(userInput) {
+        // 性格每日结算必须早于 ghosting 早退，否则冷淡期跨天规则永远无法执行。
+        const now = Date.now();
+        this.personalityDrift.settleDaily(now);
+
         // ========== Layer -1: 好感度时间衰减惰性结算（必须在任何 LLM 交互之前） ==========
         // 顺序不可颠倒：先按久未互动补扣衰减，再打卡刷新互动时间。
         // 反了会把待结算的空闲时间抹掉，衰减永远触发不了。
-        const now = Date.now();
         this.affinityEngine.settleDecay(now);
         this.affinityEngine.notifyUserActive(now);
 
@@ -234,11 +316,6 @@ class AiGirlfriend {
         // ========== Layer 0: 亲和度驱动情感基准 ==========
         this.emotionEngine.updateBaselineForAffinity(this.affinity);
 
-        // ========== 性格漂移：每日统计更新 ==========
-        const todayStr = new Date().toDateString();
-        const todayMsgCount = this.history.filter(m => m.role === 'user' && new Date(m.timestamp || Date.now()).toDateString() === todayStr).length;
-        this.personalityDrift.updateDailyStats(todayMsgCount + 1);
-
         // ========== Layer 4: 情感染色记忆检索 ==========
         let contextStr = "";
         if (this.memory) {
@@ -249,17 +326,21 @@ class AiGirlfriend {
             }
         }
 
+        // ========== 任务上下文 + 意图识别指令 ==========
+        // 意图识别不额外调 LLM：指令随本次请求一起发出，模型在既有 <metadata> 里回传 task_action（硬约束 C2）。
+        // 注意：不要缓存 new Date()，也不要复用上面的 now（那是 Date.now() 的时间戳）
+        const nowDate = new Date();
+        const pendingTasks = TaskManager.getPendingTasks();
+        const taskText = buildTaskContextText(pendingTasks, nowDate);
+
+        const nudgeText = buildTaskNudgeText(pendingTasks, nowDate);
+        const nudgeTaskIds = nudgeText ? pickNudgeTasks(pendingTasks, nowDate).map(t => t.id) : [];
+        const taskActionText = [buildTaskActionInstruction(), nudgeText].filter(Boolean).join('\n\n');
+
         // ========== 构建消息 ==========
         // 只把最近若干条历史送进 prompt：上下文越短，prefill 与生成都越快。
         // 完整历史仍持久化在 state.json，不受影响。
         const messagesToSend = this._buildPromptMessages();
-
-        const pendingTasks = TaskManager.getPendingTasks();
-        const taskSummary = TaskManager.getSummary();
-        let taskText = `用户当前有 ${taskSummary.pending} 条待办任务。`;
-        if (pendingTasks.length > 0) {
-            taskText += " 待办: " + pendingTasks.slice(0, 3).map(t => t.title).join(', ');
-        }
 
         const consolidatedSystemInfo = buildSystemContext({
             nickname: this.nickname,
@@ -269,19 +350,58 @@ class AiGirlfriend {
             emotionPrompt: this.emotionEngine.getPromptInjection(),
             personalityPrompt: this.personalityDrift.getPromptInjection(),
             styleGuide: this.emotionEngine.getStyleGuide(),
+            taskActionText,
         });
         messagesToSend.push({ role: "system", content: consolidatedSystemInfo });
         messagesToSend.push({ role: "user", content: userInput });
 
-        return { messagesToSend };
+        return { messagesToSend, nudgeTaskIds };
+    }
+
+    /**
+     * 标记「本轮对话已经把某条任务提给模型了」（P1-2 软提醒的 24h 防抖）。
+     *
+     * 近似判定（Q2）：只要本轮注入了软提醒文本且走完了正常对话路径就算提及 ——
+     * 精确判断「模型真的在正文里说了它」需要再解析一次回复，收益不抵成本。
+     */
+    _markDialogMention(taskIds = []) {
+        if (!Array.isArray(taskIds) || taskIds.length === 0) return;
+        const nowMs = Date.now();
+        for (const id of taskIds) {
+            const task = TaskManager.getTasks().find(t => t.id === id);
+            if (!task) continue;
+            const last = task.reminderState?.[REMINDER_FIELD.dialog];
+            if (last) {
+                const lastMs = Date.parse(last);
+                if (Number.isFinite(lastMs) && nowMs - lastMs < DIALOG_MENTION_DEBOUNCE_MS) continue;
+            }
+            TaskManager.markReminded(id, REMINDER_KIND.dialog, new Date(nowMs).toISOString());
+        }
     }
 
     /**
      * LLM 返回后的收尾（非流式与流式共用）：
-     * 情绪更新、好感度校验、历史写入与裁剪。
+     * 任务动作执行、情绪更新、好感度校验、历史写入与裁剪。
      */
-    _finalize(parsed, userInput, usage) {
-        const { replyText, affinityChange, emotionDelta, innerThought, modelReasoning } = parsed;
+    _finalize(parsed, userInput, usage, { nudgeTaskIds = [] } = {}) {
+        const { replyText, affinityChange, emotionDelta, innerThought, modelReasoning, taskAction } = parsed;
+
+        // 任务意图：直接拿本次 LLM 回复的 metadata 执行，**不新增任何网络往返**。
+        // 执行结果只走 taskResult 字段下发，绝不拼进 replyText（气泡里不该出现埋点式文字）。
+        let taskResult = null;
+        try {
+            taskResult = executeTaskAction(taskAction, { now: new Date() });
+        } catch (e) {
+            console.error(`[Chat] Execute task action failed: ${e.message}`);
+            taskResult = null;
+        }
+        if (taskResult) {
+            console.log(
+                `[Chat] Task action: ${taskResult.action} ok=${taskResult.ok}` +
+                (taskResult.reason ? ` reason=${taskResult.reason}` : '')
+            );
+        }
+        this._markDialogMention(nudgeTaskIds);
 
         // 关键词分析总是生效，LLM delta 叠加混合
         const autoDelta = this.emotionEngine.analyzeInput(userInput, this.affinity);
@@ -297,8 +417,12 @@ class AiGirlfriend {
         const { affinity, change, trace, meta } =
             this.affinityEngine.recordUserTurn(userInput, affinityChange, replyText);
 
-        const sentiment = emotionDelta?.P || (affinityChange > 0 ? 0.5 : affinityChange < 0 ? -0.5 : 0);
-        this.personalityDrift.recordInteraction(sentiment, affinityChange < -3);
+        const sentiment = emotionDelta?.P ?? autoDelta.P;
+        this.personalityDrift.recordUserTurn(userInput, {
+            sentiment,
+            affinity,
+            affinityChange,
+        });
 
         this.history.push({ role: "user", content: userInput });
         // 内心独白随消息一起持久化，刷新后 hover 小图标仍可查看；
@@ -325,6 +449,7 @@ class AiGirlfriend {
             emotionalState: this.emotionEngine.getFullState(),
             innerThought,
             modelReasoning,
+            taskResult: taskResult ?? null,
         };
     }
 
@@ -332,18 +457,16 @@ class AiGirlfriend {
         const guard = this._preChatGuard(userInput);
         if (guard) return guard;
 
-        const { done, messagesToSend } = await this._prepare(userInput);
+        const { done, messagesToSend, nudgeTaskIds } = await this._prepare(userInput);
         if (done) return done;
 
         try {
-            const completion = await this.openai.chat.completions.create({
-                model: this.modelName,
-                messages: messagesToSend,
-                temperature: 0.75
-            });
+            const completion = await this.openai.chat.completions.create(
+                this._buildChatParams(messagesToSend)
+            );
 
             const parsed = this._parseCompletion(completion, userInput);
-            return this._finalize(parsed, userInput, completion.usage);
+            return this._finalize(parsed, userInput, completion.usage, { nudgeTaskIds });
         } catch (e) {
             console.error(`Chat Error: ${e}`);
             return {
@@ -380,7 +503,7 @@ class AiGirlfriend {
         const guard = this._preChatGuard(userInput);
         if (guard) return guard;
 
-        const { done, messagesToSend } = await this._prepare(userInput);
+        const { done, messagesToSend, nudgeTaskIds } = await this._prepare(userInput);
         if (done) return done;
 
         const filter = createStreamFilter();
@@ -389,9 +512,7 @@ class AiGirlfriend {
 
         try {
             const stream = await this.openai.chat.completions.create({
-                model: this.modelName,
-                messages: messagesToSend,
-                temperature: 0.75,
+                ...this._buildChatParams(messagesToSend),
                 stream: true
             });
 
@@ -417,7 +538,7 @@ class AiGirlfriend {
             const parsed = this._parseReplyText(fullContent, userInput, { cot, monologue, metadata, reasoning: reasoningText });
             // 以实际流式展示给用户的正文为准，保证界面显示与历史记录一致
             if (visibleText.trim()) parsed.replyText = visibleText.trim();
-            return this._finalize(parsed, userInput, null);
+            return this._finalize(parsed, userInput, null, { nudgeTaskIds });
         } catch (e) {
             console.error(`Chat Stream Error: ${e}`);
             return {
@@ -470,6 +591,9 @@ class AiGirlfriend {
      * 兼容旧行为：若只有 <think> 且原生通道为空（非推理模型 + 旧格式），
      * 那这个 <think> 就是我们要的独白，仍归入 innerThought。
      *
+     * 三类思考之外，metadata 里可能带可选的 `task_action`（任务清单系统重构追加的可选字段，
+     * 见 core/taskActions.js）——它走 RPC 式的写操作通道，不参与正文渲染。
+     *
      * @param hints 流式场景下由 streamFilter 给出已分离好的 cot / monologue / metadata / reasoning
      */
     _parseReplyText(fullContent, userInput, hints = {}) {
@@ -481,6 +605,7 @@ class AiGirlfriend {
         let innerThought = null;
         let modelReasoning = null;
         let metadataJson = null;
+        let taskAction = null;
 
         // ---- 人设内心独白 <monologue> ----
         let monologue = (hints.monologue || "").trim();
@@ -547,12 +672,14 @@ class AiGirlfriend {
                 emotion = metadata.emotion || "default";
                 affinityChange = metadata.affinity_change || 0;
                 emotionDelta = metadata.emotion_delta || null;
+                // 任务意图：老模型不输出这个字段时恒为 null，下游行为完全不变（向后兼容）
+                taskAction = metadata.task_action ?? null;
             } catch (e) {
                 console.error(`Metadata parse error: ${e}. Raw: ${metadataJson}`);
             }
         }
 
-        return { replyText, emotion, affinityChange, emotionDelta, innerThought, modelReasoning };
+        return { replyText, emotion, affinityChange, emotionDelta, innerThought, modelReasoning, taskAction };
     }
 
     // ==================== 主动消息生成 ====================
@@ -580,6 +707,10 @@ class AiGirlfriend {
         ];
 
         try {
+            // ⚠️ 主动消息刻意不跟随设置页的 temperature：这是「小爱主动找你说话」的
+            // 场景，需要比主对话（默认 0.75）更高的变化度才不显得复读，故固定 0.85。
+            // 确认过语义：它不是记忆摘要之类的工具调用，而是另一条独立的人设链路，
+            // 所以这里保持原值不动（将来要统一，需连 proactivePrompts 一起评估）。
             const completion = await this.openai.chat.completions.create({
                 model: this.modelName,
                 messages: messages,
@@ -597,7 +728,7 @@ class AiGirlfriend {
             const metadataRegex = /<metadata>\s*({.*?})\s*<\/metadata>/s;
             const match = content.match(metadataRegex);
             if (match) {
-                reply = content.replace(match[0], "").trim();
+                reply = reply.replace(match[0], "").trim();
                 try {
                     let metadataJson = match[1];
                     metadataJson = metadataJson.replace(/:\s*\+([0-9]+)/g, ': $1');
@@ -694,6 +825,7 @@ class AiGirlfriend {
     resetAll() {
         this.history = [{ role: "system", content: this.systemPrompt }];
         this.affinityEngine.reset();
+        this.personalityDrift.reset();
         if (this.memory) {
             this.memory.clearMemory();
         }
@@ -748,6 +880,22 @@ class AiGirlfriend {
         if (config.embeddingModelName !== undefined && config.embeddingModelName !== this.embeddingModelName) {
             this.embeddingModelName = config.embeddingModelName;
             changed = true;
+        }
+
+        // 高级选项（上下文条数 / 温度 / 最大输出 / 思考强度）：写运行时 config.chat，
+        // 单独记 changed，不并入上面的连接类变更（改这些不需要重建 OpenAI 客户端）。
+        const paramsChanged = this._applyChatParams({
+            maxPromptHistory: config.maxPromptHistory,
+            temperature: config.temperature,
+            maxTokens: config.maxTokens,
+            reasoningEffort: config.reasoningEffort
+        });
+        if (paramsChanged) {
+            const p = this.getChatParams();
+            console.log(
+                `[Config] Chat params: history=${p.maxPromptHistory}, temperature=${p.temperature}, ` +
+                `maxTokens=${p.maxTokens > 0 ? p.maxTokens : 'auto'}, reasoningEffort=${p.reasoningEffort || 'off'}`
+            );
         }
 
         if (changed) {
