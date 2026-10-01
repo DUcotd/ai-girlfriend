@@ -8,7 +8,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "check": "node --experimental-vm-modules scripts/check-syntax.mjs",
-    "test": "node scripts/test-stream-filter.mjs && node scripts/test-affinity.mjs && node scripts/test-personality.mjs && node scripts/test-memory.mjs && node scripts/test-proactive-gating.mjs"
+    "test": "node scripts/test-stream-filter.mjs && node scripts/test-affinity.mjs && node scripts/test-personality.mjs && node scripts/test-memory.mjs && node scripts/test-proactive-gating.mjs && node scripts/test-auth.mjs && node scripts/test-trigger-registry.mjs && node scripts/test-user-emotion.mjs && node scripts/test-narrative.mjs && node scripts/test-triggers.mjs"
   },
   "keywords": [],
   "author": "",

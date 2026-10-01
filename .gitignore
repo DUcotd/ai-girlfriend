@@ -1,8 +1,12 @@
 # Dependencies
 node_modules/
 */node_modules/
-package-lock.json
-*/package-lock.json
+
+# lockfile 必须入库：它是「依赖版本可复现」的唯一保证，CI 的 npm ci 依赖它。
+# 曾经忽略 */package-lock.json，导致 CI 只能退化为 npm install（版本随上游漂移，
+# 同一份代码可能今天绿明天红）。仅保留根目录这一条，防止有人在仓库根误装依赖
+# 生成孤儿 lockfile（真正合法的是 backend-node/ 与 frontend/ 各自的那份）。
+/package-lock.json
 
 # Next.js
 .next/

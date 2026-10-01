@@ -97,21 +97,55 @@ function disarmStore(memory) {
     });
 
     // ==================== 2. jsonStore 损坏隔离 ====================
+    //
+    // 说明（测试卫生）：
+    // readJson/writeJson 内部把文件名绑定到 backend-node/data/，未暴露 DATA_DIR。
+    // 因此要触发「解析失败 → 改名隔离」这条真实逻辑，测试文件就必须落在 data/ 下，
+    // 无法改写到 os.tmpdir()。既然必须写在共享数据目录，就采取以下三重环保措施：
+    //   1) 测试开始前先扫一遍 data/，清理上次残留的 <前缀> 与 <前缀>.corrupt-* 文件；
+    //   2) 用例内所有清理调用一律容错，失败仅告警，绝不中断测试；
+    //   3) 用完后尽力清理，不残留。
     console.log('jsonStore 损坏隔离:');
     const QUARANTINE_FILE = 'jsonstore_quarantine_test.json';
+    const QUARANTINE_PREFIX = `${QUARANTINE_FILE}.corrupt-`;
     const quarantinePath = dataPath(QUARANTINE_FILE);
+    /** 删除单个文件，失败仅告警（沙箱 safe-delete 护栏可能拦截 unlink）。 */
+    const safeUnlink = (target) => {
+        try {
+            fs.unlinkSync(target);
+        } catch (e) {
+            console.warn(`  WARN 清理 ${target} 失败（已忽略）: ${e.message}`);
+        }
+    };
+    /** 清理 data/ 下严格匹配本测试前缀的残留（含隔离副本），绝不触碰其他数据文件。 */
+    const sweepQuarantineResidue = () => {
+        let entries = [];
+        try {
+            entries = fs.readdirSync(dataPath('.'));
+        } catch (e) {
+            console.warn(`  WARN 扫描 data/ 失败（已忽略）: ${e.message}`);
+            return;
+        }
+        for (const f of entries) {
+            if (f === QUARANTINE_FILE || f.startsWith(QUARANTINE_PREFIX)) {
+                safeUnlink(dataPath(f));
+            }
+        }
+    };
     try {
+        sweepQuarantineResidue(); // 兜底：清掉上一次运行可能残留的文件
         fs.writeFileSync(quarantinePath, '{ this is not json', 'utf-8');
         const fallback = readJson(QUARANTINE_FILE, 'fallback-value');
         assert.strictEqual(fallback, 'fallback-value');
         // 原文件应已被改名隔离（保留现场），不再停留在原路径
         assert.strictEqual(fs.existsSync(quarantinePath), false, '损坏文件应被改名');
-        const quarantined = fs.readdirSync(dataPath('.')).find((f) => f.startsWith(`${QUARANTINE_FILE}.corrupt-`));
+        const quarantined = fs.readdirSync(dataPath('.')).find((f) => f.startsWith(QUARANTINE_PREFIX));
         assert.ok(quarantined, '存在 .corrupt- 隔离副本');
-        // 清理隔离副本
-        fs.unlinkSync(dataPath(quarantined));
+        // 清理隔离副本（沙箱下可能被 safe-delete 拦截，降级为告警）
+        safeUnlink(dataPath(quarantined));
     } finally {
         try { fs.unlinkSync(quarantinePath); } catch { /* 已隔离或不存在 */ }
+        sweepQuarantineResidue(); // 再兜底扫一遍，确保不残留
     }
 
     check('正常文件读取不受隔离逻辑影响', () => {
