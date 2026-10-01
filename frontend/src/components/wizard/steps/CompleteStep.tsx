@@ -16,7 +16,7 @@ export default function CompleteStep({ onComplete }: CompleteStepProps) {
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
-            className="relative mx-4 max-w-lg rounded-3xl border border-accent-1/20 bg-surface-1/85 p-10 text-center shadow-modal backdrop-blur-xl"
+            className="relative mx-4 my-auto max-w-lg rounded-3xl border border-accent-1/20 bg-surface-1/85 p-10 text-center shadow-modal backdrop-blur-xl"
         >
             <motion.div
                 initial={{ scale: 0 }}

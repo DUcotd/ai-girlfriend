@@ -38,7 +38,7 @@ export default function ApiConfigStep({
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="relative mx-4 max-w-md rounded-3xl border border-accent-1/20 bg-surface-1/85 p-8 shadow-modal backdrop-blur-xl"
+            className="relative mx-4 my-auto max-w-md rounded-3xl border border-accent-1/20 bg-surface-1/85 p-8 shadow-modal backdrop-blur-xl"
         >
             <div className="mb-6 flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-accent-1 to-accent-2">

@@ -43,7 +43,7 @@ export default function PersonalityPresetGrid({
         <span className="text-[10px] text-content-muted">切换预设会把当前浮动清零</span>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
         {presets.map((preset) => {
           const isActive = preset.id === activePresetId;
           return (

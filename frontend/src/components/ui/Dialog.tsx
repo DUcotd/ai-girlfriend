@@ -37,7 +37,10 @@ export default function Dialog({
         <div
             className={cn(
                 "flex max-h-[90vh] flex-col rounded-[28px] border border-accent-1/20",
+                // max-w 兜底：手机竖屏(375-430px)下 w-[520px] 这类写死宽度会溢出被裁，
+                // 钳到视口减 2rem（与 EmojiPicker 的既有做法一致），配合 Modal 的 p-4 不贴边
                 "bg-surface-1/95 text-content-primary shadow-modal backdrop-blur-[30px]",
+                "max-w-[calc(100vw-2rem)]",
                 widthClassName,
                 className
             )}

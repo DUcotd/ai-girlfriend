@@ -54,7 +54,7 @@ export default function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-[hsl(var(--bg-start))] to-[hsl(var(--bg-end))]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-gradient-to-br from-[hsl(var(--bg-start))] to-[hsl(var(--bg-end))]">
             {/* 背景装饰 */}
             <div className="pointer-events-none absolute inset-0 overflow-hidden">
                 <div className="absolute left-10 top-10 h-32 w-32 animate-pulse rounded-full bg-accent-1/30 blur-3xl" />

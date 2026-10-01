@@ -142,7 +142,8 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div className="px-4 pb-4 pt-2 md:px-6 md:pb-6">
+        {/* safe-area 兜底 iOS 全面屏底部横条（桌面/Android 无 env 值时回落 0） */}
+        <div className="px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-2 md:px-6 md:pb-6">
           <ChatInput
             input={input}
             onInputChange={setInput}

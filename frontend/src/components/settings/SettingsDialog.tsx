@@ -232,7 +232,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 onClose={onClose}
                 widthClassName="w-[520px]"
                 className="overflow-hidden"
-                bodyClassName="flex p-0"
+                bodyClassName="flex flex-col p-0 md:flex-row"
                 footer={
                     <div className="flex justify-end">
                         <Button
@@ -248,7 +248,8 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 {/* Sidebar Tabs */}
                 {/* 6 个竖排按钮必须装进 h-[420px]：py-2 + gap-1.5（原 5 Tab 用的 py-3 + gap-2
                     会溢出约 28px，最后一个按钮被裁切） */}
-                <div className="flex w-32 flex-col gap-1.5 border-r border-line-subtle bg-surface-2/30 p-3">
+                {/* 窄屏（<md）改为顶部横排、可横向滑动；md 起恢复左侧纵排 */}
+                <div className="flex w-full shrink-0 flex-row gap-1.5 overflow-x-auto border-b border-line-subtle bg-surface-2/30 p-3 md:w-32 md:flex-col md:border-b-0 md:border-r">
                     {tabs.map((tab) => (
                         <button
                             key={tab.id}
@@ -256,7 +257,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                             className={cn(
                                 // border 常驻（未激活用 transparent），避免激活态增删边框改变高度，
                                 // 点击切换时下方按钮会整体位移（UI 抽动）
-                                "flex flex-col items-center justify-center gap-1.5 rounded-2xl border py-2",
+                                "flex flex-row items-center gap-2 rounded-2xl border px-3 py-2 md:flex-col md:justify-center md:gap-1.5 md:px-0",
                                 "transition-colors duration-fast ease-out-expo",
                                 activeTab === tab.id
                                     ? "border-line-subtle bg-surface-1 text-accent-strong shadow-sm dark:text-accent-1"
@@ -264,7 +265,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                             )}
                         >
                             <tab.icon size={20} />
-                            <span className="text-[10px] font-bold uppercase tracking-wider">{tab.label}</span>
+                            <span className="whitespace-nowrap text-[10px] font-bold uppercase tracking-wider">{tab.label}</span>
                         </button>
                     ))}
                 </div>
@@ -273,7 +274,8 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 {/* scrollbar-gutter: stable 让滚动条槽位常驻：各页签内容高度不同，
                     否则滚动条来回出现/消失会让内容区宽度跳变 8px */}
                 {/* overflow-x-hidden 兜住页签切换动画的 x 位移，避免水平滚动条闪现 */}
-                <div className="h-[420px] flex-1 overflow-y-auto overflow-x-hidden p-6 [scrollbar-gutter:stable]">
+                {/* 窄屏用 60vh：标签行占掉一行后，420px 固定高会顶着 max-h-90vh 让 body 出现整卷滚动 */}
+                <div className="h-[60vh] flex-1 overflow-y-auto overflow-x-hidden p-6 [scrollbar-gutter:stable] md:h-[420px]">
                     <AnimatePresence mode="wait">
                         <motion.div
                             key={activeTab}

@@ -22,7 +22,7 @@ export default function WelcomeStep({ onNext }: WelcomeStepProps) {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="relative mx-4 max-w-lg rounded-3xl border border-accent-1/20 bg-surface-1/85 p-10 text-center shadow-modal backdrop-blur-xl"
+            className="relative mx-4 my-auto max-w-lg rounded-3xl border border-accent-1/20 bg-surface-1/85 p-10 text-center shadow-modal backdrop-blur-xl"
         >
             {/* Logo */}
             <motion.div
