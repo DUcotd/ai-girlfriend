@@ -12,16 +12,25 @@ import dotenv from 'dotenv';
 import Memory from './Memory.js';
 import TaskManager, { REMINDER_KIND, REMINDER_FIELD } from './TaskManager.js';
 import EmotionEngine from './EmotionEngine.js';
+import UserEmotionEngine from './UserEmotionEngine.js';
+import { TRIGGER_EVENTS } from './triggerEvents.js';
+import NarrativeStore from './narrative/NarrativeStore.js';
+import NarrativeExtractor from './narrative/NarrativeExtractor.js';
+import NarrativeRetriever from './narrative/NarrativeRetriever.js';
+import { EmbeddingClient } from './memory/EmbeddingClient.js';
+import { normalizeText as normalizeForDedup } from './memory/textSim.js';
+import { setEventLayerEnabled, isEventLayerEnabled } from './TriggerRegistry.js';
 import PersonalityDrift from './PersonalityDrift.js';
 import AffinityEngine from './AffinityEngine.js';
 import { PERSONA_SYSTEM_PROMPT, buildSystemContext } from './prompts/systemPrompt.js';
+import { buildNarrativeContext } from './prompts/narrativePrompt.js';
 import { buildRelationshipContext } from './prompts/relationshipContext.js';
 import { buildProactivePrompt, buildProactiveDirective, buildProactivePersonaDirective } from './prompts/proactivePrompts.js';
 import { buildTaskContextText, buildTaskActionInstruction, buildTaskNudgeText, pickNudgeTasks } from './prompts/taskPrompt.js';
 import { executeTaskAction } from './taskActions.js';
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
 import { config, REASONING_EFFORTS } from '../config.js';
-import { createStreamFilter, splitDelta, extractReasoning } from './streamFilter.js';
+import { createStreamFilter, splitDelta, extractReasoning, parseFullText } from './streamFilter.js';
 
 dotenv.config();
 
@@ -82,13 +91,74 @@ class AiGirlfriend {
         });
 
         this.emotionEngine = new EmotionEngine();
+        // 用户情绪识别通道（REQ-01）：与 emotionEngine 解耦，只描述「用户」的情绪。
+        this.userEmotionEngine = new UserEmotionEngine();
+        // 共同经历叙事层（REQ-03，I7）：从 episodes 派生「我们的故事」，独立落 narrative.json。
+        // 复用主对话客户端（getChatClient 与 memory 同款，配置热更新后拿到当前实例）。
+        this.narrativeStore = new NarrativeStore();
+        this.narrativeExtractor = new NarrativeExtractor({
+            getClient: () => (this.openai ? { client: this.openai, model: this.modelName } : null),
+            store: this.narrativeStore,
+        });
+        // 叙事检索复用记忆层的嵌入通道（同一套 embedding Key）；无嵌入时自动走关键词。
+        this.narrativeRetriever = new NarrativeRetriever({
+            store: this.narrativeStore,
+            embedding: this.memory?.embedding || null,
+        });
+        // 叙事抽取串行队列 + 轮次计数 + 世代号（清空后作废在途抽取，防复活）
+        this._narrativeQueue = Promise.resolve();
+        this._narrativeGeneration = 0;
+        this._turnCount = 0;
+        this._recentStoryIds = new Set();
         this.personalityDrift = new PersonalityDrift();
         console.log(`[AiGirlfriend] Emotion: ${this.emotionEngine.getEmotionLabel()}, Personality: ${this.personalityDrift.getDominantTraits().join(', ')}`);
 
         this.openai = null;
         this._chatQueue = Promise.resolve();
+        // REQ-04 事件层（I16）：由 container.js 通过 attachEventBus() 注入；
+        // 缺省为 null 时所有发布点静默 no-op（emit 走可选链），保证未装配事件层时零行为变更。
+        this.eventBus = null;
+        // 触发源注册表引用（可选，container 通过 attachTriggerRegistry 注入）：
+        // 仅为 resetAll 能一并清空事件队列/冷却/去重标记；未注入时跳过该步，行为同改造前。
+        this.triggerRegistry = null;
         if (this.apiKey) {
             this.initOpenAI();
+        }
+    }
+
+    /**
+     * 注入事件总线（REQ-04，容器装配时调用）。
+     * 事件发布全部走 _emitEvent()，未注入时为空操作，绝不抛错、绝不阻塞主链路。
+     * @param {import('./EventBus.js').EventBus} bus
+     */
+    attachEventBus(bus) {
+        this.eventBus = bus || null;
+        return this.eventBus;
+    }
+
+    /**
+     * 注入触发源注册表引用（REQ-04，容器装配时调用）。
+     * 仅用于 resetAll() 一并清空事件队列/冷却/去重标记；不注入时该步自动跳过，
+     * 保证「未装配事件层」的行为与改造前一致。
+     * @param {object} registry - TriggerRegistry 实例（需有 reset()）
+     */
+    attachTriggerRegistry(registry) {
+        this.triggerRegistry = registry || null;
+        return this.triggerRegistry;
+    }
+
+    /**
+     * 安全发布一个业务事件（REQ-04）。事件层未装配 / emit 抛错都只记日志，
+     * 绝不影响调用方（对照 I16 的低风险约束）。
+     * @param {string} event - 事件名（取自 core/triggerEvents.js 的 TRIGGER_EVENTS）
+     * @param {object} payload
+     */
+    _emitEvent(event, payload) {
+        if (!this.eventBus || typeof this.eventBus.emit !== 'function') return;
+        try {
+            this.eventBus.emit(event, payload);
+        } catch (e) {
+            console.error(`[Chat] emit '${event}' failed: ${e.message || e}`);
         }
     }
 
@@ -271,8 +341,10 @@ class AiGirlfriend {
     /**
      * 回复生成后的收尾：记忆 embedding + 状态落盘。
      * 这些都不在用户等待的关键路径上，改为后台执行，失败只记日志。
+     *
+     * @param {number} affinityDelta 本轮好感度变化（供叙事层「好感度跃迁」信号判定，REQ-03）
      */
-    _persistAfterReply(userInput, replyText) {
+    _persistAfterReply(userInput, replyText, llmUserEmotion = null, affinityDelta = 0) {
         // 快照要在当前 tick 取，避免后台执行时读到已被后续对话改动的状态
         const snapshot = this.emotionEngine.getSnapshot();
         setImmediate(() => {
@@ -280,6 +352,46 @@ class AiGirlfriend {
                 this.memory
                     .recordTurn(userInput, replyText, { emotionSnapshot: snapshot })
                     .catch((e) => console.error(`[Chat] recordTurn failed: ${e.message}`));
+            }
+            // 用户情绪摄入（REQ-01，I3）：融合词表 + LLM metadata，更新时间线与状态。
+            // 在后台路径执行，不阻塞响应；失败只记日志，绝不影响主链路。
+            let userEmotionTurned = false;
+            let userEmotionResult = null;
+            try {
+                if (this.userEmotionEngine) {
+                    const r = this.userEmotionEngine.ingestTurn(userInput, replyText, llmUserEmotion);
+                    userEmotionTurned = !!(r && r.turned);
+                    userEmotionResult = r;
+                }
+            } catch (e) {
+                console.error(`[Chat] userEmotion ingestTurn failed: ${e.message}`);
+            }
+            // 【REQ-04 / I16】情绪强转折 → 发布 user_emotion_turn 事件。
+            // 只在 turned=true 时发布（弱波动交给定时轮询兜底），最大限度减少无谓派发。
+            if (userEmotionTurned && userEmotionResult) {
+                const cur = userEmotionResult.current || {};
+                this._emitEvent(TRIGGER_EVENTS.USER_EMOTION_TURN, {
+                    valence: cur.valence ?? 0,
+                    arousal: cur.arousal ?? 0,
+                    intensity: cur.intensity ?? 0,
+                    label: cur.label ?? '',
+                    turned: true,
+                    trend: userEmotionResult.trend || null,
+                    ts: Date.now(),
+                });
+            }
+            // 【REQ-04 / I16】叙事里程碑 → 发布 narrative_milestone 事件（纪念日 / 约定）。
+            // 放在抽取调度之后：里程碑从叙事库派生，emit 时读取的是当前已入库的叙事。
+            try {
+                this._publishNarrativeMilestones();
+            } catch (e) {
+                console.error(`[Chat] publishNarrativeMilestones failed: ${e.message}`);
+            }
+            // 共同经历叙事抽取（REQ-03，I9）：三层节流命中才调 LLM，写入叙事库。
+            try {
+                this._scheduleNarrativeExtraction(userInput, replyText, { affinityDelta, userEmotionTurned });
+            } catch (e) {
+                console.error(`[Chat] narrative extraction schedule failed: ${e.message}`);
             }
             try {
                 this._saveState();
@@ -353,6 +465,34 @@ class AiGirlfriend {
         const nudgeTaskIds = nudgeText ? pickNudgeTasks(pendingTasks, nowDate).map(t => t.id) : [];
         const taskActionText = [buildTaskActionInstruction(), nudgeText].filter(Boolean).join('\n\n');
 
+        // ========== 用户情绪识别（REQ-01，I2） ==========
+        // 词表分析当轮即得、零网络成本；这里先 analyze 一次给 prompt 注入用。
+        // 全链路容错：任何异常都降级为空段，绝不打断主对话。
+        let userEmotionPrompt = '';
+        try {
+            if (this.userEmotionEngine) {
+                this.userEmotionEngine.analyze(userInput); // 预热（ingestTurn 会再次融合，纯计算无副作用）
+                userEmotionPrompt = this.userEmotionEngine.getPromptInjection();
+            }
+        } catch (e) {
+            console.error(`[Chat] userEmotion prompt injection failed: ${e.message}`);
+            userEmotionPrompt = '';
+        }
+
+        // ========== 共同经历叙事（REQ-03，I8） ==========
+        // 从叙事池检索与本轮相关的 [我们的故事] 段（topK 2-3、整体 300 字内）。
+        // 全链路容错：检索/构建失败一律降级为空段，绝不打断主对话。
+        let narrativePrompt = '';
+        try {
+            if (this._narrativeEnabled() && this.narrativeRetriever && this.narrativeStore.narratives.length > 0) {
+                const hits = await this.narrativeRetriever.getRelevantNarratives(userInput);
+                narrativePrompt = buildNarrativeContext(hits);
+            }
+        } catch (e) {
+            console.error(`[Chat] narrative prompt injection failed: ${e.message}`);
+            narrativePrompt = '';
+        }
+
         // ========== 构建消息 ==========
         // 只把最近若干条历史送进 prompt：上下文越短，prefill 与生成都越快。
         // 完整历史仍持久化在 state.json，不受影响。
@@ -366,6 +506,8 @@ class AiGirlfriend {
             emotionPrompt: this.emotionEngine.getPromptInjection(),
             personalityPrompt: this.personalityDrift.getPromptInjection(),
             styleGuide: this.emotionEngine.getStyleGuide(),
+            userEmotionPrompt,
+            narrativePrompt,
             taskActionText,
         });
         messagesToSend.push({ role: "system", content: consolidatedSystemInfo });
@@ -400,7 +542,11 @@ class AiGirlfriend {
      * 任务动作执行、情绪更新、好感度校验、历史写入与裁剪。
      */
     _finalize(parsed, userInput, usage, { nudgeTaskIds = [] } = {}) {
-        const { replyText, affinityChange, emotionDelta, innerThought, modelReasoning, taskAction } = parsed;
+        const { replyText, affinityChange, emotionDelta, innerThought, modelReasoning, taskAction, llmUserEmotion } = parsed;
+
+        // 轮次计数（REQ-03 叙事抽取的「轮次节流」依赖它）：只统计真正走完 LLM 的一轮。
+        // 放在 _finalize 而非 _prepare：ghosting 早退不算有效轮，避免虚增轮次。
+        this._turnCount += 1;
 
         // 任务意图：直接拿本次 LLM 回复的 metadata 执行，**不新增任何网络往返**。
         // 执行结果只走 taskResult 字段下发，绝不拼进 replyText（气泡里不该出现埋点式文字）。
@@ -453,7 +599,8 @@ class AiGirlfriend {
         }
 
         // 回复已经生成完毕，记忆 embedding 与落盘不再阻塞响应
-        this._persistAfterReply(userInput, replyText);
+        // affinity 变化（change）同时传给叙事层做「好感度跃迁」关键信号判定（REQ-03）
+        this._persistAfterReply(userInput, replyText, llmUserEmotion, change);
 
         return {
             reply: replyText,
@@ -555,14 +702,10 @@ class AiGirlfriend {
             // 以实际流式展示给用户的正文为准，保证界面显示与历史记录一致
             if (visibleText.trim()) {
                 parsed.replyText = visibleText.trim();
-            } else if (parsed.innerThought || parsed.modelReasoning) {
-                // 正文为空（模型只输出了独白/CoT/元数据）时，_parseReplyText 的正则剥离
-                // 分支被 hints 短路，标签原文会残留在 replyText 里直接下发到气泡——补一刀
-                parsed.replyText = parsed.replyText
-                    .replace(/<monologue>[\s\S]*?<\/monologue>/g, "")
-                    .replace(/<think>[\s\S]*?<\/think>/g, "")
-                    .trim();
             }
+            // 注：正文为空（模型只输出了独白/CoT/元数据）时，此前这里再手写一刀正则剥离标签，
+            // 现在已无必要——_parseReplyText 的 replyText 来自 streamFilter.parseFullText()
+            // 单一真源，三类标签（含未闭合 metadata）都会被状态机统一剥离，不会残留在气泡里。
             return this._finalize(parsed, userInput, null, { nudgeTaskIds });
         } catch (e) {
             console.error(`Chat Stream Error: ${e}`);
@@ -623,34 +766,31 @@ class AiGirlfriend {
      */
     _parseReplyText(fullContent, userInput, hints = {}) {
         const raw = fullContent || "";
-        let replyText = raw;
         let emotion = "default";
         let affinityChange = 0;
         let emotionDelta = null;
         let innerThought = null;
         let modelReasoning = null;
-        let metadataJson = null;
         let taskAction = null;
+        let llmUserEmotion = null;
 
-        // ---- 人设内心独白 <monologue> ----
-        let monologue = (hints.monologue || "").trim();
-        if (!monologue) {
-            const m = raw.match(/<monologue>(.*?)<\/monologue>/s);
-            if (m) {
-                monologue = m[1].trim();
-                replyText = replyText.replace(m[0], "").trim();
-            }
-        }
+        // ---- 标签剥离：单一真源 ----
+        // 「三类标签如何被识别与剥离」只有 streamFilter 一处实现。
+        // 流式路径由调用方（chat 流）把已分离好的片段作为 hints 传入，此处直接采信、
+        // 绝不被下面 parseFullText 的结果覆盖——这是 hints 短路的承诺。
+        // 非流式路径（无 hints）才走状态机的一次性等价实现 parseFullText()，
+        // 它与逐字符流式喂入结果一致（对照测试锁定），且同样处理未闭合 metadata 截断。
+        const parsed = parseFullText(raw);
+        let replyText = hints.replyText != null ? hints.replyText : parsed.replyText;
 
-        // ---- 模型 CoT（正文里的 <think>）----
-        let cot = (hints.cot || "").trim();
-        if (!cot) {
-            const t = raw.match(/<think>(.*?)<\/think>/s);
-            if (t) {
-                cot = t[1].trim();
-                replyText = replyText.replace(t[0], "").trim();
-            }
-        }
+        // 人设内心独白 <monologue>
+        const monologue = (hints.monologue || parsed.monologue || "").trim();
+
+        // 模型 CoT（正文里的 <think>）
+        const cot = (hints.cot || parsed.cot || "").trim();
+
+        // metadata 文本：hints 优先（流式已分离，含未闭合残片），否则用状态机结果
+        const metadataText = hints.metadata != null ? hints.metadata : parsed.metadata;
 
         // ---- 模型 CoT（原生 reasoning_content 通道）----
         const native = (hints.reasoning || "").trim();
@@ -674,31 +814,10 @@ class AiGirlfriend {
         }
 
         // ---- 元数据 ----
-        if (hints.metadata) {
-            metadataJson = hints.metadata;
-            // 正文里可能残留标签片段，一并清掉（含未闭合的情况）
-            replyText = replyText
-                .replace(/<metadata>[\s\S]*?<\/metadata>/s, "")
-                .replace(/<metadata>[\s\S]*$/s, "")
-                .trim();
-        } else {
-            const match = replyText.match(/<metadata>\s*({.*?})\s*<\/metadata>/s)
-                || raw.match(/<metadata>\s*({.*?})\s*<\/metadata>/s);
-            if (match) {
-                replyText = replyText.replace(match[0], "").trim();
-                metadataJson = match[1];
-            } else {
-                // 未闭合的 <metadata>（生成被 max_tokens 截断在 metadata 中间）：
-                // 流式路径会把残片收进 metadata hint、不进气泡；非流式这里对齐同一行为，
-                // 否则截断的 JSON 原文会直接展示给用户
-                const unclosed = replyText.match(/<metadata>\s*([\s\S]*)$/s)
-                    || raw.match(/<metadata>\s*([\s\S]*)$/s);
-                if (unclosed) {
-                    metadataJson = unclosed[1];
-                    replyText = replyText.replace(/<metadata>[\s\S]*$/s, "").trim();
-                }
-            }
-        }
+        // 无论 hints 还是状态机，得到的都已是「剥离标签后的 JSON 文本」（含未闭合残片）。
+        // 未闭合场景（生成被 max_tokens 截断在 metadata 中间）由状态机统一收敛，
+        // 残片不会残留进 replyText，因此不会展示给用户——与流式路径行为一致。
+        const metadataJson = (metadataText || "").trim() || null;
 
         if (metadataJson) {
             try {
@@ -709,12 +828,14 @@ class AiGirlfriend {
                 emotionDelta = metadata.emotion_delta || null;
                 // 任务意图：老模型不输出这个字段时恒为 null，下游行为完全不变（向后兼容）
                 taskAction = metadata.task_action ?? null;
+                // 用户情绪（REQ-01）：可选字段，老模型不返回时恒为 null，下游纯用词表兜底
+                llmUserEmotion = metadata.user_emotion ?? null;
             } catch (e) {
                 console.error(`Metadata parse error: ${e}. Raw: ${metadataJson}`);
             }
         }
 
-        return { replyText, emotion, affinityChange, emotionDelta, innerThought, modelReasoning, taskAction };
+        return { replyText, emotion, affinityChange, emotionDelta, innerThought, modelReasoning, taskAction, llmUserEmotion };
     }
 
     // ==================== 主动消息生成 ====================
@@ -761,21 +882,18 @@ class AiGirlfriend {
             });
 
             const content = completion.choices[0].message.content;
-            // 主动消息直接进气泡，CoT 与独白标签一并清掉（万一模型带了出来）
-            let reply = content
-                .replace(/<think>[\s\S]*?<\/think>/gs, "")
-                .replace(/<monologue>[\s\S]*?<\/monologue>/gs, "")
-                .trim();
+            // 主动消息直接进气泡：三类标签（含 CoT 与独白）一并清掉（万一模型带了出来）。
+            // 这里不再手写正则——同一套「标签如何被识别与剥离」的规则收敛到
+            // streamFilter.parseFullText() 单一真源，避免未来标签格式变更漏改此处。
+            const parsed = parseFullText(content || "");
+            let reply = parsed.replyText.trim();
             let emotion = "default";
 
-            const metadataRegex = /<metadata>\s*({.*?})\s*<\/metadata>/s;
-            const match = content.match(metadataRegex);
-            if (match) {
-                reply = reply.replace(match[0], "").trim();
+            const metadataJson = (parsed.metadata || "").trim();
+            if (metadataJson) {
                 try {
-                    let metadataJson = match[1];
-                    metadataJson = metadataJson.replace(/:\s*\+([0-9]+)/g, ': $1');
-                    const metadata = JSON.parse(metadataJson);
+                    const normalized = metadataJson.replace(/:\s*\+([0-9]+)/g, ': $1');
+                    const metadata = JSON.parse(normalized);
                     emotion = metadata.emotion || "default";
                 } catch (e) {
                     console.error("[AiGirlfriend] Metadata parse error in proactive:", e);
@@ -856,20 +974,87 @@ class AiGirlfriend {
     }
 
     /**
-     * 完全重置：清对话历史 + 好感度 + 长期记忆（设置页「完全重置」的语义）。
+     * 完全重置：清对话历史 + 好感度 + 性格 + 情绪 + 任务 + 长期记忆
+     * （设置页「完全重置」的语义）。
      *
      * 与 clearHistory() 的区别就在「要不要抹掉整段关系」。affinityEngine.reset()
      * 与 memory.clearMemory() 各自会落盘，这里最后再补一次 _saveState() 把
-     * history 一并收尾，保证三份数据同批落盘。
+     * history 一并收尾，保证多份数据同批落盘。
+     *
+     * 清理范围（7 类，第 7 类仅在事件层已装配时生效）：
+     *   1. history        → data/state.json（保留 system prompt）
+     *   2. affinityEngine → data/affinity_state.json（好感度/账本/增益）
+     *   3. personalityDrift → data/personality_state.json（性格回预设）
+     *   4. emotionEngine  → data/emotion_state.json（情绪回初值）
+     *   5. userEmotionEngine → data/user_emotion_state.json（用户情绪时间线，REQ-01）
+     *   6. narrative      → data/narrative.json（共同经历叙事，REQ-03）
+     *   7. TaskManager    → data/tasks.json（任务全清）
+     *   8. memory         → data/memory.json（情节+事实）
+     *   9. triggerRegistry→ data/trigger_state.json（事件队列/冷却/去重，REQ-04，可选）
+     *
+     * 容错策略：各引擎独立重置，任一失败只记录并继续，最后把失败的引擎名回传，
+     * 避免「某个引擎抛错导致后续引擎全部没重置」的半重置状态。
+     * （真正的事务回滚需要跨文件快照，成本过高；这里保证「尽力全部重置」并把
+     *   失败面如实暴露给调用方与日志，好过静默留下半重置。）
+     *
+     * @returns {{ reset: string[], failed: { step: string, message: string }[] }}
      */
     resetAll() {
-        this.history = [{ role: "system", content: this.systemPrompt }];
-        this.affinityEngine.reset();
-        this.personalityDrift.reset();
-        if (this.memory) {
-            this.memory.clearMemory();
+        /** 依次执行的重置步骤；每步独立容错 */
+        const steps = [
+            ['history', () => {
+                this.history = [{ role: "system", content: this.systemPrompt }];
+            }],
+            ['affinity', () => this.affinityEngine.reset()],
+            ['personality', () => this.personalityDrift.reset()],
+            ['emotion', () => this.emotionEngine?.reset()],
+            ['userEmotion', () => this.userEmotionEngine?.reset()],
+            ['narrative', () => this._resetNarratives()],
+            ['tasks', () => TaskManager.clearAll()],
+            ['memory', () => this.memory?.clearMemory()],
+        ];
+        // 事件层重置（REQ-04）：仅当容器注入了 registry 才纳入，避免把「未装配」当成功重置。
+        // registry.reset() 清空事件队列 + 冷却 + 去重标记（内部全防御式，不会抛）。
+        if (this.triggerRegistry) {
+            steps.push(['triggerRegistry', () => this.triggerRegistry.reset()]);
         }
-        this._saveState();
+
+        const reset = [];
+        const failed = [];
+        for (const [name, run] of steps) {
+            try {
+                run();
+                reset.push(name);
+            } catch (e) {
+                // 不中断——继续重置剩余引擎，把失败项收集起来
+                failed.push({ step: name, message: e?.message || String(e) });
+                console.error(`[AiGirlfriend] resetAll: step "${name}" failed: ${e?.message || e}`);
+            }
+        }
+
+        // 收尾落盘（history 无独立落盘点，靠这里写入；其余引擎已各自落盘）
+        try {
+            this._saveState();
+        } catch (e) {
+            failed.push({ step: 'state', message: e?.message || String(e) });
+            console.error(`[AiGirlfriend] resetAll: final _saveState failed: ${e?.message || e}`);
+        }
+
+        return { reset, failed };
+    }
+
+    /**
+     * 重置叙事层（「完全重置」的一步）：清空叙事池与轮次计数，作废在途抽取，立即落盘。
+     * 与记忆层独立：叙事清空不影响 MemoryStore，反之亦然。
+     */
+    _resetNarratives() {
+        this._narrativeGeneration++;
+        this._turnCount = 0;
+        this._recentStoryIds.clear();
+        if (this.narrativeStore) {
+            this.narrativeStore.clear();
+            this.narrativeStore._saveNow();
+        }
     }
 
     getSystemPrompt() {
@@ -970,6 +1155,33 @@ class AiGirlfriend {
             }
         }
 
+        // 陪伴感增强子系统开关（REQ-01/03/04）：与 memory 同款「运行时参数」处理，
+        // 改这些不需要动任何客户端。关闭态语义 = 完全退回改造前行为（关闭态安全）。
+        let companionParamsChanged = false;
+        if (cfg.userEmotionEnabled !== undefined) {
+            const next = !!cfg.userEmotionEnabled;
+            if (config.userEmotion.enabled !== next) {
+                config.userEmotion.enabled = next;
+                companionParamsChanged = true;
+            }
+        }
+        if (cfg.narrativeEnabled !== undefined) {
+            const next = !!cfg.narrativeEnabled;
+            if (config.narrative.enabled !== next) {
+                config.narrative.enabled = next;
+                companionParamsChanged = true;
+            }
+        }
+        // 事件层总开关：走 TriggerRegistry 的 setEventLayerEnabled（模块级变量，唯一写点），
+        // 不直接改 config.triggerRegistry.enabled —— 后者是常量默认值，模块级变量才是运行时态。
+        if (cfg.triggerEnabled !== undefined) {
+            const next = !!cfg.triggerEnabled;
+            if (isEventLayerEnabled() !== next) {
+                setEventLayerEnabled(next);
+                companionParamsChanged = true;
+            }
+        }
+
         if (paramsChanged) {
             const p = this.getChatParams();
             console.log(
@@ -982,6 +1194,13 @@ class AiGirlfriend {
             console.log(
                 `[Config] Memory: facts=${config.memory.facts.enabled ? 'on' : 'off'}, ` +
                 `mode=${config.memory.retrieval.mode} (effective: ${this.memory?.retriever.resolveMode() ?? '?'})`
+            );
+        }
+        if (companionParamsChanged) {
+            console.log(
+                `[Config] Companion: userEmotion=${config.userEmotion.enabled ? 'on' : 'off'}, ` +
+                `narrative=${config.narrative.enabled ? 'on' : 'off'}, ` +
+                `eventLayer=${isEventLayerEnabled() ? 'on' : 'off'}`
             );
         }
 
@@ -1049,6 +1268,238 @@ class AiGirlfriend {
             ...(this.memory ? this.memory.getStats() : { episodeCount: 0, factCount: 0, retrievalMode: 'keyword' }),
             factsEnabled: config.memory.facts.enabled,
         };
+    }
+
+    /**
+     * 供 /config/status：陪伴感增强三个子系统的当前生效开关（REQ-01/03/04）。
+     * 事件层开关取模块级运行时态（isEventLayerEnabled），与纯 config 常量区分。
+     */
+    getCompanionStatus() {
+        return {
+            userEmotionEnabled: config.userEmotion.enabled,
+            narrativeEnabled: config.narrative.enabled,
+            // 事件层运行时开关（可由 POST /config 热更新）
+            triggerEnabled: isEventLayerEnabled(),
+            // 事件层配置块（唯一事实源：core/triggerEvents.js TRIGGER_REGISTRY_CONFIG）
+            triggerRegistry: { ...config.triggerRegistry },
+        };
+    }
+
+    // ==================== 共同经历叙事层（REQ-03） ====================
+
+    /** 叙事层是否启用（总开关 + 依赖就绪）。 */
+    _narrativeEnabled() {
+        return config.narrative.enabled && !!this.narrativeStore;
+    }
+
+    /**
+     * 后台触发一次叙事抽取（串行队列；三层节流在 extractor 内判定，未命中不调 LLM）。
+     *
+     * 节流判定所需的结构化上下文：
+     *   - turnCount          轮次节流依据（本类维护）
+     *   - affinityDelta      好感度单轮跃迁（信号层）
+     *   - userEmotionTurned  用户情绪强转折（信号层，来自 REQ-01 引擎）
+     * 文本信号（第一次/约定/纪念日词）由 extractor 在合并 userInput+replyText 后自查。
+     *
+     * @param {string} userInput
+     * @param {string} replyText
+     * @param {{affinityDelta?:number, userEmotionTurned?:boolean}} ctx
+     */
+    _scheduleNarrativeExtraction(userInput, replyText, ctx = {}) {
+        if (!this._narrativeEnabled()) return;
+        // 轮次节流在入队前先做一次快速判定，避免每轮都往队列塞任务
+        if (this._turnCount % config.narrative.extractEveryNTurns !== 0) return;
+
+        const generation = this._narrativeGeneration;
+        const turnCount = this._turnCount;
+        this._narrativeQueue = this._narrativeQueue
+            .then(async () => {
+                // 期间叙事库被清空（resetAll）→ 本轮抽取作废，防清空后残留叙事复活
+                if (generation !== this._narrativeGeneration) return;
+                const { extracted, ops } = await this.narrativeExtractor.maybeExtract(userInput, replyText, {
+                    turnCount,
+                    affinityDelta: ctx.affinityDelta,
+                    userEmotionTurned: ctx.userEmotionTurned,
+                });
+                if (!extracted) return;
+                const changed = ops.add.length + ops.update.length + ops.delete.length;
+                if (changed === 0) {
+                    // 抽了但无变化也记一次抽取时间，避免短时间内反复触发 LLM
+                    this.narrativeStore.setStats({ lastExtractTurn: turnCount, lastExtractAt: Date.now() });
+                    this.narrativeStore.scheduleSave();
+                    return;
+                }
+                if (generation !== this._narrativeGeneration) return;
+                await this._applyNarrativeOps(ops);
+                this.narrativeStore.setStats({ lastExtractTurn: turnCount, lastExtractAt: Date.now() });
+                this.narrativeStore.scheduleSave();
+                console.log(`[Narrative] Story: +${ops.add.length} ~${ops.update.length} -${ops.delete.length}`);
+            })
+            .catch((e) => console.error(`[Narrative] extraction failed: ${e.message}`));
+    }
+
+    /**
+     * 应用 LLM 返回的叙事操作（add/update/delete），与事实库 _applyFactOps 同构。
+     * add 会算嵌入（可用时）用于后续语义检索；delete 直接按 id 移除。
+     */
+    async _applyNarrativeOps(ops) {
+        // delete
+        for (const id of ops.delete) {
+            this.narrativeStore.removeNarrative(id);
+        }
+
+        // update
+        for (const upd of ops.update) {
+            const norm = NarrativeExtractor.normalizeUpdate(upd);
+            if (!norm) continue;
+            const updated = this.narrativeStore.updateNarrative(norm.id, norm);
+            // 摘要变更后重算嵌入，保证语义检索用最新文本
+            if (updated && norm.summary && this.memory?.embedding) {
+                try {
+                    const emb = await this.memory.embedding.embed(`${updated.title} ${updated.summary}`);
+                    if (emb) {
+                        updated.embedding = emb;
+                        updated.embeddingModel = this.memory.embedding.model;
+                    }
+                } catch (e) {
+                    console.error(`[Narrative] update embedding failed: ${e.message}`);
+                }
+            }
+        }
+
+        // add（单轮上限，防批量灌库）
+        const adds = ops.add.slice(0, config.narrative.maxAddPerExtract);
+        for (const add of adds) {
+            const norm = NarrativeExtractor.normalizeAdd(add);
+            if (!norm) continue;
+            if (this._isDuplicateNarrative(norm)) continue;
+            let embedding = null;
+            let embeddingModel = null;
+            if (this.memory?.embedding) {
+                try {
+                    embedding = await this.memory.embedding.embed(`${norm.title} ${norm.summary}`);
+                    embeddingModel = embedding ? this.memory.embedding.model : null;
+                } catch (e) {
+                    console.error(`[Narrative] add embedding failed: ${e.message}`);
+                }
+            }
+            this.narrativeStore.addNarrative({ ...norm, embedding, embeddingModel });
+        }
+    }
+
+    /**
+     * 叙事写入去重：标题归一化后互为包含即视为同一事件。
+     * 嵌入可用时再叠加余弦判定（参照 FactExtractor.isDuplicateFact 范式）。
+     * @param {object} candidate { title, summary, embedding? }
+     * @returns {boolean}
+     */
+    _isDuplicateNarrative(candidate) {
+        const normTitle = normalizeForDedup(candidate.title);
+        const normSummary = normalizeForDedup(candidate.summary);
+        const threshold = config.narrative.dedupWriteSimilarity;
+        return this.narrativeStore.narratives.some((n) => {
+            const nt = normalizeForDedup(n.title);
+            const ns = normalizeForDedup(n.summary);
+            if (nt && normTitle && (nt === normTitle || nt.includes(normTitle) || normTitle.includes(nt))) {
+                return true;
+            }
+            if (ns && normSummary && (ns === normSummary || ns.includes(normSummary) || normSummary.includes(ns))) {
+                return true;
+            }
+            if (candidate.embedding && n.embedding) {
+                return EmbeddingClient.cosineSimilarity(candidate.embedding, n.embedding) > threshold;
+            }
+            return false;
+        });
+    }
+
+    /** 全量叙事导出（供路由 /state/narratives）。 */
+    getNarratives() {
+        if (!this.narrativeStore) return { narratives: [], stats: { total: 0 } };
+        return this.narrativeStore.getAll();
+    }
+
+    /** 手动删除一条叙事（A7：不级联，另给删除入口）。 */
+    deleteNarrative(id) {
+        if (!this.narrativeStore) return false;
+        const ok = this.narrativeStore.removeNarrative(id);
+        if (ok) {
+            this.narrativeStore.scheduleSave();
+            // 同步清理随机回顾的去重集合，避免残留 id 干扰后续挑选
+            this._recentStoryIds.delete(id);
+        }
+        return ok;
+    }
+
+    /** 即将到来的纪念日（REQ-04 触发源）。 */
+    getUpcomingAnniversaries(now = new Date(), withinDays) {
+        if (!this.narrativeRetriever) return [];
+        return this.narrativeRetriever.getUpcomingAnniversaries(now, withinDays);
+    }
+
+    /**
+     * 发布叙事里程碑事件（REQ-04 / I16）——纪念日与约定。
+     *
+     * 为什么要在这里统一发布：触发源 emotionTurnTrigger/anniversaryTrigger/promiseFollowupTrigger
+     * 只消费事件、不反向依赖 AiGirlfriend；由本类作为「事件发布方」把叙事层的产物翻译成事件。
+     *
+     * 两条发布线：
+     *   1. 纪念日：getUpcomingAnniversaries() 命中的每一条 → narrative_milestone（type='anniversary'）。
+     *   2. 约定：叙事库里 type='promise' 的事件 → narrative_milestone（type='promise'）。
+     * 事件层未装配时 _emitEvent 为空操作，本方法仍可安全调用（几乎零开销）。
+     */
+    _publishNarrativeMilestones(now = new Date()) {
+        if (!this.eventBus) return;              // 未装配事件层 → 直接跳过（O(1)）
+        if (!this.narrativeStore) return;
+
+        // —— 纪念日 ——
+        const anniversaries = this.getUpcomingAnniversaries(now);
+        for (const { narrative, daysUntil } of anniversaries) {
+            this._emitEvent(TRIGGER_EVENTS.NARRATIVE_MILESTONE, {
+                narrativeId: narrative.id,
+                type: 'anniversary',
+                title: narrative.title,
+                occurredAt: narrative.occurredAt,
+                anniversary: true,
+                daysUntil,
+            });
+        }
+
+        // —— 约定 ——
+        const promises = (this.narrativeStore.narratives || []).filter((n) => n.type === 'promise');
+        for (const n of promises) {
+            this._emitEvent(TRIGGER_EVENTS.NARRATIVE_MILESTONE, {
+                narrativeId: n.id,
+                type: 'promise',
+                title: n.title,
+                summary: n.summary,
+                occurredAt: n.occurredAt,
+                anniversary: false,
+                followupCount: Number.isFinite(n.followupCount) ? n.followupCount : 0,
+            });
+        }
+    }
+
+    /** 停机/兜底：立即落盘叙事库。 */
+    flushNarratives() {
+        try {
+            this.narrativeStore?.flush();
+        } catch (e) {
+            console.error(`[Narrative] flush failed: ${e.message}`);
+        }
+    }
+
+    /**
+     * 停机/兜底：立即落盘用户情绪时间线（REQ-01）。
+     * UserEmotionEngine 内部走去抖异步写盘，这里在停机前强制 flush，
+     * 避免最后一批时间线数据随进程退出丢失。
+     */
+    flushUserEmotion() {
+        try {
+            this.userEmotionEngine?.flush?.();
+        } catch (e) {
+            console.error(`[UserEmotion] flush failed: ${e.message}`);
+        }
     }
 }
 
