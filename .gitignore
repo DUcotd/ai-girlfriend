@@ -63,3 +63,12 @@ backend-node/diag-*.png
 
 # 本地修复备份（2026-09-30 修复前的源码快照，不入库）
 fix-backup-20260930/
+
+# 表情立绘生成管线工作目录（原始图/响应 JSON/脚本，不入库）
+.emote-gen/
+
+# 旧立绘备份（粉色系，2026-10-01 重绘前快照，不入库）
+backup-characters-pink-20261001/
+
+# ZCode 工作区（plans/workflows，不入库）
+.zcode/
