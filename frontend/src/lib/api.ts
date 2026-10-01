@@ -21,6 +21,38 @@ export const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
 /**
+ * 后端访问令牌在 localStorage 中的 key。
+ * 后端启用鉴权后（bearer token），前端所有请求都要带上 `Authorization` 头。
+ * 与后端环境变量 `AI_GIRLFRIEND_TOKEN` 对应，用户自行填入同名密钥即可。
+ */
+export const AUTH_TOKEN_STORAGE_KEY = "ai-girlfriend-token";
+
+/**
+ * 读取本地访问令牌；无 token / 非浏览器环境返回 undefined。
+ * 为空则不带 Authorization 头——兼容「后端未配置 token、本机守卫」的开箱场景。
+ */
+function getAuthToken(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const token = window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+    return token && token.trim() ? token.trim() : undefined;
+  } catch {
+    // localStorage 在隐私模式 / 禁用 Cookie 时可能抛异常，降级为「无 token」
+    return undefined;
+  }
+}
+
+/**
+ * 按需附加 Authorization 头：无 token 时保持原 headers 不变，
+ * 避免因多出空头导致后端 / 代理的兼容问题。
+ */
+function withAuth(headers: HeadersInit | undefined): HeadersInit | undefined {
+  const token = getAuthToken();
+  if (!token) return headers;
+  return { ...(headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` };
+}
+
+/**
  * UI 侧配置对象（camelCase，即 `lib/storage.getChatConfig()` 的返回形状）。
  *
  * ⚠️ 后端 `/config` 只认 snake_case（见 `toBackendConfigPayload`）。
@@ -97,7 +129,7 @@ export function toBackendConfigPayload(cfg: UiChatConfig) {
 
 /**
  * 统一请求封装：
- * - 自动带 Content-Type
+ * - 自动带 Content-Type 与鉴权 Authorization 头
  * - 区分「业务 4xx」与「网络错误」，失败时抛出带 detail 的 Error
  */
 async function request<T>(
@@ -105,11 +137,13 @@ async function request<T>(
   options: RequestInit & { raw?: boolean } = {}
 ): Promise<T> {
   const { raw, headers, ...rest } = options;
+  // 先合并业务头，再统一附加 Authorization（token 为空则不带头，兼容本地未配置场景）
+  const mergedHeaders = raw
+    ? headers
+    : { "Content-Type": "application/json", ...headers };
   const res = await fetch(`${BACKEND_URL}${path}`, {
     ...rest,
-    headers: raw
-      ? headers
-      : { "Content-Type": "application/json", ...headers },
+    headers: withAuth(mergedHeaders),
   });
 
   if (!res.ok && !raw) {
@@ -132,8 +166,17 @@ export const api = {
   /** 只清对话历史，保留好感度与记忆（「新对话」用） */
   clearHistory: () => request<{ status: string }>("/history", { method: "DELETE" }),
 
-  /** 完全重置：清空对话历史 + 记忆 + 好感度（设置页的「完全重置」用；「新对话」不要用它） */
-  resetAll: () => request<{ status: string }>("/reset", { method: "POST" }),
+  /**
+   * 完全重置：清空对话历史 + 记忆 + 好感度 + 性格 + 情绪 + 任务
+   * （设置页的「完全重置」用；「新对话」不要用它）。
+   * status === "partial" 表示有引擎重置失败，failed 列出失败步骤。
+   */
+  resetAll: () =>
+    request<{
+      status: "reset" | "partial";
+      reset: string[];
+      failed: { step: string; message: string }[];
+    }>("/reset", { method: "POST" }),
 
   getMemories: () => request<MemoriesResponse>("/memories"),
 
@@ -252,7 +295,7 @@ export const api = {
   ): Promise<ChatResponse> {
     const res = await fetch(`${BACKEND_URL}/chat/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: withAuth({ "Content-Type": "application/json" }),
       body: JSON.stringify({ message }),
       signal,
     });
@@ -327,7 +370,9 @@ export const api = {
 
   /** 拉取一条待展示的主动消息；无消息时返回 null（后端 204） */
   async fetchProactiveMessage(): Promise<ProactiveMessage | null> {
-    const res = await fetch(`${BACKEND_URL}/chat/proactive`);
+    const res = await fetch(`${BACKEND_URL}/chat/proactive`, {
+      headers: withAuth(undefined),
+    });
     if (res.status === 204) return null;
     if (!res.ok) throw new Error("Failed to fetch proactive message");
     return res.json();
@@ -362,6 +407,9 @@ export const api = {
     formData.append("file", audioBlob, "recording.webm");
     const res = await fetch(`${BACKEND_URL}/audio/transcribe`, {
       method: "POST",
+      // FormData 场景不能手动设 Content-Type（浏览器需自行补 boundary），
+      // 但仍需带 Authorization
+      headers: withAuth(undefined),
       body: formData,
     });
     if (!res.ok) return null;

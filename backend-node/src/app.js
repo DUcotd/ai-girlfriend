@@ -14,6 +14,7 @@ import stateRoutes from './routes/state.js';
 import lifeRoutes from './routes/life.js';
 import personalityRoutes from './routes/personalityRoutes.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { createAuthMiddleware } from './middleware/auth.js';
 
 export function createApp() {
     const app = express();
@@ -23,7 +24,15 @@ export function createApp() {
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['*']
     }));
-    app.use(express.json());
+    // 请求体上限 1MB：防止超大 JSON 体打爆内存（既有行为未限制，此处收紧）。
+    // 音频上传走 multer 独立管道（见 routes/audio.js），不受此 limit 影响。
+    app.use(express.json({ limit: '1mb' }));
+
+    // 鉴权中间件：必须位于 express.json() 之后（JSON 解析就绪、错误处理已可捕获）、
+    // 业务路由之前（否则等于没挂）。豁免规则由中间件内部处理：
+    // CORS 预检 OPTIONS、健康检查 GET /、静态资源 /static。
+    // 详见 middleware/auth.js 顶部的防护策略说明。
+    app.use(createAuthMiddleware());
 
     // 静态资源（TTS 音频等）
     fs.mkdirSync(config.staticDir, { recursive: true });
