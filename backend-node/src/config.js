@@ -1,6 +1,10 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+// REQ-04 事件层常量块的真源仍在 core/triggerEvents.js（T03 为避开并行任务的
+// 文件冲突放在那里）。这里 import 进来 re-export 进统一 config，落实「所有运行时数值
+// 统一从 config 读」的项目铁律，同时**不破坏 triggerEvents.js 的既有导出**（测试依赖它）。
+import { TRIGGER_REGISTRY_CONFIG } from './core/triggerEvents.js';
 
 dotenv.config();
 
@@ -26,6 +30,9 @@ function envNumber(raw, fallback, min, max) {
  * 导出为唯一真源：config 解析（env）与 AiGirlfriend._applyChatParams（运行时）共用。
  */
 export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high'];
+
+// 显式 re-export：便于调用方从 config.js 一处拿到事件层配置块，无需再 import triggerEvents。
+export { TRIGGER_REGISTRY_CONFIG };
 
 export const config = {
     port: Number(process.env.PORT) || 8000,
@@ -115,4 +122,84 @@ export const config = {
             extractTemperature: envNumber(process.env.MEMORY_EXTRACT_TEMPERATURE, 0.2, 0, 2),
         },
     },
+    /**
+     * 用户情绪识别通道（REQ-01，docs/companion-upgrade/02-architecture.md §2.1）。
+     * 混合方案：词表优先 + 复用主对话 <metadata> 的 user_emotion 字段做 LLM 校准，
+     * 不新增任何 LLM 调用。所有阈值/容量/权重集中于此，模块内禁止魔法数字。
+     */
+    userEmotion: {
+        // 总开关：关 = 完全退回改造前行为（不分析、不注入、不落盘）
+        enabled: process.env.USER_EMOTION_ENABLED !== 'false',
+        // 时间线滑动窗口容量（timeline cap）
+        timelineMax: envNumber(process.env.USER_EMOTION_TIMELINE_MAX, 50, 5, 1000),
+        // 融合权重：词表结果权重
+        lexiconWeight: envNumber(process.env.USER_EMOTION_LEXICON_WEIGHT, 0.4, 0, 1),
+        // 融合权重：LLM 结果权重（高于词表；LLM 需过置信阈值才被采信）
+        llmWeight: envNumber(process.env.USER_EMOTION_LLM_WEIGHT, 0.6, 0, 1),
+        // LLM 结果被采信的最低置信度（低于它则忽略 LLM，纯用词表）
+        llmConfidenceThreshold: envNumber(process.env.USER_EMOTION_LLM_CONFIDENCE_THRESHOLD, 0.5, 0, 1),
+        // 显著转折判定阈值：|Δvalence| 超过它视为情绪发生显著转折（供 REQ-04 消费）
+        turnThreshold: envNumber(process.env.USER_EMOTION_TURN_THRESHOLD, 0.35, 0, 2),
+        // 近期趋势窗口（毫秒），默认 30 分钟
+        trendWindowMs: envNumber(process.env.USER_EMOTION_TREND_WINDOW_MS, 30 * 60 * 1000, 1000, 86400000),
+        // 趋势「下滑」判定：窗口内 valence 斜率低于它视为下滑
+        decliningSlope: envNumber(process.env.USER_EMOTION_DECLINING_SLOPE, -0.05, -1, 0),
+        // timeline 落盘去抖间隔（毫秒），参照 MemoryStore.flushDebounceMs，禁止每轮同步全量重写
+        flushDebounceMs: envNumber(process.env.USER_EMOTION_FLUSH_DEBOUNCE_MS, 2000, 100, 60000),
+        // excerpt 截断长度（仅用于调试/前端展示，不参与分析）
+        excerptMax: envNumber(process.env.USER_EMOTION_EXCERPT_MAX, 40, 0, 500),
+    },
+    /**
+     * 共同经历叙事层（REQ-03，docs/companion-upgrade/02-architecture.md §2.3）。
+     * 从 episodes 派生「我们的故事」，独立落 data/narrative.json，不回改 MemoryStore schema。
+     * 所有阈值/容量/注入参数集中于此，事件类型/prompt 常量在 narrative/narrativeTypes.js。
+     */
+    narrative: {
+        // 总开关：关 = 完全退回改造前行为（不抽取、不注入、不落盘）
+        enabled: process.env.NARRATIVE_ENABLED !== 'false',
+        // 叙事库上限：超出先丢重要度最低、再丢最旧
+        maxNarratives: envNumber(process.env.NARRATIVE_MAX, 60, 5, 10000),
+        // 去抖写盘间隔（参照 MemoryStore.flushDebounceMs），禁止每轮同步全量重写
+        flushDebounceMs: envNumber(process.env.NARRATIVE_FLUSH_DEBOUNCE_MS, 2000, 100, 60000),
+        // ---- 三层节流参数（三者全满足才调 LLM）----
+        // ① 轮次节流：每 N 轮尝试一次
+        extractEveryNTurns: envNumber(process.env.NARRATIVE_EXTRACT_EVERY_N_TURNS, 5, 1, 1000),
+        // ② 时间窗节流：距上次抽取的最小间隔（毫秒），默认 10 分钟
+        minIntervalMs: envNumber(process.env.NARRATIVE_MIN_INTERVAL_MS, 10 * 60 * 1000, 1000, 86400000),
+        // ③ 信号节流：好感度单轮跃迁达到该幅度即视为关键信号
+        affinityJumpThreshold: envNumber(process.env.NARRATIVE_AFFINITY_JUMP_THRESHOLD, 2, 0, 100),
+        // 抽取 LLM 调用参数（低温保证 JSON 稳定）
+        extractModel: process.env.NARRATIVE_EXTRACT_MODEL || '',
+        extractTemperature: envNumber(process.env.NARRATIVE_EXTRACT_TEMPERATURE, 0.2, 0, 2),
+        extractMaxTokens: envNumber(process.env.NARRATIVE_EXTRACT_MAX_TOKENS, 800, 100, 8000),
+        // 抽取结果一次最多应用的 add 条数（防单轮批量灌库）
+        maxAddPerExtract: envNumber(process.env.NARRATIVE_MAX_ADD_PER_EXTRACT, 3, 1, 20),
+        // ---- 注入参数（克制）----
+        // 每轮注入的相关叙事条数（topK）
+        injectTopK: envNumber(process.env.NARRATIVE_INJECT_TOP_K, 3, 1, 10),
+        // 注入段整体字符上限（默认 300 字，超出按条丢弃）
+        injectMaxChars: envNumber(process.env.NARRATIVE_INJECT_MAX_CHARS, 300, 50, 2000),
+        // 单条注入条目字符上限（超出截断）
+        injectEntryMaxChars: envNumber(process.env.NARRATIVE_INJECT_ENTRY_MAX_CHARS, 80, 20, 500),
+        // 语义检索模式：余弦入选门槛
+        semanticThreshold: envNumber(process.env.NARRATIVE_SEMANTIC_THRESHOLD, 0.3, 0, 1),
+        // 关键词检索模式：至少命中的查询词项数（叙事池小、注入已按 topK+重要度收敛，
+        // 门槛取 1 可让短 query 也能召回，避免小池子下检索恒空）
+        keywordMinHits: envNumber(process.env.NARRATIVE_KEYWORD_MIN_HITS, 1, 1, 10),
+        // 写入去重：新叙事与既有叙事嵌入余弦超过该值视为重复（标题包含判定另有时刻生效）
+        dedupWriteSimilarity: envNumber(process.env.NARRATIVE_DEDUP_WRITE_SIMILARITY, 0.92, 0.5, 1),
+        // ---- 纪念日查询（REQ-04 触发源）----
+        // 未来多少天内算「即将到来」
+        anniversaryWithinDays: envNumber(process.env.NARRATIVE_ANNIVERSARY_WITHIN_DAYS, 7, 0, 365),
+    },
+    /**
+     * 事件层（REQ-04，docs/companion-upgrade/02-architecture.md §2.4）。
+     * 事件总线 + 触发源注册表 + 事件候选队列的统一配置入口。
+     *
+     * 收敛方式：直接 re-export core/triggerEvents.js 的 TRIGGER_REGISTRY_CONFIG（唯一事实源），
+     * 使「所有运行时数值统一从 config 读」——调用方既可 `config.triggerRegistry.enabled`
+     * 也可继续 import triggerEvents 的常量，两者指向同一对象、不会漂移。
+     * enabled 默认值与 T03 保持一致（env 未设 = true；'false' = 一键回退纯轮询）。
+     */
+    triggerRegistry: TRIGGER_REGISTRY_CONFIG,
 };

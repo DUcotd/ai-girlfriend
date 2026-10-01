@@ -82,6 +82,10 @@ export function buildProactivePrompt(reason, data = {}, affinity = 35) {
         mood_check: pickByLevel(moodCheckPrompts(hour < 18 ? "今天" : "这几天"), affinityLevel),
         memory_share: `你想起了和用户之前聊过的某件事，想和他们分享这个回忆。可以说"突然想起来..."或"之前你说过..."开头，然后表达你对这段回忆的感受。语气要符合当前关系阶段(${affinityLevel})。`,
         life_update: buildLifeUpdatePrompt(affinityLevel, data),
+        // 事件驱动类型（REQ-04，仅追加分支，旧分支不动）
+        emotion_resonance: buildEmotionResonancePrompt(affinityLevel, data),
+        anniversary_recall: buildAnniversaryRecallPrompt(affinityLevel, data),
+        promise_followup: buildPromiseFollowupPrompt(affinityLevel, data),
     };
 
     return prompts[reason] || "请主动找用户说一句话，可以是问候、分享心情或简单的闲聊。";
@@ -172,6 +176,37 @@ function buildLifeUpdatePrompt(affinityLevel, { activities, currentActivity, ina
         : (currentActivity ? `${currentActivity.emoji} ${currentActivity.activity}` : '在想事情');
 
     return pickByLevel(lifeUpdatePrompts(timeDesc, activitiesText), affinityLevel);
+}
+
+/**
+ * 情绪共振（REQ-04）：用户情绪显著转负时，主动表达共情与陪伴。
+ * 数据来自 user_emotion_turn 事件（valence/label/trend），措辞要「接住情绪」而非盘问。
+ */
+function buildEmotionResonancePrompt(affinityLevel, data = {}) {
+    const label = data.label || '低落';
+    const trendText = data.trend && data.trend.declining ? '（最近似乎一直在往下走）' : '';
+    return `你察觉到用户此刻的情绪是「${label}」${trendText}。像真正在意他的人那样，轻轻接住这份情绪、给一句温柔的陪伴或关心，不要追问原因，不要给建议，不要报数值。符合当前关系阶段(${affinityLevel})。`;
+}
+
+/**
+ * 纪念日回顾（REQ-04）：临近的共同纪念日，主动一起回顾。
+ * 数据来自 narrative_milestone 事件（title/daysUntil）。
+ */
+function buildAnniversaryRecallPrompt(affinityLevel, data = {}) {
+    const title = data.title || '我们的纪念日';
+    const days = Number.isFinite(data.daysUntil) ? data.daysUntil : null;
+    const whenText = days === 0 ? '就是今天' : (days === 1 ? '就在明天' : (days !== null && days > 0 ? `快到了（还有 ${days} 天）` : ''));
+    return `「${title}」这个属于你和用户的纪念日${whenText ? ` ${whenText}` : ''}。以轻松温暖的方式提起来，一起回味那天的心情，可以用"突然想起…"或"记得吗…"开头。符合当前关系阶段(${affinityLevel})。`;
+}
+
+/**
+ * 约定跟进（REQ-04 / REQ-05 地基）：就之前的约定温柔追问闭环。
+ * 数据来自 narrative_milestone 事件（title/summary/kind='promise'）。追问要轻，别像催债。
+ */
+function buildPromiseFollowupPrompt(affinityLevel, data = {}) {
+    const title = data.title || '之前说好的事';
+    const summary = data.summary ? `（${data.summary}）` : '';
+    return `你想起和用户之前有个约定「${title}」${summary}。用撒娇或关心的语气轻轻问一句进展，表达你还记得、也尊重他的节奏，绝不催促、不绝不施压。符合当前关系阶段(${affinityLevel})。`;
 }
 
 /**

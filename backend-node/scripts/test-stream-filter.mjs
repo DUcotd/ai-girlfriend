@@ -4,7 +4,7 @@
  * 运行: node scripts/test-stream-filter.mjs
  */
 import assert from 'assert';
-import { createStreamFilter, splitDelta, extractReasoning } from '../src/core/streamFilter.js';
+import { createStreamFilter, splitDelta, extractReasoning, parseFullText } from '../src/core/streamFilter.js';
 
 /** 把文本按给定大小切成 chunk，模拟流式到达 */
 function feed(text, chunkSize, filter) {
@@ -146,5 +146,67 @@ check('splitDelta / extractReasoning 兼容 reasoning 别名', () => {
     assert.strictEqual(extractReasoning(null), '');
 });
 
-const TOTAL = 11;
+// 12. 【核心保证】非流式 parseFullText == 流式逐字符喂入
+// 这是「标签规则单一真源」的正确性锁：两条路径结论必须逐字一致，
+// 否则非流式（_parseReplyText / generateProactiveMessage）与流式可能出现不同行为。
+check('parseFullText == 流式逐字符喂入（三类标签齐全）', () => {
+    const full = '<think>先揣摩他的意图</think><monologue>他好像有点紧张</monologue>'
+        + '别急嘛，慢慢说～<metadata>{"emotion":"gentle","affinity_change":1}</metadata>';
+    const streamed = feed(full, 1, createStreamFilter());
+    const parsed = parseFullText(full);
+    assert.strictEqual(parsed.replyText, streamed.visible, 'replyText 必须与流式 visible 一致');
+    assert.strictEqual(parsed.cot, streamed.cot, 'cot 必须一致');
+    assert.strictEqual(parsed.monologue, streamed.monologue, 'monologue 必须一致');
+    assert.strictEqual(parsed.metadata, streamed.metadata, 'metadata 必须一致');
+});
+
+// 13. 跨 chunk 半标签：非流式结果同样正确（规则等价，不受切分影响）
+check('跨 chunk 半标签两侧一致', () => {
+    const full = '前半句<monologue>偷偷想</monologue>后半句';
+    // 流式按 3 字符切，必然在 "<monologue>" 中间断开（如 "<mo" + "nol"...）
+    const streamed = feed(full, 3, createStreamFilter());
+    const parsed = parseFullText(full);
+    assert.strictEqual(parsed.replyText, '前半句后半句');
+    assert.strictEqual(parsed.replyText, streamed.visible);
+    assert.strictEqual(parsed.monologue, '偷偷想');
+    assert.strictEqual(parsed.monologue, streamed.monologue);
+});
+
+// 14. 未闭合 metadata：两侧都不泄漏残片且 metadata 一致
+check('未闭合 metadata 两侧行为一致', () => {
+    const full = '答复内容<metadata>{"emotion":"sad"';
+    const streamed = feed(full, 5, createStreamFilter());
+    const parsed = parseFullText(full);
+    assert.strictEqual(parsed.replyText, '答复内容');
+    assert.strictEqual(parsed.replyText, streamed.visible);
+    assert.strictEqual(parsed.metadata, '{"emotion":"sad"');
+    assert.strictEqual(parsed.metadata, streamed.metadata);
+});
+
+// 15. 旧格式兼容：只有 <think> 无 <monologue> —— 状态机原样分离出 cot（供上层当独白）
+// 兼容逻辑（<think> 当人设独白、modelReasoning 置 null）由 AiGirlfriend._parseReplyText 承担，
+// 这里锁定 parseFullText 的职责：不越权，只负责如实分离标签。
+check('旧格式只有 <think>：parseFullText 仍归入 cot 而非吞掉', () => {
+    const full = '<think>他今天心情好像不太好</think>怎么啦，愿意跟我说说吗？';
+    const parsed = parseFullText(full);
+    assert.strictEqual(parsed.replyText, '怎么啦，愿意跟我说说吗？');
+    assert.strictEqual(parsed.monologue, '');              // 没有 <monologue>
+    assert.strictEqual(parsed.cot, '他今天心情好像不太好'); // 交由上层兼容判定
+    // 与流式一致
+    const streamed = feed(full, 2, createStreamFilter());
+    assert.deepStrictEqual(parsed, { replyText: streamed.visible, cot: streamed.cot, monologue: streamed.monologue, metadata: streamed.metadata });
+});
+
+// 16. 无标签纯文本：replyText 原样返回，三类均空
+check('无标签文本 replyText 原样、三类为空', () => {
+    const parsed = parseFullText('就这样平平常常地聊着天。');
+    assert.strictEqual(parsed.replyText, '就这样平平常常地聊着天。');
+    assert.strictEqual(parsed.cot, '');
+    assert.strictEqual(parsed.monologue, '');
+    assert.strictEqual(parsed.metadata, '');
+    assert.deepStrictEqual(parseFullText(''), { replyText: '', cot: '', monologue: '', metadata: '' });
+    assert.deepStrictEqual(parseFullText(null), { replyText: '', cot: '', monologue: '', metadata: '' });
+});
+
+const TOTAL = 16;
 console.log(passed === TOTAL ? `\n全部 ${passed} 项通过` : `\n${passed}/${TOTAL} 通过，存在失败`);

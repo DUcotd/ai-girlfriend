@@ -174,6 +174,58 @@ export const PROACTIVE_TYPES = [
         spontaneous: true,
         defaultEnabled: true,
     },
+    // ==================== 事件驱动类型（REQ-04，仅追加，旧 8 类一字未动） ====================
+    // 这些类型由 TriggerRegistry 的事件触发源命中后，经 ProactiveEngine.consumeEventQueue()
+    // → trigger() 全闸门触达。eventDriven=true 标记其来源为事件层（供前端/状态区分）。
+    // 均为 spontaneous：同样受情绪闸门、自发全局间隔、相似度去重约束（保守，不破坏现有经济模型）。
+    {
+        id: 'emotion_resonance',
+        label: 'Emotion resonance',
+        labelZh: '情绪共振',
+        description: 'Reach out right after an emotional turn',
+        schedule: '当察觉到你情绪显著转负时（事件驱动）',
+        icon: '💗',
+        group: 'care',
+        priority: 75,
+        baseCooldown: 30 * MIN,
+        ttl: 20 * MIN,
+        minAffinity: 16,
+        spontaneous: true,
+        eventDriven: true,
+        defaultEnabled: true,
+    },
+    {
+        id: 'anniversary_recall',
+        label: 'Anniversary recall',
+        labelZh: '纪念日回顾',
+        description: 'Recall a shared anniversary that is coming up',
+        schedule: '临近共同纪念日时（事件驱动，好感度 ≥ 50）',
+        icon: '🎂',
+        group: 'care',
+        priority: 58,
+        baseCooldown: 6 * HOUR,
+        ttl: 2 * HOUR,
+        minAffinity: 50,
+        spontaneous: true,
+        eventDriven: true,
+        defaultEnabled: true,
+    },
+    {
+        id: 'promise_followup',
+        label: 'Promise follow-up',
+        labelZh: '约定跟进',
+        description: 'Gently follow up on a promise you made together',
+        schedule: '约定的跟进时机到来时（事件驱动，好感度 ≥ 16）',
+        icon: '🤙',
+        group: 'care',
+        priority: 62,
+        baseCooldown: 2 * HOUR,
+        ttl: 60 * MIN,
+        minAffinity: 16,
+        spontaneous: true,
+        eventDriven: true,
+        defaultEnabled: true,
+    },
 ];
 
 /** 全部类型 id（校验 enabledTypes 用） */

@@ -36,6 +36,7 @@ import {
     FALLBACK_TYPE,
     getProactiveType,
 } from './proactiveTypes.js';
+import { isEventLayerEnabled } from './TriggerRegistry.js';
 
 const STATE_FILE = 'proactive_state.json';
 
@@ -132,8 +133,14 @@ function looksDuplicate(a, b) {
 }
 
 class ProactiveEngine {
-    constructor(aiGirlfriend) {
+    constructor(aiGirlfriend, triggerRegistry = null) {
         this.aiGirlfriend = aiGirlfriend;
+        /**
+         * 事件层注册表（REQ-04）。缺省为 null 时事件层整体降级为 no-op：
+         * consumeEventQueue() 直接返回 false，_runCheck 行为与改造前逐字节一致。
+         * 装配顺序由 container.js 保证：Bus → Registry → register → ProactiveEngine(registry)。
+         */
+        this.triggerRegistry = triggerRegistry;
 
         this.config = {
             enabled: true,
@@ -462,6 +469,14 @@ class ProactiveEngine {
     }
 
     async _runCheck() {
+        // 【REQ-04 / 侵入点 I13】事件队列优先消费（在定时问候之前）。
+        // 这是本次唯一的架构级侵入点，缓解策略：
+        //   1) 事件层关闭或队列为空时，consumeEventQueue() O(1) 返回 false，
+        //      下面 6 步轮询流程**逐字节不变**（等价于改造前）；
+        //   2) config.triggerRegistry.enabled=false 可一键回退纯轮询（运行时开关）。
+        // 详见 docs/companion-upgrade/02-architecture.md REQ-04 2.4.6。
+        if (await this.consumeEventQueue()) return;
+
         this._resetDailyCountIfNeeded();
         // 配额不再是一道「全局闸」（此前第 2 行直接 return，配额打满后连用户自己设的
         // 任务提醒都发不出去）。它降级为一个标志位，由每种触发自己决定要不要看。
@@ -636,6 +651,45 @@ class ProactiveEngine {
         }
     }
 
+    // ==================== 事件层（REQ-04） ====================
+
+    /**
+     * 优先消费事件队列（事件的「发令出口」仍是本引擎的 trigger()）。
+     *
+     * 契约（docs/companion-upgrade/02-architecture.md REQ-04 2.4.5）：
+     *   - 事件层关闭 / 未装配 registry / 队列为空 → **O(1) 返回 false**，_runCheck 后续不变；
+     *   - 命中候选 → 走 trigger() 全部闸门（情绪/ghost/配额/自发间隔/去重），
+     *     复用而非旁路，保证事件驱动不会变成闸门失效；
+     *   - trigger() 返回 false（被闸门拦 / LLM 挂 / 队列满）时**不重排**：
+     *     事件会在下次 emit 时重新判定，符合「不记账、下轮可重试」的语义。
+     *
+     * @returns {Promise<boolean>} true = 已消费并成功走完 trigger 全闸门（入队成功）
+     */
+    async consumeEventQueue() {
+        // 快速预检（O(1)）：事件层关闭 或 未装配 registry 或 队列空 → 立即返回，零副作用。
+        // 顺序很关键：先判开关（模块级变量，最廉价），再判 registry，最后才判队列长度。
+        if (!isEventLayerEnabled()) return false;
+        if (!this.triggerRegistry || typeof this.triggerRegistry.consume !== 'function') return false;
+        if (typeof this.triggerRegistry.getStatus === 'function') {
+            // getStatus().queueSize 会先惰性剪枝过期候选；为空则不必继续
+            const status = this.triggerRegistry.getStatus();
+            if (!status || status.queueSize === 0) return false;
+        }
+
+        const candidate = this.triggerRegistry.consume();
+        if (!candidate) return false;
+
+        // 事件驱动的消息最终仍走 trigger() 全闸门；reason 用候选的 targetType。
+        const ok = await this.trigger(candidate.targetType, {
+            ...candidate.data,
+            eventTriggerId: candidate.triggerId,
+        });
+        console.log(
+            `[ProactiveEngine] Event-driven consume: trigger=${candidate.triggerId} → ${candidate.targetType} (delivered=${ok})`
+        );
+        return ok;
+    }
+
     consumeMessage() {
         this._pruneQueue();
         if (this.messageQueue.length === 0) return null;
@@ -652,6 +706,30 @@ class ProactiveEngine {
                 id: m.id, reason: m.reason, timestamp: m.timestamp, expiresAt: m.expiresAt,
             })),
         };
+    }
+
+    /**
+     * 事件队列状态快照（REQ-04 / 侵入点 I17）。事件层未装配或未启用时返回降级结构，
+     * 保证 getStatus() 的调用方（路由/前端）无需 null 判断。
+     * @returns {{enabled: boolean, queueSize: number, queue: Array<object>, cooldowns: object}}
+     */
+    getEventQueueStatus() {
+        if (!this.triggerRegistry || typeof this.triggerRegistry.getStatus !== 'function') {
+            return { enabled: false, queueSize: 0, queue: [], cooldowns: {} };
+        }
+        try {
+            const s = this.triggerRegistry.getStatus();
+            return {
+                enabled: !!s.enabled,
+                queueSize: s.queueSize ?? 0,
+                queue: Array.isArray(s.queue) ? s.queue : [],
+                cooldowns: s.cooldowns && typeof s.cooldowns === 'object' ? s.cooldowns : {},
+            };
+        } catch (e) {
+            // 状态查询失败不应拖垮 getStatus（前端只读，容错降级）
+            console.error(`[ProactiveEngine] getEventQueueStatus failed: ${e.message || e}`);
+            return { enabled: false, queueSize: 0, queue: [], cooldowns: {} };
+        }
     }
 
     getStatus() {
@@ -672,6 +750,8 @@ class ProactiveEngine {
             config: this.getConfig(),
             queueSize: this.messageQueue.length,
             queue: this.peekQueue(),
+            // 【侵入点 I17】事件队列运行状态（只加不改：旧字段全部保留，前端向后兼容）
+            eventQueue: this.getEventQueueStatus(),
             dailyMessagesSent: this.dailyMessageCount,
             dailyLimit: this.getDailyLimit(),
             autoDailyLimit: this.getAutoDailyLimit(),

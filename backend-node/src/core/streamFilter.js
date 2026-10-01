@@ -67,6 +67,31 @@ function flushKeepingSuffix(buf, endTag) {
     return { consumed: buf, keep: '' };
 }
 
+/**
+ * 非流式场景：把一整段文本一次性喂给状态机，复用同一套标签识别规则。
+ *
+ * 为什么要有这个函数？——「标签如何被识别与剥离」这条规则必须只有一处实现。
+ * 重构前 AiGirlfriend 里用三处正则手写同一规则（_parseReplyText 的 <monologue>/<think>/
+ * <metadata> 剥离 + 未闭合截断、generateProactiveMessage 的 <think>/<monologue> 清理），
+ * 与这里的状态机规则重复，将来标签格式一变就要同步改多处、极易遗漏。
+ * 现在非流式路径也走状态机，规则单一真源。
+ *
+ * 返回结构与「逐字符流式喂入」完全一致，这是本次重构的核心保证
+ * （scripts/test-stream-filter.mjs 有对照测试锁定）：
+ *   replyText  —— 剥离三类标签后的正文（保留原文空白，由调用方决定是否 trim，
+ *                 与流式路径 out + tail 拼接的语义一致）
+ *   cot / monologue / metadata —— 三类被剥离的内容（trim 后）
+ *
+ * @param {string} text - 完整回复文本
+ * @returns {{replyText: string, cot: string, monologue: string, metadata: string}}
+ */
+export function parseFullText(text) {
+    const filter = createStreamFilter();
+    const visible = filter.push(text || '');
+    const { tail, cot, monologue, metadata } = filter.finish();
+    return { replyText: visible + tail, cot, monologue, metadata };
+}
+
 export function createStreamFilter() {
     let current = null; // null 表示正在输出正文
     let buf = '';

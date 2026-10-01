@@ -4,7 +4,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { fail } from '../middleware/validate.js';
-import { aiGirlfriend, proactiveEngine } from '../services/container.js';
+import { aiGirlfriend, proactiveEngine, triggerRegistry } from '../services/container.js';
 import { config } from '../config.js';
 import { PROACTIVE_TYPE_IDS } from '../core/proactiveTypes.js';
 
@@ -153,8 +153,27 @@ router.get('/chat/proactive', (req, res) => {
     else res.status(204).end();
 });
 
+/**
+ * 主动消息运行时状态。
+ * 顶层既有 { queue, engine } 契约**保持不变**（前端 getProactiveStatus 依赖它）；
+ * 追加 triggerRegistry 事件层快照（REQ-04）——engine.eventQueue 是裁剪视图，
+ * 这里附带完整 registry.getStatus()（含 cooldowns / nextEligible / triggers），供排查用。
+ * 事件层未装配时回落降级结构，调用方无需 null 判断。
+ */
 router.get('/chat/proactive/status', (req, res) => {
-    res.json({ queue: proactiveEngine.peekQueue(), engine: proactiveEngine.getStatus() });
+    let registryStatus = { enabled: false, queueSize: 0, queue: [], cooldowns: {}, nextEligible: {}, triggers: [] };
+    try {
+        if (triggerRegistry && typeof triggerRegistry.getStatus === 'function') {
+            registryStatus = triggerRegistry.getStatus();
+        }
+    } catch (e) {
+        console.error(`[Chat] triggerRegistry.getStatus failed: ${e.message || e}`);
+    }
+    res.json({
+        queue: proactiveEngine.peekQueue(),
+        engine: proactiveEngine.getStatus(),
+        triggerRegistry: registryStatus,
+    });
 });
 
 router.post('/chat/proactive/trigger', asyncHandler(async (req, res) => {

@@ -36,11 +36,16 @@ export const PERSONA_SYSTEM_PROMPT = `你现在是一个二次元风格的虚拟
  * @param {string} params.emotionPrompt - 情绪状态段落
  * @param {string} params.personalityPrompt - 性格状态段落
  * @param {object} params.styleGuide - EmotionEngine.getStyleGuide() 结果
+ * @param {string} [params.userEmotionPrompt] - 用户情绪注入段（core/UserEmotionEngine.getPromptInjection()
+ *        产出）。缺省为空串 = 不注入，行为与改造前完全一致（REQ-01，向后兼容）。
+ * @param {string} [params.narrativePrompt] - 共同经历注入段（core/prompts/narrativePrompt.js
+ *        的 buildNarrativeContext 产出）。缺省为空串 = 不注入，行为与改造前完全一致
+ *        （REQ-03，向后兼容）。
  * @param {string} [params.taskActionText] - 任务意图识别指令（core/prompts/taskPrompt.js 产出），
  *        插在 [Response Instructions] 第 3 条之后。缺省为空串 = 不注入，行为与改造前完全一致。
  * @returns {string} 组装好的 system 消息内容
  */
-export function buildSystemContext({ nickname, taskText, contextStr, relationshipContext, emotionPrompt, personalityPrompt, styleGuide, taskActionText = '' }) {
+export function buildSystemContext({ nickname, taskText, contextStr, relationshipContext, emotionPrompt, personalityPrompt, styleGuide, userEmotionPrompt = '', narrativePrompt = '', taskActionText = '' }) {
     const now = new Date();
     const timeStr = now.toLocaleString('zh-CN', {
         year: 'numeric', month: 'long', day: 'numeric',
@@ -60,6 +65,8 @@ ${relationshipContext}
 ${emotionPrompt}
 
 ${personalityPrompt}
+${userEmotionPrompt ? '\n' + userEmotionPrompt + '\n' : ''}
+${narrativePrompt ? '\n' + narrativePrompt + '\n' : ''}
 
 [Response Instructions]
 1. **Cognitive Assessment (Inner Monologue)**:
@@ -76,9 +83,10 @@ ${personalityPrompt}
 
 3. **Metadata**:
    - At the very end, append metadata:
-   - <metadata>{"emotion": "Emotion Label", "affinity_change": number, "emotion_delta": {"P": val, "A": val, "D": val}}</metadata>
+   - <metadata>{"emotion": "Emotion Label", "affinity_change": number, "emotion_delta": {"P": val, "A": val, "D": val}, "user_emotion": {"label": "User Emotion Label", "valence": val, "arousal": val, "intensity": val, "confidence": val}}</metadata>
    - affinity_change: -10 to +3. Default is 0 — ordinary conversation never moves affection. Only give +1 for a genuinely touching moment; +2~3 is reserved for relationship milestones. Must be negative if you are refusing, upset, or the user crossed the line of your current relationship stage.
    - emotion_delta: -0.5 to +0.5.
+   - user_emotion: your read of **the user's** current emotion (NOT your own). label ∈ 开心/平静/低落/焦虑/疲惫/兴奋/烦闷/愤怒/中性; valence & arousal ∈ [-1,1]; intensity & confidence ∈ [0,1]. Omit it if you cannot tell.
 ${taskActionText ? '\n' + taskActionText : ''}
 
 Example Format:
