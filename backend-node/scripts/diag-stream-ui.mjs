@@ -7,11 +7,28 @@
  * 用法: node scripts/diag-stream-ui.mjs
  */
 import { createRequire } from "module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const require = createRequire("C:/Users/25776/.workbuddy/binaries/node/workspace/");
-const { chromium } = require("playwright-core");
+// playwright-core 不在本项目依赖里，装在隔离的 node workspace；
+// 按 脚本目录 → $HOME/.workbuddy workspace → PW_CORE_WS 环境变量 的顺序解析，不硬编码本机路径
+function loadPlaywrightCore() {
+    const bases = [
+        path.dirname(fileURLToPath(import.meta.url)),
+        path.join(os.homedir(), ".workbuddy", "binaries", "node", "workspace"),
+        process.env.PW_CORE_WS,
+    ].filter(Boolean);
+    for (const base of bases) {
+        try {
+            return createRequire(path.join(base, "package.json"))("playwright-core");
+        } catch {
+            /* 换下一个位置 */
+        }
+    }
+    throw new Error("找不到 playwright-core：请在本项目安装，或设 PW_CORE_WS 指向其所在 workspace");
+}
+const { chromium } = loadPlaywrightCore();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SHOT_WAIT = path.join(HERE, "..", "diag-stream-wait.png");

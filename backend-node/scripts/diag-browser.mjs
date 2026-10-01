@@ -2,10 +2,29 @@
  * 无头浏览器体检：加载前端页面，收集 console 报错 + 检查内心独白图标是否渲染。
  * 用法: node scripts/diag-browser.mjs
  */
-// playwright-core 装在隔离的 node workspace 里，这里用绝对路径导入
+// playwright-core 不在本项目依赖里，装在隔离的 node workspace；
+// 按 脚本目录 → $HOME/.workbuddy workspace → PW_CORE_WS 环境变量 的顺序解析，不硬编码本机路径
 import { createRequire } from 'module';
-const require = createRequire('C:/Users/25776/.workbuddy/binaries/node/workspace/');
-const { chromium } = require('playwright-core');
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+function loadPlaywrightCore() {
+  const bases = [
+    path.dirname(fileURLToPath(import.meta.url)),
+    path.join(os.homedir(), '.workbuddy', 'binaries', 'node', 'workspace'),
+    process.env.PW_CORE_WS,
+  ].filter(Boolean);
+  for (const base of bases) {
+    try {
+      return createRequire(path.join(base, 'package.json'))('playwright-core');
+    } catch {
+      /* 换下一个位置 */
+    }
+  }
+  throw new Error('找不到 playwright-core：请在本项目安装，或设 PW_CORE_WS 指向其所在 workspace');
+}
+const { chromium } = loadPlaywrightCore();
 
 const URL = 'http://127.0.0.1:3000';
 const CHANNELS = [
