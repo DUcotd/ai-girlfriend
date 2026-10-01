@@ -737,6 +737,14 @@ class AiGirlfriend {
                 .filter(m => m.role !== 'system')
                 .slice(-10)
                 .map(m => ({ role: m.role, content: m.content })),
+            // 动态上下文三件套与主对话 _prepare() 同源：此前主动消息只有阶段标签、
+            // 没有情绪/性格，愤怒冷暴力下照样生成友善搭话（docs/proactive-consistency/DIAGNOSIS.md P0-1）。
+            // 不带任务清单与记忆块——主动消息不需要「回应任务」的口吻，记忆走 memory_share 专属通道。
+            { role: "system", content: [
+                buildRelationshipContext(this.emotionEngine.getRelationshipContext(this.affinity)),
+                this.emotionEngine.getPromptInjection(),
+                this.personalityDrift.getPromptInjection(),
+            ].join('\n\n') },
             { role: "system", content: buildProactiveDirective(reason, this.affinity, contextInfo) },
             { role: "system", content: buildProactivePersonaDirective(scenarioPrompt, this.affinity) }
         ];

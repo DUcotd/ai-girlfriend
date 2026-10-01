@@ -22,6 +22,10 @@
  *   ttl          —— 队列存活毫秒：超时未送达即丢弃并退还当日配额
  *   quietExempt  —— true 表示深夜免打扰时段仍可发送
  *   quotaExempt  —— true 表示**不计入每日主动消息配额**（也不退还配额）
+ *   minAffinity  —— 触发所需最低好感度；缺省 = 不限。陌生/疏离阶段(0-15)不该主动搭话，
+ *                   自发类一律 16（初识解锁），memory_share 50（原 _runCheck 硬编码搬入）
+ *   spontaneous  —— true 表示「她自发的社交消息」：受全局自发间隔（SPONTANEOUS_GAP）与
+ *                   情绪闸门约束；定时问候/任务提醒不属于此类
  *   defaultEnabled —— 首次运行（未落盘）时的默认勾选状态
  */
 
@@ -98,12 +102,14 @@ export const PROACTIVE_TYPES = [
         label: 'Missing you',
         labelZh: '想念消息',
         description: 'Sent when inactive for a while',
-        schedule: '你超过 2 小时没出现时',
+        schedule: '你超过 2 小时没出现时（初识后解锁）',
         icon: '💕',
         group: 'care',
         priority: 50,
         baseCooldown: 3 * HOUR,
         ttl: 60 * MIN,
+        minAffinity: 16,
+        spontaneous: true,
         defaultEnabled: true,
     },
     {
@@ -111,13 +117,15 @@ export const PROACTIVE_TYPES = [
         label: 'Mood check',
         labelZh: '情绪关怀',
         description: 'Check in during afternoon/evening',
-        schedule: '每天 14:00 – 21:00',
+        schedule: '每天 14:00 – 21:00（初识后解锁）',
         icon: '💝',
         group: 'care',
         priority: 60,
         baseCooldown: 4 * HOUR,
         window: { from: 14 * 60, to: 21 * 60 },
         ttl: 90 * MIN,
+        minAffinity: 16,
+        spontaneous: true,
         defaultEnabled: true,
     },
     {
@@ -131,6 +139,9 @@ export const PROACTIVE_TYPES = [
         priority: 40,
         baseCooldown: 6 * HOUR,
         ttl: 2 * HOUR,
+        // 原 _runCheck 里的 `(affinity ?? 0) >= 50` 硬编码，统一搬进类型表
+        minAffinity: 50,
+        spontaneous: true,
         defaultEnabled: true,
     },
     {
@@ -138,12 +149,14 @@ export const PROACTIVE_TYPES = [
         label: 'Random chat',
         labelZh: '随机闲聊',
         description: 'Spontaneous chat',
-        schedule: '随时，每 30 分钟评估一次',
+        schedule: '随时，每 30 分钟评估一次（初识后解锁）',
         icon: '✨',
         group: 'daily',
         priority: 30,
         baseCooldown: 2 * HOUR,
         ttl: 45 * MIN,
+        minAffinity: 16,
+        spontaneous: true,
         defaultEnabled: true,
     },
     {
@@ -151,12 +164,14 @@ export const PROACTIVE_TYPES = [
         label: 'Life update',
         labelZh: '生活分享',
         description: 'What I was doing while you were away',
-        schedule: '你离开一段时间又回来时',
+        schedule: '你离开一段时间又回来时（初识后解锁）',
         icon: '🌸',
         group: 'daily',
         priority: 20,
         baseCooldown: 30 * MIN,
         ttl: 45 * MIN,
+        minAffinity: 16,
+        spontaneous: true,
         defaultEnabled: true,
     },
 ];
@@ -184,6 +199,9 @@ export const FALLBACK_TYPE = {
     quietExempt: false,
     // 未知 reason 一律按「占配额」处理（保守方向：宁可少发，不可超发）
     quotaExempt: false,
+    // 未知 reason 按随机闲聊的保守口径：同样吃 minAffinity / 自发间隔 / 情绪闸门
+    minAffinity: 16,
+    spontaneous: true,
     defaultEnabled: true,
 };
 

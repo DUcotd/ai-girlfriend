@@ -68,6 +68,22 @@ const QUIET_HOURS = { from: 23 * 60 + 30, to: 7 * 60 };
 /** 用户多久没出现算「想念」 */
 const MISS_YOU_IDLE_MS = 2 * HOUR;
 
+/**
+ * 自发类的情绪闸门（P = EmotionEngine 的愉悦度）。
+ * 主动消息此前完全不读情绪，愤怒冷暴力下照样友善搭话——
+ * 全部阈值与口径见 docs/proactive-consistency/DIAGNOSIS.md。
+ */
+const GHOST_P = -0.75;      // 与 EmotionEngine.shouldGhost() 同口径：ghost 中连定时问候都停
+const BLOCK_P = -0.5;       // 愤怒/暴躁/抑郁档：自发类不发
+const SUPPRESS_P = -0.2;    // 低落/烦躁档：不拦，但自发类概率乘 SUPPRESS_FACTOR
+const SUPPRESS_FACTOR = 0.3;
+
+/** 自发类全局最小间隔：跨类型共享，防止不同类型背靠背连发（task_reminder/定时问候不受限） */
+const SPONTANEOUS_GAP = 90 * MIN;
+
+/** 相似度去重比对的已发消息条数 */
+const RECENT_SENT_LIMIT = 2;
+
 // 本地自然日 key 已抽到 utils/dayKey.js：好感度日上限与本引擎每日配额共用同一口径。
 // （此前它是本文件私有函数，AffinityEngine 复用时会造成 core → core 的依赖方向。）
 
@@ -98,6 +114,23 @@ function pickReminderCandidate(candidates, now) {
     return null;
 }
 
+/**
+ * 两条主动消息是否算「复读」：归一化空白后，长消息比开头 DUPLICATE_PREFIX_LEN 个字符
+ * （现实案例里两条复读的共同前缀「那个……下午好。」恰好 8 字符——实测 10 拦不住，
+ * 见 docs/proactive-consistency/DIAGNOSIS.md），短消息全等才算。
+ */
+const DUPLICATE_PREFIX_LEN = 8;
+
+function looksDuplicate(a, b) {
+    if (!a || !b) return false;
+    const x = a.replace(/\s+/g, '');
+    const y = b.replace(/\s+/g, '');
+    if (x.length >= DUPLICATE_PREFIX_LEN && y.length >= DUPLICATE_PREFIX_LEN) {
+        return x.slice(0, DUPLICATE_PREFIX_LEN) === y.slice(0, DUPLICATE_PREFIX_LEN);
+    }
+    return x === y;
+}
+
 class ProactiveEngine {
     constructor(aiGirlfriend) {
         this.aiGirlfriend = aiGirlfriend;
@@ -121,6 +154,10 @@ class ProactiveEngine {
         this.sentDays = {};
         /** 最近一次评估过的 random_chat 30 分钟时隙 key，避免同一时隙反复掷骰子 */
         this.lastRandomSlotKey = null;
+        /** 最近一条自发消息的时间戳（跨类型共享的全局自发间隔） */
+        this.lastSpontaneousAt = 0;
+        /** 最近已发出的自发消息文本（相似度去重用，只留最近 RECENT_SENT_LIMIT 条） */
+        this.recentSentTexts = [];
         this.lifeSimulator = new LifeSimulator();
 
         // 并发保护
@@ -158,6 +195,12 @@ class ProactiveEngine {
             this.lastRandomSlotKey = data.lastRandomSlotKey;
         }
         if (typeof data.lastTriggerTime === 'number') this.lastTriggerTime = data.lastTriggerTime;
+        if (typeof data.lastSpontaneousAt === 'number') this.lastSpontaneousAt = data.lastSpontaneousAt;
+        if (Array.isArray(data.recentSentTexts)) {
+            this.recentSentTexts = data.recentSentTexts
+                .filter(t => typeof t === 'string')
+                .slice(0, RECENT_SENT_LIMIT);
+        }
 
         // 队列也持久化：重启前刚生成、还没被前端取走的消息不该丢
         if (Array.isArray(data.queue)) {
@@ -179,6 +222,8 @@ class ProactiveEngine {
             sentDays: this.sentDays,
             lastRandomSlotKey: this.lastRandomSlotKey,
             lastTriggerTime: this.lastTriggerTime,
+            lastSpontaneousAt: this.lastSpontaneousAt,
+            recentSentTexts: this.recentSentTexts,
             queue: this.messageQueue,
             lastUpdated: new Date().toISOString(),
         });
@@ -287,6 +332,31 @@ class ProactiveEngine {
         return STAGE_ECONOMY[this.getStage().stage]?.bonus ?? 1.0;
     }
 
+    // ==================== 情绪闸门 ====================
+
+    /** 当前愉悦度 P（EmotionEngine 缺失时按中性处理，闸门全开） */
+    _currentP() {
+        return this.aiGirlfriend.emotionEngine?.state?.P ?? 0;
+    }
+
+    /**
+     * 自发类的情绪闸门。
+     * 'block'：P < BLOCK_P，自发类一律不发（手动触发也被拦）；
+     * 'suppress'：P < SUPPRESS_P，不拦但概率乘 SUPPRESS_FACTOR；
+     * 'pass'：正常。task_reminder 完全不看这道闸（用户自己设的功能性提醒）。
+     */
+    getEmotionGate() {
+        const P = this._currentP();
+        if (P < BLOCK_P) return { mode: 'block', factor: 0, P };
+        if (P < SUPPRESS_P) return { mode: 'suppress', factor: SUPPRESS_FACTOR, P };
+        return { mode: 'pass', factor: 1, P };
+    }
+
+    /** 与主对话 EmotionEngine.shouldGhost() 同口径：ghost 中连定时问候都停（冷暴力的人不会说早安） */
+    isGhosting() {
+        return this._currentP() < GHOST_P;
+    }
+
     /** 自动档每日上限（不含自定义覆盖）——前端也要显示这个数 */
     getAutoDailyLimit() {
         const baseLimit = STAGE_ECONOMY[this.getStage().stage]?.dailyBase ?? 8;
@@ -334,6 +404,10 @@ class ProactiveEngine {
 
     canTrigger(type) {
         if (!this.config.enabledTypes.includes(type)) return false;
+        // minAffinity 由类型表统一声明：陌生/疏离阶段(0-15)不该主动搭话，自发类 16 解锁，
+        // memory_share 50（原 _runCheck 硬编码搬入）
+        const minAffinity = getProactiveType(type)?.minAffinity;
+        if (minAffinity !== undefined && (this.aiGirlfriend.affinity ?? 0) < minAffinity) return false;
         const cooldown = this.triggerCooldowns[type] ?? HOUR;
         const lastTrigger = this.lastTriggerByType[type] || 0;
         return (Date.now() - lastTrigger) >= cooldown;
@@ -397,8 +471,9 @@ class ProactiveEngine {
         const nowMinutes = minutesOfDay(now);
         const quiet = this.isQuietHours(now);
 
-        // ① 定时问候：时间窗内每天一次（优先级最高，占配额）
-        if (hasQuota) {
+        // ① 定时问候：时间窗内每天一次（优先级最高，占配额）。
+        // ghost 中一并停发——冷暴力状态下说「早安」同样出戏（docs/proactive-consistency/DIAGNOSIS.md）。
+        if (hasQuota && !this.isGhosting()) {
             for (const type of PROACTIVE_TYPES) {
                 if (!type.window || !type.dailyOnce) continue;
                 if (!this._inWindow(nowMinutes, type.window)) continue;
@@ -425,16 +500,23 @@ class ProactiveEngine {
         // 两道闸下移：从这里往下都是「自发」消息，占配额且深夜不打扰
         if (!hasQuota || quiet) return;
 
+        // 情绪闸门：愤怒/冷暴力档自发类全部止步（trigger() 还有一道兜底，这里提前省掉掷骰子）
+        const emotionGate = this.getEmotionGate();
+        if (emotionGate.mode === 'block') return;
+
+        // 自发类全局间隔：90 分钟内至多一条，跨类型共享（此前只有 random_chat 自查 1h）
+        if (Date.now() - this.lastSpontaneousAt < SPONTANEOUS_GAP) return;
+
         // ③ 情绪关怀（窗口内概率触发）
         const moodType = getProactiveType('mood_check');
         if (this._inWindow(nowMinutes, moodType?.window) && this.canTrigger('mood_check')) {
-            if (Math.random() < 0.2 * this.getAffinityBonus()) return this.trigger('mood_check');
+            if (Math.random() < 0.2 * this.getAffinityBonus() * emotionGate.factor) return this.trigger('mood_check');
         }
 
         // ④ 想念：用户一段时间没出现
         const inactiveTime = Date.now() - this.lastUserActiveTime;
         if (inactiveTime > MISS_YOU_IDLE_MS && this.canTrigger('miss_you')) {
-            const probability = 0.3 * this.getAffinityBonus();
+            const probability = 0.3 * this.getAffinityBonus() * emotionGate.factor;
             if (Math.random() < probability) {
                 return this.trigger('miss_you', {
                     inactiveMinutes: Math.floor(inactiveTime / MIN),
@@ -442,9 +524,9 @@ class ProactiveEngine {
             }
         }
 
-        // ⑤ 回忆分享：关系够近才会想起以前的事
-        if ((this.aiGirlfriend.affinity ?? 0) >= 50 && this.canTrigger('memory_share')) {
-            const probability = 0.15 * this.getAffinityBonus();
+        // ⑤ 回忆分享：关系够近才会想起以前的事（好感门槛已由 canTrigger 的 minAffinity=50 承担）
+        if (this.canTrigger('memory_share')) {
+            const probability = 0.15 * this.getAffinityBonus() * emotionGate.factor;
             if (Math.random() < probability) return this.trigger('memory_share');
         }
 
@@ -456,7 +538,7 @@ class ProactiveEngine {
             const timeSinceLast = (Date.now() - this.lastTriggerTime) / HOUR;
             if (timeSinceLast >= 1) {
                 const baseP = (this.aiGirlfriend.affinity / 200) + (timeSinceLast / 24);
-                const p = baseP * this.getAffinityBonus();
+                const p = baseP * this.getAffinityBonus() * emotionGate.factor;
                 if (Math.random() < Math.min(p, 0.4)) return this.trigger('random_chat');
             }
         }
@@ -477,6 +559,25 @@ class ProactiveEngine {
 
         const type = getProactiveType(reason) || FALLBACK_TYPE;
 
+        // 总闸（自动轮询 / 欢迎回来 / 手动触发共用）：情绪与好感度门槛在 trigger 里兜底，
+        // _runCheck 里的提前 return 只是省骰子，绕过它也绕不过这里。
+        if (this.isGhosting() && (type.spontaneous || type.dailyOnce)) {
+            console.log(`[ProactiveEngine] Blocked ${reason}: ghosting (P=${this._currentP().toFixed(2)})`);
+            return false;
+        }
+        if (type.spontaneous && this.getEmotionGate().mode === 'block') {
+            console.log(`[ProactiveEngine] Blocked ${reason}: negative emotion (P=${this._currentP().toFixed(2)})`);
+            return false;
+        }
+        if (type.minAffinity !== undefined && (this.aiGirlfriend.affinity ?? 0) < type.minAffinity) {
+            console.log(`[ProactiveEngine] Blocked ${reason}: affinity ${this.aiGirlfriend.affinity ?? 0} < minAffinity ${type.minAffinity}`);
+            return false;
+        }
+        if (type.spontaneous && Date.now() - this.lastSpontaneousAt < SPONTANEOUS_GAP) {
+            console.log(`[ProactiveEngine] Blocked ${reason}: spontaneous gap (${Math.round((SPONTANEOUS_GAP - (Date.now() - this.lastSpontaneousAt)) / MIN)}min left)`);
+            return false;
+        }
+
         // 同一类型不并发生成（手动触发与定时轮询可能同时命中）
         if (this._inflight.has(type.id)) return false;
 
@@ -488,9 +589,22 @@ class ProactiveEngine {
             const message = await this.aiGirlfriend.generateProactiveMessage(reason, data);
             if (!message || !message.reply) return false;
 
+            const text = message.reply.trim();
+
+            // 相似度去重：与队列内及最近已发的自发消息比对，开头雷同即视为复读丢弃。
+            // 丢弃发生在记账之前（配额不占），但写同类型冷却时间戳——否则每个轮询周期
+            // 都会重新掷骰、重新调一次 LLM、再丢一次，纯烧 token。
+            if (type.spontaneous &&
+                [...this.messageQueue.map(m => m.content), ...this.recentSentTexts]
+                    .some(prev => looksDuplicate(text, prev))) {
+                console.log(`[ProactiveEngine] Dropped duplicate proactive message (${reason})`);
+                this.lastTriggerByType[reason] = Date.now();
+                return false;
+            }
+
             this.messageQueue.push({
                 id: `${Date.now()}-${type.id}`,
-                content: message.reply,
+                content: text,
                 emotion: message.emotion,
                 timestamp: new Date().toISOString(),
                 reason,
@@ -501,6 +615,10 @@ class ProactiveEngine {
 
             this.lastTriggerTime = Date.now();
             this.lastTriggerByType[reason] = Date.now();
+            if (type.spontaneous) {
+                this.lastSpontaneousAt = Date.now();
+                this.recentSentTexts = [text, ...this.recentSentTexts].slice(0, RECENT_SENT_LIMIT);
+            }
             // 豁免类型不占配额（同时也不能被 _pruneQueue 退还）
             if (!type.quotaExempt) this.dailyMessageCount++;
             if (type.dailyOnce) this.sentDays[reason] = dayKey();
@@ -562,6 +680,10 @@ class ProactiveEngine {
             affinity: this.aiGirlfriend.affinity ?? 35,
             affinityBonus: this.getAffinityBonus(),
             quietHours: this.getQuietHoursInfo(now),
+            // 情绪闸门状态暴露给前端：因情绪低落/冷暴力暂缓时，设置页能明确看到原因
+            emotionGate: this.getEmotionGate(),
+            ghosting: this.isGhosting(),
+            spontaneousGapRemainingMs: Math.max(0, SPONTANEOUS_GAP - (Date.now() - this.lastSpontaneousAt)),
             lastTriggerTime: this.lastTriggerTime,
             lastUserActiveTime: this.lastUserActiveTime,
             nextEligible,
