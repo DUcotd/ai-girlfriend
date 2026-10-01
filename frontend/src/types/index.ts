@@ -211,10 +211,38 @@ export interface TaskActionResult {
   reason?: TaskActionReason;
 }
 
-export interface MemoryItem {
+/** 事实记忆：LLM 提取或手动添加的持久信息（后端 schema v2） */
+export interface FactItem {
+  id: string;
+  content: string;
+  /** identity | preference | relationship | habit | promise | event | opinion | other */
+  category: string;
+  /** 1-5，5 最重要 */
+  importance: number;
+  /** extracted = LLM 自动提取；manual = 手动添加 */
+  source: "extracted" | "manual";
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 情节记忆：一轮对话原文（后端 schema v2） */
+export interface EpisodeItem {
   id: string;
   text: string;
   timestamp: number;
+}
+
+export interface MemoryStats {
+  episodeCount: number;
+  factCount: number;
+  /** auto 解析后的实际检索模式：embedding | keyword */
+  retrievalMode: string;
+}
+
+export interface MemoriesResponse {
+  facts: FactItem[];
+  episodes: EpisodeItem[];
+  stats: MemoryStats;
 }
 
 export interface CurrentActivity {

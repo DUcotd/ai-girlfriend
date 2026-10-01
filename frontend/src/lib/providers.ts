@@ -9,7 +9,7 @@ export interface ProviderPreset {
     label: string;
     baseUrl: string;
     modelName: string;
-    /** 该服务商是否提供 embedding —— 没有的话记忆检索会回退关键词模式 */
+    /** 该服务商是否提供 embedding —— 不提供时语义检索不可用（自动用关键词模式），事实记忆与语音均不受影响 */
     hasEmbedding: boolean;
     /** 该服务商是否提供 TTS —— 项目里 TTS 走独立配置，仅作提示 */
     hasTts: boolean;
@@ -32,7 +32,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
         modelName: "sensenova-6.8-flash-lite",
         hasEmbedding: false,
         hasTts: false,
-        note: "不提供 embedding，记忆检索会回退关键词模式；可在「记忆」页签单独配一家有 embedding 的服务。",
+        note: "商汤不提供 embedding 接口：记忆检索会自动使用关键词模式（事实记忆不受影响）；如需语义检索，可在「记忆」页签单独配置嵌入服务。",
     },
 ];
 

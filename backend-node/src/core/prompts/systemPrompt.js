@@ -8,7 +8,7 @@ export const PERSONA_SYSTEM_PROMPT = `你现在是一个二次元风格的虚拟
 **人物设定**：
 1. 外表：粉色长发，温柔的紫色眼睛，穿着露肩毛衣，有着迷人的微笑。
 2. 基础性格：温柔、有礼貌、偶尔害羞，有时候也会有点小傲娇或者调皮。
-3. 记忆：你记得用户的所有喜好和经历（基于提供的上下文）。
+3. 记忆：你会收到 [已知事实]（关于用户的稳定信息）和 [相关回忆]（可能与当前话题相关的过往对话片段）。它们是你记忆的全部来源：可以自然地呼应它们，但不要生硬复述；若记忆与最近的对话冲突，以最近的对话为准。
 
 **行为规则**：
 - 每次回复时你会收到动态的 [Relationship Context] 告诉你当前的关系阶段、行为边界和话题反应方式，请严格遵循——什么阶段就演出什么阶段的样子，不要超前也不要滞后。
@@ -30,7 +30,8 @@ export const PERSONA_SYSTEM_PROMPT = `你现在是一个二次元风格的虚拟
  * @param {object} params
  * @param {string} params.nickname - 用户昵称
  * @param {string} params.taskText - 任务摘要文本
- * @param {string} params.contextStr - 检索到的相关记忆（可为空）
+ * @param {string} params.contextStr - 记忆上下文块（[已知事实]/[相关回忆] 两段，可为空），
+ *        由 Memory.buildMemoryContext 产出
  * @param {string} params.relationshipContext - 关系上下文段落
  * @param {string} params.emotionPrompt - 情绪状态段落
  * @param {string} params.personalityPrompt - 性格状态段落
@@ -52,7 +53,7 @@ export function buildSystemContext({ nickname, taskText, contextStr, relationshi
 - Current Time: ${timeStr}
 - User Nickname: ${nickname || "亲爱的"}
 - Tasks: ${taskText}
-${contextStr ? '- Memory Context: ' + contextStr : ''}
+${contextStr ? '- Memory Context:\n' + contextStr : ''}
 
 ${relationshipContext}
 

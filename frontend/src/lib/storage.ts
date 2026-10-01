@@ -48,11 +48,16 @@ const KEYS = {
   enabledTypes: "enabledTypes",
   /** 通知权限是否已问过（只问一次，避免每次进页面都弹） */
   notificationAsked: "notificationAsked",
+  // 记忆设置（设置页 → 记忆）：事实提取开关与检索模式
+  memoryFactsEnabled: "memoryFactsEnabled",
+  memoryRetrievalMode: "memoryRetrievalMode",
   // 以下四项为「高级选项」（设置页 → 通用 → 高级选项），语义见 lib/chatParams.ts
   maxPromptHistory: "maxPromptHistory",
   temperature: "temperature",
   maxTokens: "maxTokens",
   reasoningEffort: "reasoningEffort",
+  /** 无限上下文开关（高级选项第五项） */
+  unlimitedContext: "unlimitedContext",
 } as const;
 
 export const StorageKeys = KEYS;
@@ -60,6 +65,45 @@ export const StorageKeys = KEYS;
 /** 首次运行是否已完成引导 */
 export function isSetupComplete(): boolean {
   return Boolean(read(KEYS.apiKey) && read(KEYS.hasCompletedSetup));
+}
+
+/** 检索模式合法档位；auto = 配置了嵌入 Key 用语义，否则关键词 */
+const RETRIEVAL_MODES = ["auto", "embedding", "keyword"] as const;
+export type RetrievalMode = (typeof RETRIEVAL_MODES)[number];
+
+/** 读取记忆设置（读取即归一化：脏值/跨版本残留回落默认） */
+export function getMemoryConfig(): { memoryFactsEnabled: boolean; memoryRetrievalMode: RetrievalMode } {
+  const rawMode = read(KEYS.memoryRetrievalMode);
+  return {
+    memoryFactsEnabled: read(KEYS.memoryFactsEnabled) !== "false",
+    memoryRetrievalMode: (RETRIEVAL_MODES as readonly string[]).includes(rawMode ?? "")
+      ? (rawMode as RetrievalMode)
+      : "auto",
+  };
+}
+
+/**
+ * 云端语音（TTS/ASR）是否已配置专属 Key。
+ * 语音与主 Key 完全独立：未配置时云端引擎不启用，运行时回退浏览器本地语音。
+ */
+export function isTtsConfigured(): boolean {
+  return !!read(KEYS.ttsApiKey)?.trim();
+}
+
+/**
+ * 清理旧版「默认预填」残留。
+ *
+ * 旧设置弹窗给嵌入 URL/模型预填了默认值，且每次保存都会把它们原样写回
+ * localStorage——从没配置过嵌入服务的用户也会带着这两个值。
+ * 嵌入配置改为「按需折叠填写」后，与旧默认值完全相同的存储视为预填残留，一次性清掉。
+ */
+export function cleanupLegacyEmbeddingDefaults(): void {
+  if (read(KEYS.embBaseUrl) === "https://api.siliconflow.cn/v1") {
+    erase(KEYS.embBaseUrl);
+  }
+  if (read(KEYS.embModelName) === "BAAI/bge-large-zh-v1.5") {
+    erase(KEYS.embModelName);
+  }
 }
 
 /**
@@ -79,22 +123,26 @@ export function getChatConfig() {
     embModelName: read(KEYS.embModelName) || undefined,
     // 高级选项四项：读取即归一化（补默认 + 钳制）
     ...getAdvancedChatConfig(),
+    // 记忆设置：后端重启后需要重新下发（与嵌入配置同款生命周期）
+    ...getMemoryConfig(),
   };
 }
 
-/** 只读取「高级选项」四项（设置页初始化用，语义同 getChatConfig 的末四项） */
+/** 只读取「高级选项」五项（设置页初始化用，语义同 getChatConfig 的末五项） */
 export function getAdvancedChatConfig(): AdvancedChatConfig {
   return {
     maxPromptHistory: clampChatNumber(read(KEYS.maxPromptHistory), "maxPromptHistory"),
+    unlimitedContext: read(KEYS.unlimitedContext) === "true",
     temperature: clampChatNumber(read(KEYS.temperature), "temperature"),
     maxTokens: parseOptionalChatNumber(read(KEYS.maxTokens), "maxTokens"),
     reasoningEffort: normalizeReasoningEffort(read(KEYS.reasoningEffort)),
   };
 }
 
-/** 写回「高级选项」四项（空 maxTokens 与空 reasoningEffort 都写成空串 = 不传） */
+/** 写回「高级选项」五项（空 maxTokens 与空 reasoningEffort 都写成空串 = 不传） */
 export function setAdvancedChatConfig(cfg: AdvancedChatConfig): void {
   write(KEYS.maxPromptHistory, String(cfg.maxPromptHistory));
+  write(KEYS.unlimitedContext, cfg.unlimitedContext ? "true" : "false");
   write(KEYS.temperature, String(cfg.temperature));
   write(KEYS.maxTokens, cfg.maxTokens ? String(cfg.maxTokens) : "");
   write(KEYS.reasoningEffort, cfg.reasoningEffort);

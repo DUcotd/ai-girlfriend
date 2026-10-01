@@ -20,8 +20,13 @@ export function updateVoiceEngine({ apiKey }) {
 
 export const proactiveEngine = new ProactiveEngine(aiGirlfriend);
 
-/** 优雅停机：清理所有后台定时器 */
+/** 优雅停机：清理所有后台定时器，并把记忆去抖中的待写数据立即落盘 */
 export function shutdownServices() {
     proactiveEngine.stop();
     voiceEngine.current.stop?.();
+    try {
+        aiGirlfriend.memory?.flush();
+    } catch (e) {
+        console.error(`[Container] Memory flush on shutdown failed: ${e.message}`);
+    }
 }

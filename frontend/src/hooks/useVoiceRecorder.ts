@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { isTtsConfigured } from "@/lib/storage";
 import { toast } from "@/stores/uiStore";
 
 /**
  * 麦克风录音 + 语音转文字。
  * 录音结束后将文本交给 onTranscribed，是否自动发送由调用方决定。
+ * 语音转文字与朗读共用独立的 TTS Key（不跟随主 Key）：未配置时不发起转写并明确提示。
  */
 export function useVoiceRecorder(onTranscribed: (text: string) => void) {
   const [isRecording, setIsRecording] = useState(false);
@@ -51,6 +53,12 @@ export function useVoiceRecorder(onTranscribed: (text: string) => void) {
         setMediaStream(null);
         clearTimer();
         stream.getTracks().forEach((track) => track.stop());
+
+        // 未配置专属 TTS Key：云端转写不可用，直接提示而不是录完静默无结果
+        if (!isTtsConfigured()) {
+          toast("语音转文字需要 OpenAI TTS 密钥，请在 设置 → 语音 中配置", "info");
+          return;
+        }
 
         const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         const text = await api.transcribe(audioBlob);

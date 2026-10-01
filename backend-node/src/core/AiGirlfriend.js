@@ -20,7 +20,7 @@ import { buildProactivePrompt, buildProactiveDirective, buildProactivePersonaDir
 import { buildTaskContextText, buildTaskActionInstruction, buildTaskNudgeText, pickNudgeTasks } from './prompts/taskPrompt.js';
 import { executeTaskAction } from './taskActions.js';
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
-import { config } from '../config.js';
+import { config, REASONING_EFFORTS } from '../config.js';
 import { createStreamFilter, splitDelta, extractReasoning } from './streamFilter.js';
 
 dotenv.config();
@@ -76,7 +76,9 @@ class AiGirlfriend {
             baseUrl: this.baseUrl,
             embeddingApiKey: this.embeddingApiKey,
             embeddingBaseUrl: this.embeddingBaseUrl,
-            embeddingModelName: this.embeddingModelName
+            embeddingModelName: this.embeddingModelName,
+            // 事实提取复用主对话客户端；getter 形式保证配置热更新后拿到的是当前实例
+            getChatClient: () => (this.openai ? { client: this.openai, model: this.modelName } : null),
         });
 
         this.emotionEngine = new EmotionEngine();
@@ -191,7 +193,7 @@ class AiGirlfriend {
      *
      * @returns {boolean} 是否真的发生了变更
      */
-    _applyChatParams({ maxPromptHistory, temperature, maxTokens, reasoningEffort } = {}) {
+    _applyChatParams({ maxPromptHistory, unlimitedContext, temperature, maxTokens, reasoningEffort } = {}) {
         let changed = false;
 
         /** @returns {boolean} 写入是否生效 */
@@ -206,12 +208,20 @@ class AiGirlfriend {
         };
 
         if (setNumber('maxPromptHistory', maxPromptHistory, 1, 500)) changed = true;
+        if (unlimitedContext !== undefined && unlimitedContext !== null) {
+            const next = !!unlimitedContext;
+            if (config.chat.unlimitedContext !== next) {
+                config.chat.unlimitedContext = next;
+                changed = true;
+            }
+        }
         if (setNumber('temperature', temperature, 0, 2)) changed = true;
         // maxTokens: 0 是合法值，语义为「不传 max_tokens」
         if (setNumber('maxTokens', maxTokens, 0, 1_000_000)) changed = true;
 
         if (reasoningEffort !== undefined && reasoningEffort !== null) {
-            const next = ['low', 'medium', 'high'].includes(reasoningEffort) ? reasoningEffort : '';
+            // 档位表以 config.js 的 REASONING_EFFORTS 为唯一真源，勿在此处另抄一份
+            const next = REASONING_EFFORTS.includes(reasoningEffort) ? reasoningEffort : '';
             if (config.chat.reasoningEffort !== next) {
                 config.chat.reasoningEffort = next;
                 changed = true;
@@ -225,6 +235,7 @@ class AiGirlfriend {
     getChatParams() {
         return {
             maxPromptHistory: config.chat.maxPromptHistory,
+            unlimitedContext: config.chat.unlimitedContext,
             temperature: config.chat.temperature,
             maxTokens: config.chat.maxTokens,
             reasoningEffort: config.chat.reasoningEffort
@@ -234,12 +245,17 @@ class AiGirlfriend {
     /**
      * 构造发送给 LLM 的消息：system prompt + 最近 N 条历史。
      * 完整历史仍保留在 this.history 并落盘，这里只裁剪 prompt 以加快生成。
-     * 条数 N 即 config.chat.maxPromptHistory（设置页「高级选项」可改）。
+     * 条数 N 即 config.chat.maxPromptHistory（设置页「高级选项」可改）；
+     * 开启「无限上下文」（config.chat.unlimitedContext）时带上全部保留的对话，
+     * 不再按条数裁剪（持久化上限 MAX_HISTORY 兜底，token 不会无界膨胀）。
      */
     _buildPromptMessages() {
         // history 里的 assistant 消息可能带 thought（内心独白），只对前端有意义，
         // 这里统一剥成 { role, content }，避免多余字段打进 LLM 请求。
         const toPromptMsg = (m) => ({ role: m.role, content: m.content });
+        if (config.chat.unlimitedContext) {
+            return this.history.map(toPromptMsg);
+        }
         const max = config.chat.maxPromptHistory;
         // history[0] 固定为 system prompt
         if (this.history.length <= max + 1) return this.history.map(toPromptMsg);
@@ -262,8 +278,8 @@ class AiGirlfriend {
         setImmediate(() => {
             if (this.memory) {
                 this.memory
-                    .addMemory(`User: ${userInput}\nXiao Ai: ${replyText}`, { emotionSnapshot: snapshot })
-                    .catch((e) => console.error(`[Chat] addMemory failed: ${e.message}`));
+                    .recordTurn(userInput, replyText, { emotionSnapshot: snapshot })
+                    .catch((e) => console.error(`[Chat] recordTurn failed: ${e.message}`));
             }
             try {
                 this._saveState();
@@ -316,13 +332,13 @@ class AiGirlfriend {
         // ========== Layer 0: 亲和度驱动情感基准 ==========
         this.emotionEngine.updateBaselineForAffinity(this.affinity);
 
-        // ========== Layer 4: 情感染色记忆检索 ==========
+        // ========== Layer 4: 记忆上下文（事实常驻 + 双模式检索回忆） ==========
         let contextStr = "";
         if (this.memory) {
-            const context = await this.memory.getRelevantContext(userInput, this.emotionEngine.state);
-            if (context) {
-                contextStr = `\n[Relevant Memories]:\n${context}\n`;
-                console.log(`Found context: ${context.substring(0, 100)}...`);
+            try {
+                contextStr = await this.memory.buildMemoryContext(userInput, this.emotionEngine.state);
+            } catch (e) {
+                console.error(`[Chat] buildMemoryContext failed: ${e.message}`);
             }
         }
 
@@ -771,13 +787,10 @@ class AiGirlfriend {
 
         if (reason === 'memory_share' && this.memory) {
             try {
-                const memories = this.memory.memories;
-                if (memories && memories.length > 0) {
-                    const oldMemories = memories.slice(0, Math.max(1, memories.length - 5));
-                    const randomMemory = oldMemories[Math.floor(Math.random() * oldMemories.length)];
-                    if (randomMemory) {
-                        context += `\n- 可参考的历史记忆: "${randomMemory.text.substring(0, 100)}..."`;
-                    }
+                // 走 facade 方法（内部避开最近 5 条与最近已分享的），不再直读内部数组
+                const memory = this.memory.getRandomMemory(5);
+                if (memory) {
+                    context += `\n- 可参考的历史记忆: "${memory.text.substring(0, 100)}..."`;
                 }
             } catch (e) {
                 // 忽略记忆检索失败，不影响主动消息生成
@@ -865,7 +878,8 @@ class AiGirlfriend {
             affinity: this.affinity,
             nickname: this.nickname || "亲爱的",
             historyCount: this.history.filter(m => m.role !== 'system').length,
-            memoryCount: this.memory ? this.memory.memories.length : 0,
+            memoryCount: this.memory ? this.memory.store.episodes.length : 0,
+            factCount: this.memory ? this.memory.store.facts.length : 0,
             // 平铺情绪标签：前端刷新后 syncState 直接回填主徽章，
             // 不用等下一条消息的 chat 响应才校正
             emotion: this.emotionEngine ? this.emotionEngine.getEmotionLabel() : null,
@@ -876,39 +890,43 @@ class AiGirlfriend {
         };
     }
 
-    updateConfig(config) {
+    /**
+     * 配置热更新。⚠️ 参数故意叫 cfg 而不是 config：旧参数名会遮蔽全局导入 config，
+     * 函数体内写 config.memory.* 会命中请求体而非运行时配置（与 Memory 构造器同款陷阱）。
+     */
+    updateConfig(cfg) {
         let changed = false;
 
-        if (config.apiKey && config.apiKey !== this.apiKey) {
-            this.apiKey = config.apiKey;
+        if (cfg.apiKey && cfg.apiKey !== this.apiKey) {
+            this.apiKey = cfg.apiKey;
             changed = true;
         }
-        if (config.baseUrl && config.baseUrl !== this.baseUrl) {
-            this.baseUrl = config.baseUrl;
+        if (cfg.baseUrl && cfg.baseUrl !== this.baseUrl) {
+            this.baseUrl = cfg.baseUrl;
             changed = true;
         }
-        if (config.modelName && config.modelName !== this.modelName) {
-            this.modelName = config.modelName;
+        if (cfg.modelName && cfg.modelName !== this.modelName) {
+            this.modelName = cfg.modelName;
             changed = true;
         }
         // 嵌入配置允许「清空回退」：前端把输入框清空会送来空串，
         // 这里归一化成 null，Memory 层随即回退到「使用主 Key」的语义
-        if (config.embeddingApiKey !== undefined) {
-            const nextKey = config.embeddingApiKey === '' ? null : config.embeddingApiKey;
+        if (cfg.embeddingApiKey !== undefined) {
+            const nextKey = cfg.embeddingApiKey === '' ? null : cfg.embeddingApiKey;
             if (nextKey !== this.embeddingApiKey) {
                 this.embeddingApiKey = nextKey;
                 changed = true;
             }
         }
-        if (config.embeddingBaseUrl !== undefined) {
-            const nextUrl = config.embeddingBaseUrl === '' ? null : config.embeddingBaseUrl;
+        if (cfg.embeddingBaseUrl !== undefined) {
+            const nextUrl = cfg.embeddingBaseUrl === '' ? null : cfg.embeddingBaseUrl;
             if (nextUrl !== this.embeddingBaseUrl) {
                 this.embeddingBaseUrl = nextUrl;
                 changed = true;
             }
         }
-        if (config.embeddingModelName !== undefined) {
-            const nextModel = config.embeddingModelName === '' ? null : config.embeddingModelName;
+        if (cfg.embeddingModelName !== undefined) {
+            const nextModel = cfg.embeddingModelName === '' ? null : cfg.embeddingModelName;
             if (nextModel !== this.embeddingModelName) {
                 this.embeddingModelName = nextModel;
                 changed = true;
@@ -918,16 +936,44 @@ class AiGirlfriend {
         // 高级选项（上下文条数 / 温度 / 最大输出 / 思考强度）：写运行时 config.chat，
         // 单独记 changed，不并入上面的连接类变更（改这些不需要重建 OpenAI 客户端）。
         const paramsChanged = this._applyChatParams({
-            maxPromptHistory: config.maxPromptHistory,
-            temperature: config.temperature,
-            maxTokens: config.maxTokens,
-            reasoningEffort: config.reasoningEffort
+            maxPromptHistory: cfg.maxPromptHistory,
+            unlimitedContext: cfg.unlimitedContext,
+            temperature: cfg.temperature,
+            maxTokens: cfg.maxTokens,
+            reasoningEffort: cfg.reasoningEffort
         });
+
+        // 记忆选项（事实提取开关 / 检索模式）：同为运行时参数，改这些不需要动任何客户端
+        let memoryParamsChanged = false;
+        if (cfg.memoryFactsEnabled !== undefined) {
+            const next = !!cfg.memoryFactsEnabled;
+            if (config.memory.facts.enabled !== next) {
+                config.memory.facts.enabled = next;
+                memoryParamsChanged = true;
+            }
+        }
+        if (cfg.memoryRetrievalMode !== undefined) {
+            const next = ['auto', 'embedding', 'keyword'].includes(cfg.memoryRetrievalMode)
+                ? cfg.memoryRetrievalMode
+                : 'auto';
+            if (config.memory.retrieval.mode !== next) {
+                config.memory.retrieval.mode = next;
+                memoryParamsChanged = true;
+            }
+        }
+
         if (paramsChanged) {
             const p = this.getChatParams();
             console.log(
-                `[Config] Chat params: history=${p.maxPromptHistory}, temperature=${p.temperature}, ` +
+                `[Config] Chat params: history=${p.unlimitedContext ? '∞ (unlimited)' : p.maxPromptHistory}, ` +
+                `temperature=${p.temperature}, ` +
                 `maxTokens=${p.maxTokens > 0 ? p.maxTokens : 'auto'}, reasoningEffort=${p.reasoningEffort || 'off'}`
+            );
+        }
+        if (memoryParamsChanged) {
+            console.log(
+                `[Config] Memory: facts=${config.memory.facts.enabled ? 'on' : 'off'}, ` +
+                `mode=${config.memory.retrieval.mode} (effective: ${this.memory?.retriever.resolveMode() ?? '?'})`
             );
         }
 
@@ -960,19 +1006,41 @@ class AiGirlfriend {
         return this.getState();
     }
 
+    /** 全量记忆导出：{facts, episodes(时间倒序), stats}；embedding 大字段不下发 */
     getMemories() {
-        if (!this.memory) return [];
-        return this.memory.memories.map(m => ({
-            id: m.id,
-            text: m.text,
-            timestamp: m.timestamp
-        }));
+        if (!this.memory) {
+            return { facts: [], episodes: [], stats: { episodeCount: 0, factCount: 0, retrievalMode: 'keyword' } };
+        }
+        return this.memory.getAll();
+    }
+
+    addFact(content, options = {}) {
+        if (!this.memory) return Promise.resolve(null);
+        return this.memory.addFact(content, options);
+    }
+
+    updateFact(id, updates = {}) {
+        if (!this.memory) return Promise.resolve(null);
+        return this.memory.updateFact(id, updates);
+    }
+
+    /** 删除单条记忆（事实或情节）；返回命中类型或 null */
+    deleteMemory(id) {
+        return this.memory ? this.memory.deleteMemory(id) : null;
     }
 
     clearMemoriesOnly() {
         if (this.memory) {
             this.memory.clearMemory();
         }
+    }
+
+    /** 供 /config/status：检索模式与事实提取开关的当前生效值 */
+    getMemoryStatus() {
+        return {
+            ...(this.memory ? this.memory.getStats() : { episodeCount: 0, factCount: 0, retrievalMode: 'keyword' }),
+            factsEnabled: config.memory.facts.enabled,
+        };
     }
 }
 

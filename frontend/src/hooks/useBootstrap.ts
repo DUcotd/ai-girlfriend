@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { get, getChatConfig, isSetupComplete, set } from "@/lib/storage";
+import { cleanupLegacyEmbeddingDefaults, get, getChatConfig, isSetupComplete, set } from "@/lib/storage";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
 
@@ -19,6 +19,9 @@ export function useBootstrap() {
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setIsFirstRun(!isSetupComplete());
+
+    // 旧版嵌入默认值残留一次性清理（详见 storage.cleanupLegacyEmbeddingDefaults）
+    cleanupLegacyEmbeddingDefaults();
 
     // 通知权限只问一次：问过就记下来，已授权/已拒绝也不再打扰
     if (
@@ -37,9 +40,10 @@ export function useBootstrap() {
     void fetchHistory();
 
     // 已有配置时同步给后端（后端配置仅存于内存，重启后需要重新下发）。
-    // 只配了语音 Key、没配主 Key 的场景也要下发，否则 tts_api_key 永远到不了后端
+    // 只配了语音 Key、没配主 Key 的场景也要下发，否则 tts_api_key 永远到不了后端；
+    // 仅配嵌入 Key 的场景同理（记忆设置随每次 syncConfig 一起下发）
     const config = getChatConfig();
-    if (config.apiKey || config.ttsApiKey) {
+    if (config.apiKey || config.ttsApiKey || config.embApiKey) {
       api.syncConfig(config).catch((e: unknown) => {
         console.warn("[Bootstrap] syncConfig failed:", e);
         // 静默吞掉的话用户要等到发消息报错才会发现后端没就绪

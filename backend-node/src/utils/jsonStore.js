@@ -60,7 +60,13 @@ export function dataPath(filename) {
     return path.join(DATA_DIR, filename);
 }
 
-/** 读取 JSON 文件，不存在或解析失败时返回 fallback */
+/**
+ * 读取 JSON 文件，不存在或解析失败时返回 fallback。
+ *
+ * 解析失败时把损坏文件改名 quarantine（*.corrupt-<时间戳>）保留现场再回退：
+ * 否则调用方会拿着 fallback（通常是空状态）继续运行，下次 writeJson 把
+ * fallback 原子覆盖回去，真实数据就永久丢了。隔离后数据可人工抢救。
+ */
 export function readJson(filename, fallback = null) {
     const filePath = dataPath(filename);
     try {
@@ -68,6 +74,13 @@ export function readJson(filename, fallback = null) {
         return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     } catch (e) {
         console.error(`[jsonStore] Read error (${filename}):`, e.message);
+        try {
+            const quarantined = `${filePath}.corrupt-${Date.now()}`;
+            fs.renameSync(filePath, quarantined);
+            console.warn(`[jsonStore] Corrupted file quarantined: ${quarantined}`);
+        } catch (renameErr) {
+            console.error(`[jsonStore] Failed to quarantine corrupted file:`, renameErr.message);
+        }
         return fallback;
     }
 }

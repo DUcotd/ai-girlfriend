@@ -11,12 +11,14 @@ import { useToast } from "../ui/Toast";
 import { api } from "@/lib/api";
 import { get, getAdvancedChatConfig, remove, set, setAdvancedChatConfig } from "@/lib/storage";
 import { DEFAULT_PROVIDER } from "@/lib/providers";
+import { getMemoryConfig } from "@/lib/storage";
 import { normalizeAdvancedConfig } from "@/lib/chatParams";
 import type { AdvancedChatConfig } from "@/lib/chatParams";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { usePersonality } from "@/hooks/usePersonality";
 import { cn } from "@/lib/cn";
 import type { ProactiveGroupInfo, ProactiveTypeInfo, TtsEngine } from "@/types";
+import type { MemoryRetrievalMode } from "./tabs/SettingsMemoryTab";
 import SettingsAdvancedTab from "./tabs/SettingsAdvancedTab";
 import SettingsGeneralTab from "./tabs/SettingsGeneralTab";
 import SettingsMemoryTab from "./tabs/SettingsMemoryTab";
@@ -48,11 +50,19 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
     const [apiKey, setApiKey] = useState(() => get("apiKey") || "");
     const [baseUrl, setBaseUrl] = useState(() => get("baseUrl") || DEFAULT_PROVIDER.baseUrl);
     const [modelName, setModelName] = useState(() => get("modelName") || DEFAULT_PROVIDER.modelName);
+    // 语音配置独立于主 Key：引擎默认「浏览器本地」，云端只在用户显式选择并配置了
+    // 专属 TTS Key 后才启用（未配置时云端语音不可用，运行时自动回退本地）
     const [ttsApiKey, setTtsApiKey] = useState(() => get("ttsApiKey") || "");
-    const [ttsEngine, setTtsEngine] = useState<TtsEngine>(() => (get("ttsEngine") as TtsEngine) || "openai");
+    const [ttsEngine, setTtsEngine] = useState<TtsEngine>(() => (get("ttsEngine") as TtsEngine) || "local");
+    // 嵌入配置不预填任何默认值：只在用户真的要用语义检索时才展开填写（留空 = 用主 Key/默认模型）
     const [embApiKey, setEmbApiKey] = useState(() => get("embApiKey") || "");
-    const [embBaseUrl, setEmbBaseUrl] = useState(() => get("embBaseUrl") || "https://api.siliconflow.cn/v1");
-    const [embModelName, setEmbModelName] = useState(() => get("embModelName") || "BAAI/bge-large-zh-v1.5");
+    const [embBaseUrl, setEmbBaseUrl] = useState(() => get("embBaseUrl") || "");
+    const [embModelName, setEmbModelName] = useState(() => get("embModelName") || "");
+    // 记忆设置：事实提取开关 + 检索模式（storage 读取已归一化，这里拿到的就是合法值）
+    const [memoryFactsEnabled, setMemoryFactsEnabled] = useState(() => getMemoryConfig().memoryFactsEnabled);
+    const [memoryRetrievalMode, setMemoryRetrievalMode] = useState<MemoryRetrievalMode>(
+        () => getMemoryConfig().memoryRetrievalMode
+    );
     // 高级选项四项（storage 读取时已钳制/补默认，这里拿到的就是合法值）
     const [advanced, setAdvanced] = useState<AdvancedChatConfig>(getAdvancedChatConfig);
     const [activeTab, setActiveTab] = useState<SettingsTab>("general");
@@ -149,6 +159,10 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         set("embBaseUrl", embBaseUrl);
         set("embModelName", embModelName);
 
+        // 保存记忆设置到本地
+        set("memoryFactsEnabled", memoryFactsEnabled.toString());
+        set("memoryRetrievalMode", memoryRetrievalMode);
+
         // 保存主动消息配置到本地
         set("proactiveEnabled", proactiveEnabled.toString());
         set("frequencyLevel", frequencyLevel);
@@ -165,6 +179,8 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 embApiKey,
                 embBaseUrl,
                 embModelName,
+                memoryFactsEnabled,
+                memoryRetrievalMode,
                 ...safeAdvanced,
             });
 
@@ -297,6 +313,10 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                                     onEmbApiKeyChange={setEmbApiKey}
                                     onEmbBaseUrlChange={setEmbBaseUrl}
                                     onEmbModelNameChange={setEmbModelName}
+                                    memoryFactsEnabled={memoryFactsEnabled}
+                                    onMemoryFactsEnabledChange={setMemoryFactsEnabled}
+                                    memoryRetrievalMode={memoryRetrievalMode}
+                                    onMemoryRetrievalModeChange={setMemoryRetrievalMode}
                                 />
                             )}
 

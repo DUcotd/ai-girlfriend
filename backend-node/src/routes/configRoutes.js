@@ -19,7 +19,9 @@ router.post('/config', (req, res) => {
         api_key, base_url, model_name, tts_api_key,
         embedding_api_key, embedding_base_url, embedding_model_name,
         // 高级选项（设置页 → 通用 → 高级选项）
-        max_prompt_history, temperature, max_tokens, reasoning_effort,
+        max_prompt_history, unlimited_context, temperature, max_tokens, reasoning_effort,
+        // 记忆选项（设置页 → 记忆）
+        memory_facts_enabled, memory_retrieval_mode,
     } = req.body;
     const result = aiGirlfriend.updateConfig({
         apiKey: api_key,
@@ -29,12 +31,18 @@ router.post('/config', (req, res) => {
         embeddingBaseUrl: embedding_base_url,
         embeddingModelName: embedding_model_name,
         maxPromptHistory: max_prompt_history,
+        unlimitedContext: unlimited_context,
         temperature,
         maxTokens: max_tokens,
-        reasoningEffort: reasoning_effort
+        reasoningEffort: reasoning_effort,
+        memoryFactsEnabled: memory_facts_enabled,
+        memoryRetrievalMode: memory_retrieval_mode,
     });
-    if (tts_api_key || api_key) {
-        updateVoiceEngine({ apiKey: tts_api_key || api_key });
+    // 语音（TTS/ASR）独立配置：只用专属 TTS Key，绝不回退主 Key——
+    // 未配置时语音引擎保持未启用态（云端朗读/录音转写返回 400 提示，前端回退浏览器本地语音）。
+    // 显式传空串 = 清除 Key，引擎回到未配置态
+    if (tts_api_key !== undefined) {
+        updateVoiceEngine({ apiKey: tts_api_key === '' ? null : tts_api_key });
     }
     res.json({ status: "updated", current_model: result.modelName || aiGirlfriend.modelName });
 });
@@ -46,7 +54,9 @@ router.get('/config/status', (req, res) => {
         currentModel: aiGirlfriend.modelName || null,
         baseUrl: aiGirlfriend.baseUrl || null,
         // 高级选项当前生效值（前端设置页从 localStorage 回显，这里供排查/核对用）
-        chat: aiGirlfriend.getChatParams()
+        chat: aiGirlfriend.getChatParams(),
+        // 记忆系统当前生效值：实际检索模式（auto 解析后）+ 事实提取开关
+        memory: aiGirlfriend.getMemoryStatus()
     });
 });
 

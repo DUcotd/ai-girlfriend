@@ -16,6 +16,7 @@ import Field from "./Field";
 import Input from "./Input";
 import NumberField from "./NumberField";
 import Select from "./Select";
+import Switch from "./Switch";
 
 /**
  * 服务商下拉选项：预设 + 自定义。
@@ -108,13 +109,24 @@ export default function ApiConfigForm({
                             }}
                         />
                     </Field>
-                    {/* note 区常驻并预留两行高度：各预设的 note 有无/长短不一，
-                        若条件渲染，切换服务商时下方全部字段会整体上下跳（实测 40.5px）。
-                        min-h 取两行实际高度（10px × leading-relaxed ≈ 32.5px）向上取整；
-                        后续若有超过两行的 note，需同步调高这个值。 */}
-                    <p className="min-h-[33px] pl-1 text-[10px] leading-relaxed text-status-warning">
-                        {activePresetNote ? `⚠️ ${activePresetNote}` : ""}
-                    </p>
+                    {/* 警示条条件渲染 + 高度动画：选「自定义」（无 note）时不再留空洞，
+                        切换预设时平滑展开/收起而不是整块跳位（取代旧的常驻两行占位） */}
+                    <AnimatePresence initial={false}>
+                        {activePresetNote && (
+                            <motion.div
+                                key="preset-note"
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: "auto", opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.2 }}
+                                className="overflow-hidden"
+                            >
+                                <p className="pl-1 text-[10px] leading-relaxed text-status-warning">
+                                    ⚠️ {activePresetNote}
+                                </p>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                 </div>
             )}
 
@@ -179,24 +191,55 @@ export default function ApiConfigForm({
                                 className="overflow-hidden"
                             >
                                 <div className="space-y-4 pt-3">
-                                    <NumberField
-                                        label="上下文条数"
-                                        value={adv.maxPromptHistory}
-                                        min={CHAT_NUMBER_LIMITS.maxPromptHistory.min}
-                                        max={CHAT_NUMBER_LIMITS.maxPromptHistory.max}
-                                        step={CHAT_NUMBER_LIMITS.maxPromptHistory.step}
-                                        fallback={CHAT_NUMBER_LIMITS.maxPromptHistory.fallback}
-                                        placeholder="30"
-                                        hint="每次请求带上的最近对话条数（5–100）。调小更快更省，调大更连贯。"
-                                        onChange={(v) =>
-                                            patchAdvanced({
-                                                maxPromptHistory:
-                                                    v ??
-                                                    CHAT_NUMBER_LIMITS.maxPromptHistory
-                                                        .fallback,
-                                            })
-                                        }
-                                    />
+                                    {/* 无限上下文：开启后忽略条数，带上全部保留的对话 */}
+                                    <div className="flex items-center justify-between rounded-xl bg-surface-1/60 px-3 py-2.5">
+                                        <div>
+                                            <p className="text-sm font-medium text-content-primary">无限上下文</p>
+                                            <p className="text-[10px] text-content-muted">
+                                                {adv.unlimitedContext
+                                                    ? "每次带上全部保留的对话（最多 200 条），更连贯但 token 消耗明显增加"
+                                                    : "关闭时按下方条数裁剪上下文，更快更省"}
+                                            </p>
+                                        </div>
+                                        <Switch
+                                            checked={adv.unlimitedContext}
+                                            onChange={(v) => patchAdvanced({ unlimitedContext: v })}
+                                            label="无限上下文"
+                                        />
+                                    </div>
+
+                                    {/* 无限上下文开启时条数无意义，整个字段隐藏（带高度动画避免下方字段跳位） */}
+                                    <AnimatePresence initial={false}>
+                                        {!adv.unlimitedContext && (
+                                            <motion.div
+                                                key="context-count"
+                                                initial={{ height: 0, opacity: 0 }}
+                                                animate={{ height: "auto", opacity: 1 }}
+                                                exit={{ height: 0, opacity: 0 }}
+                                                transition={{ duration: 0.2 }}
+                                                className="overflow-hidden"
+                                            >
+                                                <NumberField
+                                                    label="上下文条数"
+                                                    value={adv.maxPromptHistory}
+                                                    min={CHAT_NUMBER_LIMITS.maxPromptHistory.min}
+                                                    max={CHAT_NUMBER_LIMITS.maxPromptHistory.max}
+                                                    step={CHAT_NUMBER_LIMITS.maxPromptHistory.step}
+                                                    fallback={CHAT_NUMBER_LIMITS.maxPromptHistory.fallback}
+                                                    placeholder="30"
+                                                    hint="每次请求带上的最近对话条数（5–100）。调小更快更省，调大更连贯。"
+                                                    onChange={(v) =>
+                                                        patchAdvanced({
+                                                            maxPromptHistory:
+                                                                v ??
+                                                                CHAT_NUMBER_LIMITS.maxPromptHistory
+                                                                    .fallback,
+                                                        })
+                                                    }
+                                                />
+                                            </motion.div>
+                                        )}
+                                    </AnimatePresence>
 
                                     <NumberField
                                         label="温度 Temperature"

@@ -1,213 +1,310 @@
-import { v4 as uuidv4 } from 'uuid';
-import OpenAI from 'openai';
-import dotenv from 'dotenv';
-import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+/**
+ * Memory - 记忆系统 facade（对外 API 与旧版兼容，实现在 ./memory/）。
+ *
+ * 架构（详见 core/memory/ 各模块）：
+ *   MemoryStore      —— schema v2 持久化（episodes 情节 + facts 事实），去抖落盘
+ *   EmbeddingClient  —— 嵌入向量（仅语义检索模式使用）
+ *   MemoryRetriever  —— 检索调度：方案 A（语义余弦+情绪+recency）/ 方案 B（BM25 关键词）
+ *   FactExtractor    —— 事实提取：每轮对话后用主 LLM 沉淀持久信息（add/update/delete）
+ *   textSim          —— 切词与文本相似度（关键词检索/去重共用）
+ *
+ * 检索双模式：事实注入按重要度常驻、与嵌入无关，故无嵌入 Key 时记忆系统依然完整。
+ */
 import { config } from '../config.js';
-
-dotenv.config();
-
-const DB_FILE = 'memory.json';
+import { MemoryStore } from './memory/MemoryStore.js';
+import { EmbeddingClient } from './memory/EmbeddingClient.js';
+import { MemoryRetriever } from './memory/MemoryRetriever.js';
+import { FactExtractor, clampImportance, normalizeCategory } from './memory/FactExtractor.js';
+import { isNearDuplicateText } from './memory/KeywordScorer.js';
 
 class Memory {
-    constructor(persistDirectory = "memory_db", config = {}) {
-        // persistDirectory 仅为兼容保留；实际存储统一在 backend-node/data/memory.json
-        this.dbPath = dataPath(DB_FILE);
-
-        this.apiKey = config.embeddingApiKey || config.apiKey || null;
-        this.baseUrl = config.embeddingBaseUrl || config.baseUrl || "https://api.openai.com/v1";
-        this.embeddingModel = config.embeddingModelName || "text-embedding-3-small";
-
-        if (this.baseUrl.includes("siliconflow") && this.embeddingModel === "text-embedding-3-small") {
-            this.embeddingModel = "BAAI/bge-large-zh-v1.5";
-        }
-
-        this.openai = null;
-
-        if (this.apiKey) {
-            this.initOpenAI();
-        }
-
-        this.memories = this._load();
+    /**
+     * @param {string} _persistDirectory 仅兼容旧版签名的占位，实际存储统一在 data/memory.json
+     * @param {object} opts { apiKey, baseUrl, embeddingApiKey, embeddingBaseUrl,
+     *                        embeddingModelName, getChatClient }
+     *   getChatClient: () => ({client, model} | null)，供事实提取复用主对话客户端
+     *   （构造参数改名 opts，不再叫 config——旧参数名会遮蔽全局导入，是重构前的已知陷阱）
+     */
+    constructor(_persistDirectory = null, opts = {}) {
+        this.store = new MemoryStore();
+        this.embedding = new EmbeddingClient(Memory._resolveEmbeddingOpts(opts));
+        this.retriever = new MemoryRetriever({ store: this.store, embedding: this.embedding });
+        this._getChatClient = typeof opts.getChatClient === 'function' ? opts.getChatClient : null;
+        this.factExtractor = new FactExtractor({ getClient: this._getChatClient });
+        this._extractQueue = Promise.resolve();
+        this._extractGeneration = 0;
+        this._recentSharedIds = new Set();
     }
 
-    initOpenAI() {
-        let cleanBaseUrl = this.baseUrl.replace(/\/embeddings\/?$/, "");
-        // embedding 只用来做「锦上添花」的语义检索：
-        // 超时短、不重试，慢/挂了就立刻回退关键词检索，绝不拖慢对话主链路。
-        this.openai = new OpenAI({
-            apiKey: this.apiKey,
-            baseURL: cleanBaseUrl,
-            timeout: config.embedding.timeoutMs,
-            maxRetries: config.embedding.maxRetries,
-        });
-    }
-
-    updateConfig(config) {
-        if (config.embeddingApiKey) this.apiKey = config.embeddingApiKey;
-        else if (config.apiKey) this.apiKey = config.apiKey;
-
-        if (config.embeddingBaseUrl) this.baseUrl = config.embeddingBaseUrl;
-        else if (config.baseUrl) this.baseUrl = config.baseUrl;
-
-        if (config.embeddingModelName) this.embeddingModel = config.embeddingModelName;
-
-        if (this.apiKey) {
-            this.initOpenAI();
-        }
-    }
-
-    _load() {
-        return readJson(DB_FILE, []);
-    }
-
-    _save() {
-        writeJson(DB_FILE, this.memories);
-    }
-
-    async getEmbedding(text) {
-        if (!this.openai) return null;
-        try {
-            const response = await this.openai.embeddings.create({
-                model: this.embeddingModel,
-                input: text,
-            });
-            return response.data[0].embedding;
-        } catch (e) {
-            // 静默退化是有意设计，但至少要留一条日志，否则 key/模型配错永远无人知晓
-            console.warn(`[Memory] getEmbedding failed (${e.status || 'no-status'}), falling back to keyword search: ${e.message || e}`);
-            return null;
-        }
-    }
-
-    cosineSimilarity(vecA, vecB) {
-        if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-        let dotProduct = 0, normA = 0, normB = 0;
-        for (let i = 0; i < vecA.length; i++) {
-            dotProduct += vecA[i] * vecB[i];
-            normA += vecA[i] * vecA[i];
-            normB += vecB[i] * vecB[i];
-        }
-        if (normA === 0 || normB === 0) return 0;
-        return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-    }
-
-    async addMemory(text, metadata = null) {
-        if (!text || !text.trim()) return;
-        const embedding = await this.getEmbedding(text);
-        const entry = {
-            id: uuidv4(),
-            text,
-            embedding,
-            // 记录生成向量用的模型：换模型后旧向量维度不匹配，靠这个字段才能发现并提示
-            embeddingModel: embedding ? this.embeddingModel : null,
-            metadata: metadata || { type: "conversation" },
-            emotionSnapshot: metadata?.emotionSnapshot || null,
-            timestamp: Date.now() / 1000
+    /** 主配置 + 嵌入专属配置 → 嵌入客户端配置（专属字段优先，缺省回退主 Key/URL） */
+    static _resolveEmbeddingOpts(opts = {}) {
+        return {
+            apiKey: opts.embeddingApiKey || opts.apiKey || null,
+            baseUrl: opts.embeddingBaseUrl || opts.baseUrl || undefined,
+            model: opts.embeddingModelName || undefined,
         };
-        this.memories.push(entry);
-        if (this.memories.length > 500) {
-            this.memories = this.memories.slice(-500);
-        }
-        this._save();
     }
 
-    async getRelevantContext(query, currentEmotion = null, nResults = 3) {
-        if (!this.memories || this.memories.length === 0) return "";
-
-        // 没有任何向量化的记忆时，语义检索无从谈起，
-        // 直接走关键词检索，省掉一次 embedding 网络往返。
-        const hasVectors = this.memories.some(m => m.embedding);
-        if (!hasVectors) return this._keywordSearch(query, nResults);
-
-        const queryEmbedding = await this.getEmbedding(query);
-        if (queryEmbedding) {
-            // 换过嵌入模型后，旧模型生成的向量维度不匹配、相似度恒为 0，
-            // 这些记忆会静默退出语义检索——至少要给出一条可发现的警告
-            const staleModels = new Set(
-                this.memories
-                    .filter(m => m.embedding && m.embeddingModel && m.embeddingModel !== this.embeddingModel)
-                    .map(m => m.embeddingModel)
-            );
-            if (staleModels.size > 0 && !this._warnedStaleEmbedding) {
-                this._warnedStaleEmbedding = true;
-                console.warn(
-                    `[Memory] ${staleModels.size} 个旧嵌入模型（${[...staleModels].join(', ')}）生成的历史记忆与当前模型` +
-                    `（${this.embeddingModel}）不兼容，已无法参与语义检索；可清空记忆或换回原模型。`
-                );
-            }
-            const scoredMemories = [];
-            for (const mem of this.memories) {
-                if (mem.embedding) {
-                    const semanticScore = this.cosineSimilarity(queryEmbedding, mem.embedding);
-                    let emotionScore = 0;
-                    if (currentEmotion && mem.emotionSnapshot) {
-                        emotionScore = this._emotionSimilarity(currentEmotion, mem.emotionSnapshot);
-                    }
-                    const emotionWeight = currentEmotion && currentEmotion.P < 0 ? 0.4 : 0.2;
-                    const combinedScore = semanticScore + emotionScore * emotionWeight;
-                    scoredMemories.push({ score: combinedScore, semanticScore, emotionScore, text: mem.text });
-                }
-            }
-            if (scoredMemories.length > 0) {
-                scoredMemories.sort((a, b) => b.score - a.score);
-                const relevantMemories = scoredMemories.filter(m => m.semanticScore > 0.3).slice(0, nResults);
-                if (relevantMemories.length > 0) {
-                    return relevantMemories.map(m => m.text).join("\n");
-                }
-            }
-        }
-        return this._keywordSearch(query, nResults);
+    updateConfig(opts = {}) {
+        this.embedding.update(Memory._resolveEmbeddingOpts(opts));
     }
 
-    _emotionSimilarity(e1, e2) {
-        if (!e1 || !e2) return 0;
-        const pDiff = Math.abs((e1.P || 0) - (e2.P || 0));
-        const aDiff = Math.abs((e1.A || 0) - (e2.A || 0));
-        const dDiff = Math.abs((e1.D || 0) - (e2.D || 0));
-        return 1 - (pDiff + aDiff + dDiff) / 6;
-    }
+    // ==================== 写入 ====================
 
     /**
-     * 检索词切分。英文/数字按空白与词边界切；无空白的中日韩文本按字符二元组（bigram）切——
-     * 否则整句只产生一个「词」，等价于全文精确子串匹配，中文记忆检索基本恒空。
+     * 记录一轮对话：写入情节记忆 + 触发后台事实提取。
+     * 两者都不在响应关键路径上（调用方在 setImmediate 中触发）。
      */
-    _queryTerms(query) {
-        const lower = query.toLowerCase().trim();
-        if (!lower) return [];
-        const terms = new Set();
-        // 中英混排：连续 ASCII 片段整词保留，其余片段按 bigram 切
-        const segments = lower.split(/([a-z0-9]+)/).filter(Boolean);
-        for (const seg of segments) {
-            if (/^[a-z0-9]+$/.test(seg)) {
-                terms.add(seg);
-                continue;
-            }
-            for (let i = 0; i < seg.length - 1; i++) {
-                terms.add(seg.slice(i, i + 2));
-            }
-        }
-        return [...terms];
+    async recordTurn(userInput, replyText, { emotionSnapshot = null } = {}) {
+        const text = `User: ${userInput}\nXiao Ai: ${replyText}`;
+        await this._addEpisode(text, emotionSnapshot);
+        this._scheduleFactExtraction(userInput, replyText);
     }
 
-    _keywordSearch(query, nResults = 3) {
-        const queryTerms = this._queryTerms(query);
-        if (queryTerms.length === 0) return "";
-        const scoredMemories = [];
-        for (const mem of this.memories) {
-            let score = 0;
-            const textLower = mem.text.toLowerCase();
-            queryTerms.forEach(term => { if (textLower.includes(term)) score++; });
-            if (score > 0) scoredMemories.push({ score, text: mem.text });
+    async _addEpisode(text, emotionSnapshot) {
+        const embedding = await this.embedding.embed(text);
+
+        // 写入去重：与既有情节近重复的直接丢弃（防复读对话刷库）。
+        // 有新向量用余弦判定；无向量（关键词模式 / 嵌入失败）退化为文本 Jaccard。
+        const threshold = config.memory.dedupWriteSimilarity;
+        const isDup = embedding
+            ? this.store.episodes.some((e) =>
+                e.embedding && EmbeddingClient.cosineSimilarity(embedding, e.embedding) > threshold)
+            : this.store.episodes.some((e) => isNearDuplicateText(text, e.text, threshold));
+        if (isDup) {
+            console.log('[Memory] Episode skipped (near-duplicate of existing)');
+            return;
         }
-        scoredMemories.sort((a, b) => b.score - a.score);
-        return scoredMemories.slice(0, nResults).map(m => m.text).join("\n");
+
+        this.store.addEpisode({
+            text,
+            embedding,
+            embeddingModel: embedding ? this.embedding.model : null,
+            emotionSnapshot,
+        });
+        this.store.scheduleSave();
     }
 
-    getAllMemories() { return this.memories; }
+    /** 事实提取串行队列：提取与应用不并发，避免两轮提取交叉写事实库 */
+    _scheduleFactExtraction(userInput, replyText) {
+        if (!config.memory.facts.enabled || !this._getChatClient) return;
 
+        const generation = this._extractGeneration;
+        this._extractQueue = this._extractQueue
+            .then(async () => {
+                // 期间记忆被清空 → 本轮提取作废（防清空后残留事实复活）
+                if (generation !== this._extractGeneration) return;
+                const ops = await this.factExtractor.extractOps(userInput, replyText, this.store.facts);
+                const changed = ops.add.length + ops.update.length + ops.delete.length;
+                if (changed === 0 || generation !== this._extractGeneration) return;
+                await this._applyFactOps(ops);
+                console.log(`[Memory] Facts: +${ops.add.length} ~${ops.update.length} -${ops.delete.length}`);
+            })
+            .catch((e) => console.error(`[Memory] fact extraction failed: ${e.message}`));
+    }
+
+    async _applyFactOps(ops) {
+        const now = Date.now() / 1000;
+
+        for (const id of ops.delete) {
+            const idx = this.store.facts.findIndex((f) => f.id === id);
+            if (idx !== -1) this.store.facts.splice(idx, 1);
+        }
+
+        for (const upd of ops.update) {
+            const fact = this.store.facts.find((f) => f.id === upd.id);
+            if (!fact) continue;
+            const content = upd.content.trim();
+            if (content !== fact.content) {
+                fact.content = content;
+                const embedding = await this.embedding.embed(content);
+                if (embedding) {
+                    fact.embedding = embedding;
+                    fact.embeddingModel = this.embedding.model;
+                }
+            }
+            if (upd.importance !== undefined) fact.importance = clampImportance(upd.importance);
+            if (upd.category !== undefined) fact.category = normalizeCategory(upd.category);
+            fact.updatedAt = now;
+        }
+
+        for (const add of ops.add) {
+            const content = add.content.trim();
+            const embedding = await this.embedding.embed(content);
+            if (FactExtractor.isDuplicateFact(content, embedding, this.store.facts)) continue;
+            this.store.addFact({
+                content,
+                category: normalizeCategory(add.category),
+                importance: clampImportance(add.importance),
+                source: 'extracted',
+                embedding,
+                embeddingModel: embedding ? this.embedding.model : null,
+            });
+        }
+
+        this.store.scheduleSave();
+    }
+
+    // ==================== 读取 / 检索 ====================
+
+    /**
+     * 构建注入 prompt 的记忆上下文：[已知事实]（重要度常驻）+ [相关回忆]（语义/关键词检索）。
+     * 无可注入内容时返回空串（调用方据此整段省略）。
+     */
+    async buildMemoryContext(query, currentEmotion = null) {
+        const factsText = this._formatFactsForInjection();
+        let episodesText = '';
+        try {
+            const hits = await this.retriever.retrieve(query, currentEmotion);
+            if (hits.length > 0) {
+                episodesText = hits.map((h) => `- ${h.text}`).join('\n');
+            }
+        } catch (e) {
+            console.error(`[Memory] retrieve failed: ${e.message}`);
+        }
+        if (!factsText && !episodesText) return '';
+
+        const sections = [];
+        if (factsText) sections.push(`[已知事实]\n${factsText}`);
+        if (episodesText) sections.push(`[相关回忆]\n${episodesText}`);
+        return sections.join('\n\n');
+    }
+
+    /** 事实注入：按重要度→最新排序取 top-N（不依赖嵌入，重启后即生效） */
+    _formatFactsForInjection() {
+        if (!config.memory.facts.enabled || this.store.facts.length === 0) return '';
+        const top = [...this.store.facts]
+            .sort((a, b) => (b.importance - a.importance) || (b.updatedAt - a.updatedAt))
+            .slice(0, config.memory.facts.injectTopN);
+        return top.map((f) => `- ${f.content}`).join('\n');
+    }
+
+    /** 主动消息「回忆分享」：从较早记忆里随机挑一条，避开最近 N 条与最近已分享的 */
+    getRandomMemory(excludeRecentN = 5) {
+        const episodes = this.store.episodes;
+        if (episodes.length === 0) return null;
+        const pool = episodes.slice(0, Math.max(1, episodes.length - excludeRecentN));
+        const candidates = pool.filter((e) => !this._recentSharedIds.has(e.id));
+        const list = candidates.length > 0 ? candidates : pool;
+        const pick = list[Math.floor(Math.random() * list.length)];
+        if (candidates.length > 0) {
+            this._recentSharedIds.add(pick.id);
+            // 只记最近 10 条，老记忆隔一阵子可以再次被分享
+            while (this._recentSharedIds.size > 10) {
+                this._recentSharedIds.delete(this._recentSharedIds.values().next().value);
+            }
+        }
+        return { id: pick.id, text: pick.text };
+    }
+
+    /** 全量导出（API 用）：剥离 embedding 大字段，情节按时间倒序 */
+    getAll() {
+        return {
+            facts: this.store.facts.map((f) => this._publicFact(f)),
+            episodes: [...this.store.episodes]
+                .sort((a, b) => b.timestamp - a.timestamp)
+                .map((e) => ({ id: e.id, text: e.text, timestamp: e.timestamp })),
+            stats: this.getStats(),
+        };
+    }
+
+    getStats() {
+        return {
+            episodeCount: this.store.episodes.length,
+            factCount: this.store.facts.length,
+            retrievalMode: this.retriever.resolveMode(),
+        };
+    }
+
+    _publicFact(f) {
+        return {
+            id: f.id,
+            content: f.content,
+            category: f.category,
+            importance: f.importance,
+            source: f.source,
+            createdAt: f.createdAt,
+            updatedAt: f.updatedAt,
+        };
+    }
+
+    // ==================== 单条管理 ====================
+
+    /** 手动添加事实；与既有事实重复时抛 DUPLICATE_FACT */
+    async addFact(content, { importance = 3, category = 'other' } = {}) {
+        const trimmed = String(content || '').trim();
+        if (!trimmed) return null;
+        const embedding = await this.embedding.embed(trimmed);
+        if (FactExtractor.isDuplicateFact(trimmed, embedding, this.store.facts)) {
+            const err = new Error('此事实已存在');
+            err.code = 'DUPLICATE_FACT';
+            throw err;
+        }
+        this.store.addFact({
+            content: trimmed,
+            category: normalizeCategory(category),
+            importance: clampImportance(importance),
+            source: 'manual',
+            embedding,
+            embeddingModel: embedding ? this.embedding.model : null,
+        });
+        this.store.scheduleSave();
+        return this._publicFact(this.store.facts[this.store.facts.length - 1]);
+    }
+
+    /** 编辑事实（content 变更会重新计算向量）；id 不存在返回 null */
+    async updateFact(id, { content, importance, category } = {}) {
+        const fact = this.store.facts.find((f) => f.id === id);
+        if (!fact) return null;
+        if (content !== undefined) {
+            const trimmed = String(content).trim();
+            if (trimmed && trimmed !== fact.content) {
+                fact.content = trimmed;
+                const embedding = await this.embedding.embed(trimmed);
+                if (embedding) {
+                    fact.embedding = embedding;
+                    fact.embeddingModel = this.embedding.model;
+                }
+            }
+        }
+        if (importance !== undefined) fact.importance = clampImportance(importance);
+        if (category !== undefined) fact.category = normalizeCategory(category);
+        fact.updatedAt = Date.now() / 1000;
+        this.store.scheduleSave();
+        return this._publicFact(fact);
+    }
+
+    /** 删除单条记忆（事实或情节）；命中返回其类型，未命中返回 null */
+    deleteMemory(id) {
+        const factIdx = this.store.facts.findIndex((f) => f.id === id);
+        if (factIdx !== -1) {
+            this.store.facts.splice(factIdx, 1);
+            this.store.scheduleSave();
+            return 'fact';
+        }
+        const epIdx = this.store.episodes.findIndex((e) => e.id === id);
+        if (epIdx !== -1) {
+            this.store.episodes.splice(epIdx, 1);
+            this.store.scheduleSave();
+            return 'episode';
+        }
+        return null;
+    }
+
+    // ==================== 生命周期 ====================
+
+    /** 全清（「完全重置」语义）；在途事实提取作废，立即落盘 */
     clearMemory() {
-        this.memories = [];
-        this._save();
+        this.store.episodes = [];
+        this.store.facts = [];
+        this._recentSharedIds.clear();
+        this._extractGeneration++;
+        this.store.flush();
+    }
+
+    /** 把去抖中的待写数据立即落盘（进程退出前必须调用） */
+    flush() {
+        this.store.flush();
     }
 }
 

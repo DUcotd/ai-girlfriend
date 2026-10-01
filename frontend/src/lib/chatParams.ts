@@ -6,8 +6,12 @@
  * ⚠️ 下发到后端仍必须走 `api.syncConfig`（内部 toBackendConfigPayload 转 snake_case）。
  */
 
-/** 思考强度：空串 = 不传该参数（普通模型收到会 400，所以默认必须空） */
-export type ReasoningEffort = "" | "low" | "medium" | "high";
+/**
+ * 思考强度：空串 = 不传该参数（普通模型收到会 400，所以默认必须空）。
+ * none / minimal 仅较新的模型支持（如 OpenAI gpt-5 系）；设了不支持的档位
+ * 厂商会直接 400，改回「不传」即可。
+ */
+export type ReasoningEffort = "" | "none" | "minimal" | "low" | "medium" | "high";
 
 export interface ReasoningEffortOption {
     value: ReasoningEffort;
@@ -16,6 +20,8 @@ export interface ReasoningEffortOption {
 
 export const REASONING_EFFORT_OPTIONS: readonly ReasoningEffortOption[] = [
     { value: "", label: "不传（跟随模型默认）" },
+    { value: "none", label: "none · 关闭思考" },
+    { value: "minimal", label: "minimal · 极简思考" },
     { value: "low", label: "low · 省思考" },
     { value: "medium", label: "medium · 均衡" },
     { value: "high", label: "high · 深度思考" },
@@ -36,6 +42,8 @@ export type ChatNumberKey = keyof typeof CHAT_NUMBER_LIMITS;
 /** 设置页「高级选项」的形状（不含 Key/URL/模型这些基础项） */
 export interface AdvancedChatConfig {
     maxPromptHistory: number;
+    /** 无限上下文：true = 忽略 maxPromptHistory，带上全部保留的对话（后端 200 条持久化上限兜底） */
+    unlimitedContext: boolean;
     temperature: number;
     /** undefined / 0 = 不把 max_tokens 发给模型 */
     maxTokens: number | undefined;
@@ -44,6 +52,7 @@ export interface AdvancedChatConfig {
 
 export const DEFAULT_ADVANCED_CONFIG: AdvancedChatConfig = {
     maxPromptHistory: CHAT_NUMBER_LIMITS.maxPromptHistory.fallback,
+    unlimitedContext: false,
     temperature: CHAT_NUMBER_LIMITS.temperature.fallback,
     maxTokens: undefined,
     reasoningEffort: "",
@@ -78,7 +87,9 @@ export function parseOptionalChatNumber(
 
 /** 归一化思考强度：非法值一律回落「不传」，避免把垃圾字符串发给模型 */
 export function normalizeReasoningEffort(raw: string | null | undefined): ReasoningEffort {
-    if (raw === "low" || raw === "medium" || raw === "high") return raw;
+    if (raw === "none" || raw === "minimal" || raw === "low" || raw === "medium" || raw === "high") {
+        return raw;
+    }
     return "";
 }
 
@@ -96,6 +107,7 @@ export function normalizeAdvancedConfig(
     if (!cfg) return { ...DEFAULT_ADVANCED_CONFIG };
     return {
         maxPromptHistory: clampChatNumber(cfg.maxPromptHistory, "maxPromptHistory"),
+        unlimitedContext: !!cfg.unlimitedContext,
         temperature: clampChatNumber(cfg.temperature, "temperature"),
         maxTokens: parseOptionalChatNumber(cfg.maxTokens, "maxTokens"),
         reasoningEffort: normalizeReasoningEffort(cfg.reasoningEffort),

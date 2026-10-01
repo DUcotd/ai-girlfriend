@@ -6,7 +6,8 @@ import type {
   AppState,
   ChatResponse,
   CurrentActivity,
-  MemoryItem,
+  FactItem,
+  MemoriesResponse,
   PersonalityLedgerEntry,
   PersonalityState,
   PersonalityUpdatePayload,
@@ -38,12 +39,18 @@ export interface UiChatConfig {
   embModelName?: string;
   /** 发给 LLM 的最近历史条数（对应后端 config.chat.maxPromptHistory，默认 30） */
   maxPromptHistory?: number;
+  /** 无限上下文：true = 带上全部保留的对话，忽略条数限制 */
+  unlimitedContext?: boolean;
   /** 采样温度（0–2，默认 0.75） */
   temperature?: number;
   /** 最大输出 tokens；留空（undefined / 0）表示不传该参数 */
   maxTokens?: number;
   /** 思考强度；空串 = 不传（普通模型收到会 400，故默认空） */
   reasoningEffort?: ReasoningEffort;
+  /** 记忆事实提取开关（默认 true） */
+  memoryFactsEnabled?: boolean;
+  /** 检索模式：auto（配置了嵌入 Key 用语义，否则关键词）/ embedding / keyword */
+  memoryRetrievalMode?: "auto" | "embedding" | "keyword";
 }
 
 /**
@@ -63,7 +70,9 @@ export function toBackendConfigPayload(cfg: UiChatConfig) {
     api_key: cfg.apiKey || undefined,
     base_url: cfg.baseUrl || undefined,
     model_name: cfg.modelName || undefined,
-    tts_api_key: cfg.ttsApiKey || undefined,
+    // TTS Key 用 ??：空串 = 用户想清除语音配置，必须原样送达后端（后端会把引擎重置为未配置态）；
+    // `|| undefined` 会吞掉空串，清除在运行时永远不生效
+    tts_api_key: cfg.ttsApiKey ?? undefined,
     // 嵌入三件套用 ??：空串 = 用户想清空（回退「使用主 Key」），必须原样送达后端，
     // 由后端归一化成 null。`|| undefined` 会把空串吞掉，清空在运行时永远不生效。
     embedding_api_key: cfg.embApiKey ?? undefined,
@@ -72,11 +81,17 @@ export function toBackendConfigPayload(cfg: UiChatConfig) {
     // 这两项没有「清空」语义：undefined（调用方没给，如首启向导只发 Key/URL/模型）
     // 就整项省略，让后端保留当前值；给了则原值下发——temperature: 0 必须能发出去。
     max_prompt_history: cfg.maxPromptHistory,
+    // 布尔开关必须显式下发 false：?? 不会吞掉 false（false ?? undefined === false），
+    // 只有调用方没带该字段（undefined）才省略、让后端保留当前值
+    unlimited_context: cfg.unlimitedContext ?? undefined,
     temperature: cfg.temperature,
     // 这两项必须显式下发「清空值」：undefined 也要压成 0 / ""，
     // 否则用户把思考强度改回「不传」、最大输出清空后，后端仍停在 high / 1024。
     max_tokens: cfg.maxTokens ?? 0,
     reasoning_effort: cfg.reasoningEffort ?? "",
+    // 记忆选项：布尔开关必须显式下发 false，不能写 || undefined（会被吞成「没传」）
+    memory_facts_enabled: cfg.memoryFactsEnabled ?? undefined,
+    memory_retrieval_mode: cfg.memoryRetrievalMode,
   };
 }
 
@@ -120,7 +135,25 @@ export const api = {
   /** 完全重置：清空对话历史 + 记忆 + 好感度（设置页的「完全重置」用；「新对话」不要用它） */
   resetAll: () => request<{ status: string }>("/reset", { method: "POST" }),
 
-  getMemories: () => request<MemoryItem[]>("/memories"),
+  getMemories: () => request<MemoriesResponse>("/memories"),
+
+  /** 手动添加事实记忆；与既有事实重复时后端返回 409 */
+  addFact: (content: string, importance?: number) =>
+    request<{ status: string; fact: FactItem }>("/memories/facts", {
+      method: "POST",
+      body: JSON.stringify({ content, importance }),
+    }),
+
+  /** 编辑事实记忆（内容 / 重要度） */
+  updateFact: (id: string, updates: { content?: string; importance?: number }) =>
+    request<{ status: string; fact: FactItem }>(`/memories/facts/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(updates),
+    }),
+
+  /** 删除单条记忆（事实或情节，按 id） */
+  deleteMemory: (id: string) =>
+    request<{ status: string; type: string }>(`/memories/${id}`, { method: "DELETE" }),
 
   clearMemories: () =>
     request<{ status: string }>("/memories", { method: "DELETE" }),

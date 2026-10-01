@@ -50,6 +50,67 @@ router.get('/memories', (req, res) => {
     res.json(aiGirlfriend.getMemories());
 });
 
+/**
+ * 手动添加事实记忆。
+ */
+router.post('/memories/facts', asyncHandler(async (req, res) => {
+    const { content, importance, category } = req.body;
+    if (fail(res, !content || typeof content !== 'string' || !content.trim(),
+        'content is required')) return;
+    if (fail(res, importance !== undefined && (typeof importance !== 'number' || importance < 1 || importance > 5),
+        'importance must be a number between 1 and 5')) return;
+    if (fail(res, category !== undefined && typeof category !== 'string',
+        'category must be a string')) return;
+    try {
+        const fact = await aiGirlfriend.addFact(content.trim(), {
+            importance,
+            category: category?.trim() || undefined,
+        });
+        res.json({ status: "added", fact });
+    } catch (e) {
+        if (e.code === 'DUPLICATE_FACT') {
+            res.status(409).json({ detail: e.message });
+            return;
+        }
+        throw e;
+    }
+}));
+
+/**
+ * 编辑事实记忆（内容 / 重要度 / 分类）。
+ */
+router.patch('/memories/facts/:id', asyncHandler(async (req, res) => {
+    const { content, importance, category } = req.body;
+    if (fail(res, content !== undefined && (typeof content !== 'string' || !content.trim()),
+        'content must be a non-empty string')) return;
+    if (fail(res, importance !== undefined && (typeof importance !== 'number' || importance < 1 || importance > 5),
+        'importance must be a number between 1 and 5')) return;
+    if (fail(res, category !== undefined && typeof category !== 'string',
+        'category must be a string')) return;
+    const fact = await aiGirlfriend.updateFact(req.params.id, {
+        content: content?.trim(),
+        importance,
+        category: category?.trim(),
+    });
+    if (!fact) {
+        res.status(404).json({ detail: 'fact not found' });
+        return;
+    }
+    res.json({ status: "updated", fact });
+}));
+
+/**
+ * 删除单条记忆（事实或情节，按 id 查找）。
+ */
+router.delete('/memories/:id', (req, res) => {
+    const type = aiGirlfriend.deleteMemory(req.params.id);
+    if (!type) {
+        res.status(404).json({ detail: 'memory not found' });
+        return;
+    }
+    res.json({ status: "deleted", type });
+});
+
 router.delete('/memories', (req, res) => {
     aiGirlfriend.clearMemoriesOnly();
     res.json({ status: "memories_cleared" });

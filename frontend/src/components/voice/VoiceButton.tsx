@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { Volume2, Loader2, Square } from "lucide-react";
 import { api, BACKEND_URL } from "@/lib/api";
 import { speakLocal } from "@/lib/speech";
+import { isTtsConfigured } from "@/lib/storage";
 import { toast } from "@/stores/uiStore";
 import type { TtsEngine } from "@/types";
 
@@ -49,6 +50,13 @@ export default function VoiceButton({ text, size = 16, engine = "openai" }: Voic
         if (state === "loading") return;
 
         if (engine === "local") {
+            speakLocal(text);
+            return;
+        }
+
+        // 选了云端引擎但没配专属 TTS Key → 云端不启用，回退本地朗读（与 useSpeech 同一语义）
+        if (!isTtsConfigured()) {
+            toast("云端语音未配置 TTS 密钥，已使用浏览器本地语音", "info");
             speakLocal(text);
             return;
         }
