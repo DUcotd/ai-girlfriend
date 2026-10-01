@@ -212,16 +212,23 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
 
     const handleResetAll = async () => {
         try {
-            // 走 /reset（完全重置语义）：清对话 + 记忆 + 好感度。
+            // 走 /reset（完全重置语义）：清对话 + 记忆 + 好感度 + 性格 + 情绪 + 任务。
             // 注意不要用 clearHistory——那只是「新对话」，不会动记忆与好感度。
-            await api.resetAll();
+            const result = await api.resetAll();
             remove("affinity");
-            showToast("小爱已完全重置！", "success");
+            if (result.status === "partial") {
+                // 后端有引擎重置失败：如实告知，但仍刷新以反映已重置的部分
+                showToast(`已重置，但 ${result.failed.length} 项未成功，请重试`, "error");
+            } else {
+                showToast("小爱已完全重置！", "success");
+            }
+            setShowResetConfirm(false);
+            // 无论成功/部分成功都整页刷新，避免 Zustand 内存态残留
             setTimeout(() => window.location.reload(), 1000);
         } catch {
-            showToast("重置失败", "error");
+            // 请求本身失败（后端未启动/超时）：保持确认框可重试，不刷新
+            showToast("重置失败，请检查后端连接后重试", "error");
         }
-        setShowResetConfirm(false);
     };
 
     return (
@@ -359,6 +366,9 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 message={
                     "确定要完全重置小爱吗？这将清空：\n" +
                     "· 好感度（回到初始档位）\n" +
+                    "· 性格（回到「温柔」默认档）\n" +
+                    "· 情绪状态（回到初始心情）\n" +
+                    "· 全部任务与提醒\n" +
                     "· 全部长期记忆\n" +
                     "· 全部对话记录\n\n" +
                     "此操作不可恢复！\n" +

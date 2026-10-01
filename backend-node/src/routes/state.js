@@ -27,12 +27,21 @@ router.delete('/history', (req, res) => {
 });
 
 /**
- * 「完全重置」：清对话记录 + 好感度 + 长期记忆（入口：设置页「完全重置小爱」）。
+ * 「完全重置」：清对话记录 + 好感度 + 性格 + 情绪 + 任务 + 长期记忆
+ * （入口：设置页「完全重置小爱」）。
  * 不要把这个端点接到「新对话」上——那会让用户丢整段关系。
+ *
+ * 各引擎独立重置、单点失败不中断（见 AiGirlfriend.resetAll），因此这里可能拿到
+ * 部分失败信息：只要有失败项，回 207 并把 failed 透出，前端据此提示用户「部分
+ * 数据未能重置」，而不是一律报成功、把残留当没发生。
  */
 router.post('/reset', (req, res) => {
-    aiGirlfriend.resetAll();
-    res.json({ status: "reset" });
+    const result = aiGirlfriend.resetAll();
+    if (result.failed.length > 0) {
+        res.status(207).json({ status: "partial", ...result });
+        return;
+    }
+    res.json({ status: "reset", ...result });
 });
 
 router.get('/system_prompt', (req, res) => {
@@ -120,6 +129,20 @@ router.get('/state', (req, res) => {
     res.json(aiGirlfriend.getState());
 });
 
+/**
+ * 用户情绪时间线（REQ-01，供 REQ-10 前端可选消费）。
+ * 返回 { state, timelineStats, timeline }；引擎缺失时回落空结构，不报错。
+ * ⚠️ 挂根路径（app.js 已 app.use('/', stateRoutes)），没有 /api 前缀。
+ */
+router.get('/state/user-emotion', (req, res) => {
+    const engine = aiGirlfriend.userEmotionEngine;
+    if (!engine) {
+        res.json({ state: null, timelineStats: { count: 0, cap: 0, trend: null }, timeline: [] });
+        return;
+    }
+    res.json({ ...engine.getState(), timeline: engine.getTimeline() });
+});
+
 router.post('/state', (req, res) => {
     const { affinity, nickname } = req.body;
     // 与 chat.js / tasks.js 同一套校验惯例：类型不对回 400，而不是静默忽略还报 updated
@@ -139,6 +162,32 @@ router.post('/state', (req, res) => {
  */
 router.get('/affinity/ledger', (req, res) => {
     res.json(aiGirlfriend.affinityEngine.getLedger());
+});
+
+/**
+ * 共同经历叙事列表（REQ-03 我们的故事）。
+ * 返回 { narratives, stats }；引擎缺失时回落空结构，不报错。
+ * ⚠️ 挂根路径（app.js 已 app.use('/', stateRoutes)），没有 /api 前缀。
+ */
+router.get('/state/narratives', (req, res) => {
+    if (!aiGirlfriend.getNarratives) {
+        res.json({ narratives: [], stats: { total: 0 } });
+        return;
+    }
+    res.json(aiGirlfriend.getNarratives());
+});
+
+/**
+ * 手动删除一条共同经历叙事（REQ-03，A7：用户删 episode 不级联删叙事，
+ * 但提供本入口让用户主动清理某条叙事）。
+ */
+router.delete('/state/narratives/:id', (req, res) => {
+    const ok = aiGirlfriend.deleteNarrative ? aiGirlfriend.deleteNarrative(req.params.id) : false;
+    if (!ok) {
+        res.status(404).json({ detail: 'narrative not found' });
+        return;
+    }
+    res.json({ status: 'deleted' });
 });
 
 export default router;

@@ -354,6 +354,28 @@ ${style.guide}
         return delta;
     }
 
+    // ==================== 生命周期 ====================
+
+    /**
+     * 回到初始情绪态（「完全重置」语义）。
+     *
+     * 与构造函数里的初值保持镜像：PAD 归初始档（P0.3/A0.1/D-0.1），清空情绪历史、
+     * 关系阶段标记与基线，并立即落盘。
+     *
+     * 为什么必须清 baseline/relationshipStage：它们由 affinity 阶段推导而来，
+     * 完全重置时 affinity 已回初始档，若留着旧阶段基线，重置后小爱仍会带着
+     * 「恋人/亲密」阶段的情绪底色——那正是清零不彻底的表现。
+     */
+    reset() {
+        this.baseline = { P: 0.3, A: 0.1, D: -0.1 };
+        this.state = { P: 0.3, A: 0.1, D: -0.1 };
+        this.history = [];
+        this.relationshipStage = null;
+        this.relationshipLabel = '未知';
+        this._saveState();
+        return { label: this.getEmotionLabel() };
+    }
+
     getSnapshot() {
         return { ...this.state, timestamp: Date.now() };
     }

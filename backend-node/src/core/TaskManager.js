@@ -158,6 +158,17 @@ class TaskManager {
     }
 
     /**
+     * 清空全部任务（「完全重置」语义）。
+     * @returns {number} 被清除的任务数
+     */
+    clearAll() {
+        const count = this.tasks.length;
+        this.tasks = [];
+        this.saveTasks();
+        return count;
+    }
+
+    /**
      * 按白名单收敛入参。
      * @param {object} data - 外部入参（body / LLM 动作）
      * @returns {object} 只含 TASK_WRITE_FIELDS 里出现过的字段
