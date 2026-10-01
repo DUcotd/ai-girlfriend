@@ -62,6 +62,8 @@ interface ChatState {
   setAffinity: (value: number) => void;
   sendMessage: (text: string) => Promise<void>;
   fetchHistory: () => Promise<void>;
+  /** 挂载后恢复好感度 localStorage 镜像（只能在客户端 effect 里调，见 useBootstrap） */
+  restoreAffinity: () => void;
   /** 「新对话」：只清对话记录，保留好感度与记忆 */
   newConversation: () => Promise<void>;
   syncState: () => Promise<void>;
@@ -128,9 +130,10 @@ export const useChatStore = create<ChatState>()((set, get) => {
   return {
     messages: [],
     isLoading: false,
-    // 首帧先取 localStorage 的镜像，避免离线/后端未就绪时永远显示默认 35；
-    // 在线时 syncState 会立刻用后端真值校正
-    affinity: getStoredAffinity() ?? 35,
+    // 初始值必须是常量：服务端渲染拿不到 localStorage，若在模块初始化时读镜像，
+    // 客户端水合首帧就会与服务端 HTML 不一致（hydration mismatch）。
+    // 离线/后端未就绪由挂载后的 restoreAffinity 恢复镜像兜底；在线时 syncState 用后端真值校正
+    affinity: 35,
     emotion: "平静",
     emotionalState: null,
     stageMeta: null,
@@ -143,6 +146,11 @@ export const useChatStore = create<ChatState>()((set, get) => {
     setAffinity: (value) => {
       set({ affinity: value });
       setStoredAffinity(value);
+    },
+
+    restoreAffinity: () => {
+      const stored = getStoredAffinity();
+      if (stored !== null) set({ affinity: stored });
     },
 
     sendMessage: async (text) => {
