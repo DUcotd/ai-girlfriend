@@ -99,6 +99,9 @@ framer-motion 经 MotionConfig reducedMotion="user" 跟随）。
 | `proactive_state.json` | 主动消息配置、当日配额、冷却与待送队列 |
 | `life_log.json` | 日常活动模拟记录 |
 | `tasks.json` | 任务清单 |
+| `user_emotion_state.json` | 用户情绪时间线与当前情绪态（REQ-01 用户情绪识别通道） |
+| `narrative.json` | 共同经历叙事库「我们的故事」（REQ-03 叙事层） |
+| `trigger_state.json` | 事件候选队列 + 触发源冷却 + 去重标记（REQ-04 事件层） |
 
 首次启动会自动把旧版 `<repo>/memory_db/` 下的数据迁移过来（不覆盖已有新数据）。
 
@@ -120,6 +123,9 @@ framer-motion 经 MotionConfig reducedMotion="user" 跟随）。
 | POST | `/reset` | 完全重置（历史 + 记忆 + 好感度；「新对话」用 DELETE /history） |
 | GET/DELETE | `/memories` | 向量记忆 |
 | GET/POST | `/state` | 好感度 / 昵称 |
+| GET | `/state/user-emotion` | 用户情绪时间线（REQ-01；引擎缺失时回落空结构） |
+| GET | `/state/narratives` | 共同经历叙事列表（REQ-03；含 stats） |
+| DELETE | `/state/narratives/:id` | 手动删除一条叙事 |
 | GET | `/affinity/ledger` | 好感度变更账本 |
 | GET/POST | `/system_prompt` | 人设 prompt |
 | GET/POST | `/personality` | 性格状态 / 更新（预设 / 七维 / 开关） |
@@ -127,6 +133,25 @@ framer-motion 经 MotionConfig reducedMotion="user" 跟随）。
 | POST | `/personality/reset` | 恢复默认预设并清空账本 |
 | GET | `/life/current` `/life/history` | 当前活动 / 活动历史 |
 | POST | `/audio/speak` `/audio/transcribe` | TTS / 语音转文字 |
+
+## 陪伴感增强（REQ-01 / REQ-03 / REQ-04）
+
+在既有「记忆 + 情绪 + 好感度 + 主动消息」之上叠加三个子系统，让主动关怀更「懂你」、
+更「有共同经历」。三者均默认开启，且都遵循「关闭态安全」——任一开关关掉即完全退回改造前行为。
+
+- **用户情绪识别通道（REQ-01）**：单独追踪「用户」的情绪（与描述小爱自身状态的
+  `EmotionEngine` 解耦）。词表优先、复用主对话 `<metadata>.user_emotion` 做 LLM 校准，
+  **不新增任何 LLM 调用**；产出情绪时间线并落 `user_emotion_state.json`，为情绪共振触发源供数。
+- **共同经历叙事层（REQ-03）**：从情节记忆派生「我们的故事」（第一次、约定、纪念日等），
+  独立落 `narrative.json`，不改动 `MemoryStore` schema；每轮以 topK + 字数上限克制注入，
+  并在后台按「轮次 / 时间窗 / 好感度跃迁」三层节流调用 LLM 抽取。
+- **事件层（REQ-04）**：`EventBus` + `TriggerRegistry` 把情绪转折、纪念日、约定到期
+  翻译成事件候选入队，再由 `ProactiveEngine` 复用既有全闸门（情绪 / ghost / 配额 / 自发间隔 /
+  去重）触达，**不旁路任何经济模型**。三个触发源：`emotion_turn` / `anniversary` / `promise_followup`。
+  运行时状态见 `GET /chat/proactive/status` 的 `triggerRegistry` 字段。
+
+开关（`POST /config`，snake_case，缺省不动原值）：`user_emotion_enabled` / `narrative_enabled` /
+`trigger_enabled`；当前生效值见 `GET /config/status` 的 `companion` 字段。
 
 ## 内心独白 vs 模型思考
 
