@@ -138,13 +138,26 @@ class LifeSimulator {
     }
 
     saveState() {
-        writeJson(LOG_FILE, {
+        return writeJson(LOG_FILE, {
             current: this.currentActivity,
             currentStart: this.activityStartTime?.toISOString(),
             currentEnd: this.activityEndTime?.toISOString(),
             history: this.activityHistory,
             lastUpdated: new Date().toISOString()
         });
+    }
+
+    /**
+     * 清生活日志（「完全重置」的一步，审计 B0-5）。
+     * 当前活动会由定时器在下一个周期重新抽取，因此不需要额外处理。
+     * @returns {boolean} 是否落盘成功
+     */
+    resetLog() {
+        this.activityHistory = [];
+        this.currentActivity = null;
+        this.activityStartTime = null;
+        this.activityEndTime = null;
+        return this.saveState();
     }
 
     cleanOldHistory() {

@@ -20,6 +20,7 @@ import {
     classifyUserEmotion, mapDimensionsToLabel, clamp, round, NEUTRAL_EMOTION,
     USER_EMOTION_LABELS, NEUTRAL_LABEL,
 } from './userEmotionLexicon.js';
+import { toFiniteNumber } from './emotionDelta.js';
 
 const STATE_FILE = 'user_emotion_state.json';
 const SCHEMA_VERSION = 1;
@@ -49,7 +50,10 @@ class UserEmotionEngine {
      */
     analyze(userInput) {
         try {
-            return classifyUserEmotion(userInput);
+            // 邻域窗口从 config 注入，纯函数层不读配置（项目约定：数值集中在 config）
+            return classifyUserEmotion(userInput, {
+                negationWindow: config.userEmotion.negationWindow,
+            });
         } catch (e) {
             console.error(`[UserEmotion] analyze failed: ${e.message}`);
             return { ...NEUTRAL_EMOTION, confidence: 0, source: 'lexicon', matched: [] };
@@ -124,14 +128,26 @@ class UserEmotionEngine {
         return { valence, arousal, intensity, label, confidence, source: 'fused' };
     }
 
-    /** 校验并归一化 LLM 返回的 user_emotion；非法返回 null。 */
+    /**
+     * 校验并归一化 LLM 返回的 user_emotion；不可用时返回 null（退回纯词表）。
+     *
+     * 旧写法要求 valence/arousal/intensity/**confidence** 四个都有限，缺一个就整段丢弃。
+     * 而 prompt 明说「判断不出就省略」（systemPrompt.js:89）—— 模型最爱省掉的恰好是
+     * confidence，于是最有信息量的那一路读取被静默作废（审计 PROMPT-04）。
+     * 现在：valence/arousal 是必需项；intensity 缺失按幅度推；confidence 缺失
+     * 按采信线兜底（等于"模型没自报把握，就给它压线通过"），不再一票否决。
+     */
     _sanitizeLLM(llmResult) {
         if (!llmResult || typeof llmResult !== 'object') return null;
-        const valence = Number(llmResult.valence);
-        const arousal = Number(llmResult.arousal);
-        const intensity = Number(llmResult.intensity);
-        const confidence = Number(llmResult.confidence);
-        if (![valence, arousal, intensity, confidence].every(Number.isFinite)) return null;
+        const valence = toFiniteNumber(llmResult.valence);
+        const arousal = toFiniteNumber(llmResult.arousal);
+        if (valence === null || arousal === null) return null;
+
+        const intensity = toFiniteNumber(llmResult.intensity)
+            ?? clamp((Math.abs(valence) + Math.abs(arousal)) / 2, 0, 1);
+        const confidence = toFiniteNumber(llmResult.confidence)
+            ?? config.userEmotion.llmConfidenceThreshold;
+
         const label = USER_EMOTION_LABELS.includes(llmResult.label)
             ? llmResult.label
             : mapDimensionsToLabel(valence, arousal, intensity);

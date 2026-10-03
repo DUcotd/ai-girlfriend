@@ -28,7 +28,12 @@ let passed = 0;
 let failed = 0;
 function check(name, fn) {
     try {
-        fn();
+        const out = fn();
+        // 防呆：把 async 函数传给同步 check 会让断言**永远不会被执行**（try/catch
+        // 看不见后续 rejection），却照样计一次通过。异步断言必须用 checkAsync。
+        if (out && typeof out.then === 'function') {
+            throw new Error('check() 收到了 Promise —— 该用例应改用 checkAsync()');
+        }
         passed++;
         console.log(`  OK   ${name}`);
     } catch (e) {
@@ -556,7 +561,7 @@ function disarmStore(memory) {
 
     // ==================== 10. EmbeddingClient ====================
     console.log('EmbeddingClient:');
-    check('无 Key 时不可用且 embed 返回 null', async () => {
+    await checkAsync('无 Key 时不可用且 embed 返回 null', async () => {
         const client = new EmbeddingClient({ apiKey: null });
         assert.strictEqual(client.available, false);
         assert.strictEqual(await client.embed('hi'), null);

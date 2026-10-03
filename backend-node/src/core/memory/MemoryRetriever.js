@@ -90,7 +90,9 @@ export class MemoryRetriever {
         for (const mem of this.store.episodes) {
             if (!mem.embedding) continue;
             const semanticScore = EmbeddingClient.cosineSimilarity(queryEmbedding, mem.embedding);
-            if (semanticScore <= semanticThreshold) continue;
+            // 阈值含边界（与 NarrativeRetriever 的 `>= threshold` 同一把尺子）：
+            // 两处一个用 > 一个用 >= 会让「同一套语义门槛」在不同层表现不一致（CORE-15）
+            if (semanticScore < semanticThreshold) continue;
 
             let emotionScore = 0;
             if (currentEmotion && mem.emotionSnapshot) {

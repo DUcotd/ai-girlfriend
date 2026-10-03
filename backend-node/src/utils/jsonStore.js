@@ -9,9 +9,19 @@
  */
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { BACKEND_ROOT } from '../config.js';
 
-const DATA_DIR = path.join(BACKEND_ROOT, 'data');
+/**
+ * 数据目录：默认 backend-node/data，可用 AI_GIRLFRIEND_DATA_DIR 重定向。
+ *
+ * 为什么要能重定向：此前数据根锚死在 BACKEND_ROOT，测试只能对真实用户数据做
+ * 「备份/还原」，一次断言崩溃或漏删就会污染真实档案（历史上真发生过）。
+ * 现在所有 test-*.mjs 一律指向临时目录，data/ 在跑测试后 mtime 零变化。
+ */
+const DATA_DIR = process.env.AI_GIRLFRIEND_DATA_DIR
+    ? path.resolve(process.env.AI_GIRLFRIEND_DATA_DIR)
+    : path.join(BACKEND_ROOT, 'data');
 // 旧版数据目录：backend-node/../memory_db
 const LEGACY_DIR = path.resolve(BACKEND_ROOT, '..', 'memory_db');
 const LEGACY_FILES = [
@@ -20,7 +30,19 @@ const LEGACY_FILES = [
     'emotion_state.json',
     'personality_state.json',
     'life_log.json',
+    // 2026-10 审计补齐：这份清单曾长期落后于实际数据文件，旧库里的这些文件不会被迁移
+    'tasks.json',
+    'affinity_state.json',
+    'proactive_state.json',
+    'user_emotion_state.json',
+    'narrative.json',
+    'trigger_state.json',
 ];
+
+/** 当前生效的数据目录（供 /health 与测试断言使用） */
+export function dataDir() {
+    return DATA_DIR;
+}
 
 function ensureDataDir() {
     if (!fs.existsSync(DATA_DIR)) {
@@ -34,6 +56,9 @@ function ensureDataDir() {
  */
 export function migrateLegacyData() {
     ensureDataDir();
+    // 显式指定数据目录（测试/多实例）时不做迁移：迁移会把真实旧数据复制进临时目录，
+    // 让「测试隔离」变成假象。
+    if (process.env.AI_GIRLFRIEND_DATA_DIR) return;
     if (!fs.existsSync(LEGACY_DIR)) return;
     let migrated = 0;
     for (const file of LEGACY_FILES) {
@@ -85,13 +110,39 @@ export function readJson(filename, fallback = null) {
     }
 }
 
-/** 原子写入 JSON 文件：先写临时文件再 rename */
+/**
+ * 原子写入 JSON 文件：先写临时文件再 rename。
+ *
+ * 三处加固（2026-10 审计 B0-6）：
+ *  1. rename 前 `fsync`：否则崩溃时可能留下「已 rename 但内容半截」的文件，
+ *     读回来是损坏 JSON，被隔离后状态直接回滚。
+ *  2. 临时文件名带随机后缀：固定 `.tmp` 名在多实例（如 PORT=8100 临时实例）下
+ *     会互相 rename 覆盖，把对方的内容写进本方目标文件。
+ *  3. Windows 上 rename 到已存在文件常因杀软/索引句柄抛 EPERM：此时退化为
+ *     直接覆盖写目标文件，并保留临时文件供人工排查 —— 而不是静默丢这一次写盘。
+ *
+ * @returns {boolean} 是否真正落盘成功。调用方必须把它计入自己的失败面（见 resetAll）。
+ */
 export function writeJson(filename, data) {
     const filePath = dataPath(filename);
-    const tmpPath = `${filePath}.tmp`;
+    const tmpPath = `${filePath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    const payload = JSON.stringify(data, null, 2);
     try {
-        fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
-        fs.renameSync(tmpPath, filePath);
+        const fd = fs.openSync(tmpPath, 'w');
+        try {
+            fs.writeFileSync(fd, payload, 'utf-8');
+            fs.fsyncSync(fd);
+        } finally {
+            fs.closeSync(fd);
+        }
+        try {
+            fs.renameSync(tmpPath, filePath);
+        } catch (renameErr) {
+            // EPERM/EBUSY：Windows 文件被占用的典型表现，退化为覆盖写
+            if (![ 'EPERM', 'EBUSY', 'EACCES' ].includes(renameErr.code)) throw renameErr;
+            fs.writeFileSync(filePath, payload, 'utf-8');
+            console.warn(`[jsonStore] rename(${filename}) failed with ${renameErr.code}, fell back to direct write`);
+        }
         return true;
     } catch (e) {
         console.error(`[jsonStore] Write error (${filename}):`, e.message);

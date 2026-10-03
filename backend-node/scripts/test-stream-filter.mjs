@@ -17,12 +17,17 @@ function feed(text, chunkSize, filter) {
 }
 
 let passed = 0;
+let failed = 0;
 function check(name, fn) {
     try {
-        fn();
+        const out = fn();
+        if (out && typeof out.then === 'function') {
+            throw new Error('check() 收到了 Promise —— 异步断言会被静默跳过，请改用 await + 显式断言');
+        }
         passed++;
         console.log(`  OK   ${name}`);
     } catch (e) {
+        failed++;
         console.error(`  FAIL ${name}\n       ${e.message}`);
         process.exitCode = 1;
     }
@@ -209,4 +214,7 @@ check('无标签文本 replyText 原样、三类为空', () => {
 });
 
 const TOTAL = 16;
-console.log(passed === TOTAL ? `\n全部 ${passed} 项通过` : `\n${passed}/${TOTAL} 通过，存在失败`);
+console.log(`\n${passed}/${TOTAL} 通过，${failed} 失败`);
+// 用例数对不上 = 有用例被删掉或提前 return 而没执行。这种情况以前只打印一行
+// 「存在失败」却仍然 exit 0，CI 照绿（审计 INFRA-01）。现在直接判失败。
+if (failed > 0 || passed !== TOTAL) process.exit(1);

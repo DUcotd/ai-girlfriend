@@ -395,16 +395,36 @@ ${style.guide}
     _loadState() {
         const data = readJson(STATE_FILE, null);
         if (!data) return;
-        if (data.state) this.state = data.state;
-        if (data.baseline) this.baseline = data.baseline;
+        // 逐轴校验：旧实现把 data.state / data.baseline 原样赋值，于是半损坏或
+        // 被手改成 `"P": "0.3"`（字符串）的状态文件会让后续 getPromptInjection() 里的
+        // `emotion.P.toFixed(2)` 每轮抛错 —— 一个状态文件就能永久打掉整条对话链路。
+        const fallback = { P: 0.3, A: 0.1, D: -0.1 };
+        this.state = EmotionEngine._readPad(data.state, fallback);
+        this.baseline = EmotionEngine._readPad(data.baseline, this.state);
         if (data.history) this.history = data.history.slice(-this.maxHistory);
         if (data.relationshipStage) this.relationshipStage = data.relationshipStage;
         if (data.relationshipLabel) this.relationshipLabel = data.relationshipLabel;
         console.log(`[Emotion] Loaded state: ${this.getEmotionLabel()}`);
     }
 
+    /** 读一份 PAD：三个轴各自校验，非法值回落 fallback，并统一 clamp 到 [-1,1] */
+    static _readPad(raw, fallback) {
+        const out = { ...fallback };
+        if (!raw || typeof raw !== 'object') return out;
+        for (const axis of ['P', 'A', 'D']) {
+            const v = raw[axis];
+            // 只接受真正的数字，或「看起来是数字」的字符串（历史版本写过 "0.3"）。
+            // 注意不能用 Number(v) 一把梭：Number(null)===0、Number('')===0 会把
+            // 损坏字段当成合法的 0 分，静默改掉情绪。
+            const num = typeof v === 'number' ? v
+                : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+            if (Number.isFinite(num)) out[axis] = Math.max(-1, Math.min(1, num));
+        }
+        return out;
+    }
+
     _saveState() {
-        writeJson(STATE_FILE, {
+        return writeJson(STATE_FILE, {
             state: this.state,
             baseline: this.baseline,
             history: this.history,

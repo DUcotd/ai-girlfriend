@@ -217,8 +217,9 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
             const result = await api.resetAll();
             remove("affinity");
             if (result.status === "partial") {
-                // 后端有引擎重置失败：如实告知，但仍刷新以反映已重置的部分
-                showToast(`已重置，但 ${result.failed.length} 项未成功，请重试`, "error");
+                // 后端有引擎重置失败：如实列出是哪几项，但仍刷新以反映已重置的部分
+                const names = result.failed.map((f) => f.step).join("、");
+                showToast(`已重置 ${result.reset.length} 项，但 ${names} 未成功，请重试`, "error");
             } else {
                 showToast("小爱已完全重置！", "success");
             }

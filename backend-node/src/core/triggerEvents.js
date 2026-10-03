@@ -136,8 +136,13 @@ export const TRIGGER_THRESHOLDS = Object.freeze({
     }),
     /** —— anniversaryTrigger —— */
     anniversary: Object.freeze({
-        // 提前多少天内算「临近纪念日」（与 config.narrative.anniversaryWithinDays 同量级）
-        withinDays: 3,
+        // 查询窗：未来多少天内的纪念日会被 `_publishNarrativeMilestones` 挑出来发成事件
+        queryWithinDays: 7,
+        // 主动窗：落在提前几天内才真的生成主动消息。
+        // 与查询窗**故意不同**（一个决定"她记得"，一个决定"她今天说不说"），
+        // 所以必须各自有名有姓；旧写法是两处各写一个裸数字（7 与 3），
+        // 改 env 里的 7 完全不影响实际触发（审计 CORE-04）。
+        announceWithinDays: 3,
     }),
     /** —— promiseFollowupTrigger —— */
     promise: Object.freeze({

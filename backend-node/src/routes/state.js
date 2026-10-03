@@ -20,39 +20,47 @@ router.get('/history', (req, res) => {
 
 /**
  * 「新对话」：只清对话记录，保留好感度与长期记忆（入口：ChatToolbar「新对话」）。
+ * persisted:false 表示内存已清但没写进磁盘（重启会回滚），必须让调用方看得见。
  */
 router.delete('/history', (req, res) => {
-    aiGirlfriend.clearHistory();
-    res.json({ status: "cleared" });
+    const persisted = aiGirlfriend.clearHistory();
+    res.json({ status: "cleared", persisted });
 });
 
 /**
- * 「完全重置」：清对话记录 + 好感度 + 性格 + 情绪 + 任务 + 长期记忆
- * （入口：设置页「完全重置小爱」）。
+ * 「完全重置」：清对话记录 + 好感度 + 性格 + 情绪 + 任务 + 长期记忆 + 主动消息
+ * 运行时状态 + 生活日志（入口：设置页「完全重置小爱」）。
  * 不要把这个端点接到「新对话」上——那会让用户丢整段关系。
  *
- * 各引擎独立重置、单点失败不中断（见 AiGirlfriend.resetAll），因此这里可能拿到
- * 部分失败信息：只要有失败项，回 207 并把 failed 透出，前端据此提示用户「部分
- * 数据未能重置」，而不是一律报成功、把残留当没发生。
+ * resetAll() 现在是 async：它会先排空在途对话再清空，避免「重置被那一轮的收尾
+ * 写回撤销」。各引擎独立重置、单点失败不中断，因此可能拿到部分失败信息。
+ *
+ * ⚠️ 部分失败回 **200 + status:'partial'**，不是 207：前端共用的 request() 对任何
+ * 非 2xx 都直接 throw 且不解析响应体，用 207 会让「已经删掉一部分」被报成
+ * 「重置失败」，用户于是重试或以为没发生（审计 HTTP-08 / FE-06）。
  */
-router.post('/reset', (req, res) => {
-    const result = aiGirlfriend.resetAll();
-    if (result.failed.length > 0) {
-        res.status(207).json({ status: "partial", ...result });
-        return;
-    }
-    res.json({ status: "reset", ...result });
-});
+router.post('/reset', asyncHandler(async (req, res) => {
+    const result = await aiGirlfriend.resetAll();
+    res.json({
+        status: result.failed.length > 0 ? "partial" : "reset",
+        ...result,
+    });
+}));
 
 router.get('/system_prompt', (req, res) => {
     res.json({ system_prompt: aiGirlfriend.getSystemPrompt() });
 });
 
+/**
+ * 更新人设。⚠️ 语义：只换 history[0] 的 system 条目，**不动任何对话内容**，
+ * 并立即持久化（旧实现是「清空整段历史且不落盘」，等于一个没有把手的删除按钮）。
+ */
 router.post('/system_prompt', (req, res) => {
     const { system_prompt } = req.body;
-    if (fail(res, !system_prompt, 'system_prompt is required')) return;
-    aiGirlfriend.updateSystemPrompt(system_prompt);
-    res.json({ status: "updated", system_prompt });
+    if (fail(res, typeof system_prompt !== 'string' || !system_prompt.trim(),
+        'system_prompt is required and must be a non-empty string')) return;
+    const result = aiGirlfriend.updateSystemPrompt(system_prompt);
+    res.json({ status: "updated", system_prompt: aiGirlfriend.getSystemPrompt(), ...result });
 });
 
 router.get('/memories', (req, res) => {

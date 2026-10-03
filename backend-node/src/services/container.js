@@ -61,6 +61,13 @@ if (typeof aiGirlfriend.attachTriggerRegistry === 'function') {
 // ⑥ ProactiveEngine 接收 registry（null 时事件层整体降级 no-op，向后兼容）
 export const proactiveEngine = new ProactiveEngine(aiGirlfriend, triggerRegistry);
 
+// ⑦ 反向注入 proactiveEngine 引用：让 AiGirlfriend.resetAll() 能清掉主动消息的
+//    当日配额/冷却/滞留队列与 LifeSimulator 日志（它挂在 proactiveEngine 上）。
+//    未注入时 resetAll 自动跳过这两步，行为同改造前。
+if (typeof aiGirlfriend.attachProactiveEngine === 'function') {
+    aiGirlfriend.attachProactiveEngine(proactiveEngine);
+}
+
 /** 优雅停机：清理所有后台定时器，并把记忆/用户情绪/叙事/事件队列去抖中的待写数据立即落盘 */
 export function shutdownServices() {
     proactiveEngine.stop();

@@ -13,6 +13,7 @@
  * 真实 container 会读 data/*.json 并在 stop() 时回写 → 测试末尾还原。
  */
 import fs from 'node:fs';
+import { dataPath } from '../src/utils/jsonStore.js';
 
 let failed = 0;
 function check(name, cond, detail = '') {
@@ -26,8 +27,8 @@ function check(name, cond, detail = '') {
 
 // ---- 真实数据备份 ----
 const stateUrls = [
-    new URL('../data/trigger_state.json', import.meta.url),
-    new URL('../data/proactive_state.json', import.meta.url),
+    dataPath('trigger_state.json'),
+    dataPath('proactive_state.json'),
 ];
 function snapshot(url) {
     try { return { existed: true, bytes: fs.readFileSync(url) }; }
@@ -119,7 +120,7 @@ try {
         check('纪念日：临近命中', evalAnniversary(ann, { now: 1000 }) !== null);
         check('纪念日：今天命中（daysUntil=0）', evalAnniversary({ ...ann, daysUntil: 0 }, { now: 1000 }) !== null);
         check('纪念日：超出窗口不命中',
-            evalAnniversary({ ...ann, daysUntil: TRIGGER_THRESHOLDS.anniversary.withinDays + 5 }, { now: 1000 }) === null);
+            evalAnniversary({ ...ann, daysUntil: TRIGGER_THRESHOLDS.anniversary.announceWithinDays + 5 }, { now: 1000 }) === null);
         check('纪念日：非 anniversary 类型不命中',
             evalAnniversary({ ...ann, type: 'promise', anniversary: false }, { now: 1000 }) === null);
         check('纪念日：已过去太久不命中', evalAnniversary({ ...ann, daysUntil: -5 }, { now: 1000 }) === null);

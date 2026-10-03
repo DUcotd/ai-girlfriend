@@ -32,7 +32,7 @@ export function evaluate(payload, ctx = {}) {
         ? payload.daysUntil
         : (Number.isFinite(payload.daysAgo) ? -payload.daysAgo : null);
     if (daysUntil === null) return null;
-    if (daysUntil > TRIGGER_THRESHOLDS.anniversary.withinDays) return null;
+    if (daysUntil > TRIGGER_THRESHOLDS.anniversary.announceWithinDays) return null;
     // 已经过去超过 1 天的不再补提（避免翻旧账）
     if (daysUntil < -1) return null;
 

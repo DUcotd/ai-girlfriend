@@ -578,6 +578,15 @@ class PersonalityDrift {
         this.stats.today.sentiments.push(signals.sentiment);
         this.stats.today.sentiments = this.stats.today.sentiments.slice(-200);
 
+        this._touchActivityClock(key);
+    }
+
+    /**
+     * 「用户在场」时钟：当日计数、活跃天数、lastActiveDate、连续inactiveDays 归零。
+     * 单独抽出来是为了让 ghosting 早退路径也能打到这个点 —— 见 markUserActive()。
+     * @returns {object} 当日的 dailyMessageCounts 条目
+     */
+    _touchActivityClock(key) {
         let todayEntry = this.stats.dailyMessageCounts.find((entry) => entry.date === key);
         if (!todayEntry) {
             todayEntry = { date: key, count: 0 };
@@ -588,6 +597,24 @@ class PersonalityDrift {
         this.stats.dailyMessageCounts = this.stats.dailyMessageCounts.slice(-30);
         this.stats.lastActiveDate = key;
         this.stats.consecutiveInactiveDays = 0;
+        return todayEntry;
+    }
+
+    /**
+     * 只更新「用户在场」时钟，不改情绪/性格统计（ghosting 早退专用）。
+     *
+     * 为什么必须有：recordUserTurn 只在 `_finalize` 里被调用，而冷暴力早退根本不走
+     * `_finalize` → `lastActiveDate` 冻结，但 `settleDaily` 每天照跑，于是
+     * `consecutiveInactiveDays` 一路累加，第 3 天起触发 S01 `long_absence`
+     * （independence +2.0、security −2.5、affection −1.5/天）。
+     * 结果就是「天天给她发消息、只是正被她冷暴力的用户，被按消失了半个月来改变性格」，
+     * 而且越冷越扣分、越扣分越冷 —— 自我强化的错误人格漂移（审计 CORE-12）。
+     */
+    markUserActive(now = Date.now()) {
+        const key = dayKey(new Date(now));
+        this._appendMissingDays(key);
+        this._touchActivityClock(key);
+        return this._saveState(now);
     }
 
     /** 为跨过但没有消息的自然日补 0，保证近 7 天日均与连续活跃口径准确。 */
@@ -769,7 +796,7 @@ class PersonalityDrift {
             ? DIM_KEYS.filter((key) => this.baseline[key] !== preset.traits[key]).length
             : 0;
         const customized = preset ? customizedCount > 0 : true;
-        writeJson(this.stateFile, {
+        return writeJson(this.stateFile, {
             version: 2,
             presetId: this.presetId,
             customized,

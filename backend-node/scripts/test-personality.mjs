@@ -471,27 +471,14 @@ check('纯函数层零 I/O、零网络、零 await（TC-SRC-06）', () => {
         assert.ok(!/jsonStore|from 'fs'|fetch\(|await /.test(source), `${file} 不得含 I/O、网络或 await`);
     }
 });
-check('源码回归：sentiment 兜底用 ?? 而非 ||（TC-REG-02，R-4 建议的源码断言）', () => {
-    const source = fs.readFileSync(new URL('../src/core/AiGirlfriend.js', import.meta.url), 'utf-8');
-    assert.ok(
-        source.includes('const sentiment = emotionDelta?.P ?? autoDelta.P;'),
-        'emotionDelta.P === 0 时必须保留 0，不得回退为 autoDelta.P',
-    );
-});
-check('源码回归：_prepare 中 settleDaily 先于 shouldGhost 早退（TC-REG-01）', () => {
-    const source = fs.readFileSync(new URL('../src/core/AiGirlfriend.js', import.meta.url), 'utf-8');
-    const prepareStart = source.indexOf('async _prepare(');
-    const settleIndex = source.indexOf('personalityDrift.settleDaily(', prepareStart);
-    const ghostIndex = source.indexOf('shouldGhost()', prepareStart);
-    assert.ok(prepareStart !== -1 && settleIndex !== -1 && ghostIndex !== -1);
-    assert.ok(settleIndex < ghostIndex, '性格每日结算必须先于 ghosting 早退，否则冷淡期跨天规则被跳过');
-});
-check('源码回归：resetAll 会重置性格引擎（TC-REG-03）', () => {
-    const source = fs.readFileSync(new URL('../src/core/AiGirlfriend.js', import.meta.url), 'utf-8');
-    const resetAllIndex = source.indexOf('resetAll() {');
-    const callIndex = source.indexOf('this.personalityDrift.reset()', resetAllIndex);
-    assert.ok(resetAllIndex !== -1 && callIndex !== -1, 'resetAll 必须调用 personalityDrift.reset()');
-});
+// ↓↓↓ 原来这里有 3 条「读源码字符串」的回归断言（TC-REG-01/02/03）。
+// 它们只验证实现细节：字符串在但调用被删 → 照样绿；无害改个行 → 立刻红。
+// 2026-10-03 B2 改动把 sentiment 从「叠加」换成「混合」，其中 TC-REG-02 就在
+// 行为更好的情况下报了失败 —— 正是审计 INFRA-04 说的现象。
+// 三条断言已改为行为断言，见 scripts/test-audit-b2.mjs 与 test-audit-b0.mjs：
+//   TC-REG-01 → 「ghost 那一轮仍然完成每日结算」（lastSettledDay 推进到今天）
+//   TC-REG-02 → 「sentiment 是词表与 LLM 的加权混合，模型给 0 会把情绪拉回中性」
+//   TC-REG-03 → 「resetAll 的 reset 列表里包含 personality，且性格真的回到预设」
 
 console.log('引擎、迁移与账本:');
 try {
@@ -772,7 +759,7 @@ console.log('API 契约:');
 // 路由闭包每次请求都动态读取 aiGirlfriend.personalityDrift，替换为测试引擎后，
 // 全部 POST 写的都是 personality_state.test.json。
 // node:fetch(undici) 不走系统代理，127.0.0.1 随机端口不会被本机 HTTP 代理 502。
-const proactiveStateUrl = new URL('../data/proactive_state.json', import.meta.url);
+const proactiveStateUrl = dataPath('proactive_state.json');
 let proactiveStateBackup = null;
 let hadProactiveState = false;
 try {

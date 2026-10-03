@@ -196,9 +196,57 @@ export function intensityFactor(text) {
     return 1;
 }
 
-/** 是否命中否定词。 */
+/** 是否命中否定词（粗粒度，仅作信息位；**不再**直接用来决定是否取反）。 */
 export function hasNegation(text) {
     return anyHit(text || '', NEGATION_WORDS);
+}
+
+/**
+ * 否定判定的邻域窗口：情绪词**前面**多少个字符内出现否定词才算把它否定掉。
+ * 旧实现是「整句里有任何否定词 + 主标签是正向 → 取反」，于是
+ * 「今天不开会，和朋友聚了聚，超开心」被读成低落（审计 CORE-14）。
+ * 默认值由调用方（UserEmotionEngine 从 config 读）覆盖，本模块保持纯函数。
+ */
+export const NEGATION_WINDOW = 4;
+
+/** 汉语的「后附式否定」：动词/形容词后接不+起来，同样表示否定。 */
+export const NEGATION_SUFFIXES = ['不起来', '不下去', '不上来', '不起来', '没起来', '不快乐起来'];
+
+/** 找出某个词在文本里的所有出现位置（小写不敏感，与 detectLabels 口径一致）。 */
+export function findWordPositions(text, word) {
+    const haystack = (text || '').toLowerCase();
+    const needle = (word || '').toLowerCase();
+    const out = [];
+    if (!needle) return out;
+    for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + 1)) {
+        out.push(i);
+    }
+    return out;
+}
+
+/**
+ * 判断某个词的某次出现是否被否定：前窗内有否定词，或紧跟否定式后缀。
+ * @param {string} text 原文
+ * @param {number} index 该词出现的位置
+ * @param {number} wordLen 该词长度
+ * @param {number} window 前窗字符数
+ */
+export function isNegatedAt(text, index, wordLen, window = NEGATION_WINDOW) {
+    const before = text.slice(Math.max(0, index - window), index);
+    if (NEGATION_WORDS.some((w) => before.includes(w))) return true;
+    const after = text.slice(index + wordLen, index + wordLen + 5);
+    return NEGATION_SUFFIXES.some((s) => after.startsWith(s));
+}
+
+/**
+ * 「主标签是否被否定」：只要该标签命中的**任一处**词没被否定，就不算被否定。
+ * （「不开心，但还是想笑」里 开心 被否定、想笑 没被否定 → 不整体翻转）
+ */
+export function negatesLabel(text, label, window = NEGATION_WINDOW) {
+    const words = USER_EMOTION_LEXICON[label] || [];
+    const positions = words.flatMap((w) => findWordPositions(text, w).map((i) => ({ i, len: w.length })));
+    if (positions.length === 0) return false;
+    return positions.every(({ i, len }) => isNegatedAt(text || '', i, len, window));
 }
 
 /**
@@ -208,15 +256,18 @@ export function hasNegation(text) {
  *   1. 命中标签集合 → 取主标签（命中词条最多者）；
  *   2. 以主标签的三维基准为起点；
  *   3. 叠加强度词放大 intensity；
- *   4. 若命中否定词**且**主标签为正向情绪 → 翻转 valence 并重映射标签
- *      （「不开心」应从开心翻成低落，而非仍是开心）。
+ *   4. 若主标签**在原文里的每一处出现都被就近否定** → 翻转 valence 并重映射标签
+ *      （「不开心」应从开心翻成低落，而「今天不开会…超开心」不该翻）。
  *
  * @param {string} text 用户输入原文
+ * @param {{negationWindow?: number}} [opts] 邻域窗口字符数（默认 NEGATION_WINDOW）
  * @returns {{ valence:number, arousal:number, intensity:number, label:string, confidence:number, source:'lexicon', matched:string[] }}
  *          confidence∈[0,1]，无任何命中时为 0（纯中性）。
  */
-export function classifyUserEmotion(text) {
+export function classifyUserEmotion(text, opts = {}) {
     const input = (text || '').trim();
+    const negationWindow = Number.isFinite(opts?.negationWindow)
+        ? opts.negationWindow : NEGATION_WINDOW;
     const hits = detectLabels(input);
 
     if (hits.length === 0) {
@@ -240,9 +291,11 @@ export function classifyUserEmotion(text) {
     let label = primary;
 
     // 否定词处理：只对「正向主标签」取反（负向词再加否定语义模糊，不做翻转，避免误判）。
+    // ⚠️ 判定范围是**情绪词的邻域**，不是整句话：整句级判定会把
+    // 「今天不开会，和朋友聚了聚，超开心」读成低落（审计 CORE-14）。
     // 取反时把 arousal 压低到 [-0.2, 0.1]：否定的正向情绪（「不开心」）应落到「低落」，
     // 而不是因残留的高唤醒被误判为「烦闷/焦虑」。
-    if (hasNegation(input) && base.valence > 0) {
+    if (base.valence > 0 && negatesLabel(input, primary, negationWindow)) {
         valence = -base.valence;
         arousal = clamp(base.arousal * 0.2 - 0.1, -0.2, 0.1);
         // 不额外衰减 intensity：否定的正向情绪本身仍是一种明确的低落感受

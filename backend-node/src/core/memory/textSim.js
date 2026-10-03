@@ -16,24 +16,37 @@ export function normalizeText(text) {
 }
 
 /**
- * 检索词切分。英文/数字按空白与词边界切；无空白的中日韩文本按 bigram 切。
+ * 检索词切分（**去重**）：用于查询词项集合与命中数统计。
  */
 export function tokenize(query) {
-    const lower = String(query || '').toLowerCase().trim();
-    if (!lower) return [];
-    const terms = new Set();
+    return [...tokenizeToMap(query).keys()];
+}
+
+/**
+ * 切词并返回词频表（**不去重**的信息保留版）。
+ *
+ * 为什么单独要一份：BM25 的 tf 项需要重复计数，而 `tokenize` 返回的是 Set 去重结果
+ * —— 旧实现拿它算 `tf = docTerms.filter(t => t === term).length` 时 tf 恒为 1，
+ * k1/b/avgdl 那套饱和公式形同虚设（审计 CORE-15）。
+ * @returns {Map<string, number>}
+ */
+export function tokenizeToMap(text) {
+    const lower = String(text || '').toLowerCase().trim();
+    const map = new Map();
+    if (!lower) return map;
     // 中英混排：连续 ASCII 片段整词保留，其余片段按 bigram 切
     const segments = lower.split(/([a-z0-9]+)/).filter(Boolean);
     for (const seg of segments) {
         if (/^[a-z0-9]+$/.test(seg)) {
-            terms.add(seg);
+            map.set(seg, (map.get(seg) || 0) + 1);
             continue;
         }
         for (let i = 0; i < seg.length - 1; i++) {
-            terms.add(seg.slice(i, i + 2));
+            const gram = seg.slice(i, i + 2);
+            map.set(gram, (map.get(gram) || 0) + 1);
         }
     }
-    return [...terms];
+    return map;
 }
 
 /** 文本的 bigram 集合（去重），用于 Jaccard 相似度 */

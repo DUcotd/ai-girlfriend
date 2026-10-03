@@ -31,7 +31,8 @@ export const TOKEN_ENV = 'AI_GIRLFRIEND_TOKEN';
 /** 健康检查路径：豁免鉴权，供前端 / 探活工具判断后端是否活着。 */
 export const HEALTH_PATHS = new Set(['/']);
 
-/** 静态资源前缀：TTS 音频等由 <audio> 标签直取，浏览器不便带 Authorization 头，故豁免。 */
+/** 静态资源前缀：TTS 音频等由 <audio> 标签直取，带不了 Authorization 头，
+ *  故在「未配 token 的本机守卫模式」下免检；配了 token 则要求 ?token= 通过。 */
 export const STATIC_PREFIX = '/static';
 
 /**
@@ -104,14 +105,30 @@ export function extractBearerToken(req) {
     return token.length > 0 ? token : null;
 }
 
-/** 请求路径是否命中豁免规则（健康检查 / 静态资源 / CORS 预检）。 */
+/** 请求路径是否命中豁免规则（健康检查 / CORS 预检）。 */
 export function isExemptPath(req) {
     // CORS 预检必须放行：预检请求本来就不带业务凭证，拦掉会让所有跨域请求直接失败
     if (req.method === 'OPTIONS') return true;
     const path = req.path || '';
     if (HEALTH_PATHS.has(path)) return true;
-    if (path === STATIC_PREFIX || path.startsWith(`${STATIC_PREFIX}/`)) return true;
+    // ⚠️ /static 不再无条件豁免（审计 B0-10）：TTS 音频就是「对话内容的语音版」。
+    // 旧规则下即使配了 token，这些文件仍对局域网完全敞开 —— 只有「未配 token 的
+    // 本机守卫模式」下才免检（见 createAuthMiddleware 里的静态分支）。
     return false;
+}
+
+/** 从查询串取 token：<audio src="…"> 这类标签带不了 Authorization 头。 */
+function extractQueryToken(req) {
+    const raw = req?.query?.token;
+    if (typeof raw !== 'string') return null;
+    const token = raw.trim();
+    return token.length > 0 ? token : null;
+}
+
+/** 是否静态资源路径（允许用查询串 token 通过；业务接口仍要求请求头） */
+function isStaticPath(req) {
+    const path = req.path || '';
+    return path === STATIC_PREFIX || path.startsWith(`${STATIC_PREFIX}/`);
 }
 
 /**
@@ -126,7 +143,7 @@ export function createAuthMiddleware(options = {}) {
         // 1) 豁免：预检 / 健康检查 / 静态资源
         if (isExemptPath(req)) return next();
 
-        // 2) 未配置 token → 本机守卫：仅回环地址放行
+        // 2) 未配置 token → 本机守卫：仅回环地址放行（静态资源在此模式下同样只对本机开放）
         if (!resolvedToken) {
             if (isLoopbackRequest(req)) return next();
             return res.status(401).json({
@@ -135,8 +152,10 @@ export function createAuthMiddleware(options = {}) {
             });
         }
 
-        // 3) 已配置 token → 校验 Bearer token
-        const provided = extractBearerToken(req);
+        // 3) 已配置 token → 校验 Bearer token；静态资源额外允许 ?token= 查询串
+        //    （浏览器渲染 <audio src> 无法附加请求头，而 TTS 音频属于对话内容）
+        const provided = extractBearerToken(req)
+            ?? (isStaticPath(req) ? extractQueryToken(req) : null);
         if (provided === null) {
             return res.status(401).json({
                 detail: 'Unauthorized: 缺少 Authorization: Bearer <token> 头。',

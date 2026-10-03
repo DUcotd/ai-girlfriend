@@ -54,15 +54,25 @@ class Memory {
     /**
      * 记录一轮对话：写入情节记忆 + 触发后台事实提取。
      * 两者都不在响应关键路径上（调用方在 setImmediate 中触发）。
+     *
+     * `_extractGeneration` 同时充当**整个记忆层的写入世代号**：clearMemory() 递增它，
+     * 于是所有在途的「await 嵌入 → 写库」续体在恢复时都会发现自己已经过期。
      */
     async recordTurn(userInput, replyText, { emotionSnapshot = null } = {}) {
+        const generation = this._extractGeneration;
         const text = `User: ${userInput}\nXiao Ai: ${replyText}`;
-        await this._addEpisode(text, emotionSnapshot);
+        await this._addEpisode(text, emotionSnapshot, generation);
         this._scheduleFactExtraction(userInput, replyText);
     }
 
-    async _addEpisode(text, emotionSnapshot) {
+    async _addEpisode(text, emotionSnapshot, generation = this._extractGeneration) {
         const embedding = await this.embedding.embed(text);
+        // 嵌入是网络等待，期间可能发生过 clearMemory/resetAll：作废这次写入，
+        // 否则被删掉的情节会在重置之后复活。
+        if (generation !== this._extractGeneration) {
+            console.log('[Memory] Episode write skipped (记忆在等待期间被清空)');
+            return;
+        }
 
         // 写入去重：与既有情节近重复的直接丢弃（防复读对话刷库）。
         // 有新向量用余弦判定；无向量（关键词模式 / 嵌入失败）退化为文本 Jaccard。
@@ -97,14 +107,16 @@ class Memory {
                 const ops = await this.factExtractor.extractOps(userInput, replyText, this.store.facts);
                 const changed = ops.add.length + ops.update.length + ops.delete.length;
                 if (changed === 0 || generation !== this._extractGeneration) return;
-                await this._applyFactOps(ops);
+                await this._applyFactOps(ops, generation);
                 console.log(`[Memory] Facts: +${ops.add.length} ~${ops.update.length} -${ops.delete.length}`);
             })
             .catch((e) => console.error(`[Memory] fact extraction failed: ${e.message}`));
     }
 
-    async _applyFactOps(ops) {
+    async _applyFactOps(ops, generation = this._extractGeneration) {
         const now = Date.now() / 1000;
+        /** 每次 await 之后都要重新确认世代：清空可能落在任意两次嵌入之间 */
+        const stale = () => generation !== this._extractGeneration;
 
         for (const id of ops.delete) {
             const idx = this.store.facts.findIndex((f) => f.id === id);
@@ -112,12 +124,14 @@ class Memory {
         }
 
         for (const upd of ops.update) {
+            if (stale()) return;
             const fact = this.store.facts.find((f) => f.id === upd.id);
             if (!fact) continue;
             const content = upd.content.trim();
             if (content !== fact.content) {
                 fact.content = content;
                 const embedding = await this.embedding.embed(content);
+                if (stale()) return;
                 if (embedding) {
                     fact.embedding = embedding;
                     fact.embeddingModel = this.embedding.model;
@@ -129,8 +143,13 @@ class Memory {
         }
 
         for (const add of ops.add) {
+            if (stale()) return;
             const content = add.content.trim();
+            // 判重先于嵌入：旧实现先 await embed 再 isDuplicateFact，
+            // 于是每条重复事实都白付一次嵌入请求（钱与时延都白花）。
+            if (FactExtractor.isDuplicateFact(content, null, this.store.facts)) continue;
             const embedding = await this.embedding.embed(content);
+            if (stale()) return;
             if (FactExtractor.isDuplicateFact(content, embedding, this.store.facts)) continue;
             this.store.addFact({
                 content,
@@ -240,7 +259,7 @@ class Memory {
             err.code = 'DUPLICATE_FACT';
             throw err;
         }
-        this.store.addFact({
+        const created = this.store.addFact({
             content: trimmed,
             category: normalizeCategory(category),
             importance: clampImportance(importance),
@@ -249,7 +268,7 @@ class Memory {
             embeddingModel: embedding ? this.embedding.model : null,
         });
         this.store.scheduleSave();
-        return this._publicFact(this.store.facts[this.store.facts.length - 1]);
+        return created ? this._publicFact(created) : null;
     }
 
     /** 编辑事实（content 变更会重新计算向量）；id 不存在返回 null */

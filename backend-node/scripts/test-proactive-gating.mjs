@@ -11,6 +11,7 @@
  * 文件可能不存在，读取必须有 ENOENT 容错）。
  */
 import fs from 'node:fs';
+import { dataPath } from '../src/utils/jsonStore.js';
 
 let failed = 0;
 function check(name, cond, detail = '') {
@@ -23,7 +24,7 @@ function check(name, cond, detail = '') {
 }
 
 // ---- 真实 proactive_state.json 备份（必须在动态 import 之前） ----
-const stateUrl = new URL('../data/proactive_state.json', import.meta.url);
+const stateUrl = dataPath('proactive_state.json');
 let stateBackup = null;
 let hadStateFile = false;
 try {

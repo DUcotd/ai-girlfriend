@@ -221,7 +221,7 @@ class ProactiveEngine {
     }
 
     _saveState() {
-        writeJson(STATE_FILE, {
+        return writeJson(STATE_FILE, {
             config: this.config,
             dailyMessageCount: this.dailyMessageCount,
             lastDayKey: this.lastDayKey,
@@ -236,8 +236,31 @@ class ProactiveEngine {
         });
     }
 
-    // ==================== 配置 ====================
+    /**
+     * 清运行时状态但**保留用户配置**（「完全重置」的一步，审计 B0-5）。
+     *
+     * 此前 resetAll() 完全不碰这里，于是重置后：
+     *  - 队列里按**旧关系**生成的主动消息仍会被投递（最多 maxQueueSize 条）；
+     *  - 当日配额已烧完 + sentDays/冷却仍在 → 主动关怀要到零点才恢复；
+     *  - recentSentTexts 里的旧措辞还会参与去重判定。
+     * @returns {boolean} 是否落盘成功
+     */
+    resetRuntimeState() {
+        this.messageQueue = [];
+        this.dailyMessageCount = 0;
+        this.lastDayKey = dayKey();
+        this.lastTriggerByType = {};
+        this.sentDays = {};
+        this.lastRandomSlotKey = null;
+        this.lastSpontaneousAt = 0;
+        this.lastTriggerTime = Date.now();
+        this.lastUserActiveTime = Date.now();
+        this.recentSentTexts = [];
+        this._inflight.clear();
+        return this._saveState();
+    }
 
+    // ==================== 配置 ====================
     /**
      * 校验并写入配置（不落盘由调用方决定，便于构造期静默恢复）。
      * 非法字段一律忽略而不是清空——重复下发部分字段不会打掉其余设置。
@@ -684,6 +707,16 @@ class ProactiveEngine {
             ...candidate.data,
             eventTriggerId: candidate.triggerId,
         });
+        // 约定追问要记账：promiseFollowupTrigger 用 followupCount 同时做「最多追问几次」
+        // 的上限判定和 dedupeKey。此前全仓没有任何地方递增它 → 上限是死代码，
+        // 而 dedupeKey 恒定 + 去重表永不清理 → 一条约定一生只被追问一次（审计 CORE-03/CORE-19）。
+        if (ok && candidate.data?.kind === 'promise' && candidate.data.narrativeId) {
+            try {
+                this.aiGirlfriend.recordNarrativeFollowup?.(candidate.data.narrativeId);
+            } catch (e) {
+                console.error(`[ProactiveEngine] recordNarrativeFollowup failed: ${e.message}`);
+            }
+        }
         console.log(
             `[ProactiveEngine] Event-driven consume: trigger=${candidate.triggerId} → ${candidate.targetType} (delivered=${ok})`
         );

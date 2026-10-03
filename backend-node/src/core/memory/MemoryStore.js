@@ -109,9 +109,9 @@ export class MemoryStore {
         }
     }
 
-    /** 追加事实；超出上限先丢重要度最低、再丢最旧 */
+    /** 追加事实；超出上限先丢重要度最低、再丢最旧。返回新建的事实对象（若它自己就被裁掉了则返回 null） */
     addFact({ content, category = 'other', importance = 3, source = 'extracted', embedding = null, embeddingModel = null }) {
-        this.facts.push({
+        const fact = {
             id: uuidv4(),
             content,
             category,
@@ -121,8 +121,13 @@ export class MemoryStore {
             embeddingModel,
             createdAt: Date.now() / 1000,
             updatedAt: Date.now() / 1000,
-        });
+        };
+        this.facts.push(fact);
         this._capFacts();
+        // 调用方（如 POST /memories/facts）需要拿到"刚建的那条"。
+        // 旧实现让调用方读 facts[length-1]，而 _capFacts 会重排 —— 事实库满时
+        // 那一位是"重要度最高的旧事实"，接口于是回错记录。
+        return this.facts.includes(fact) ? fact : null;
     }
 
     _capFacts() {

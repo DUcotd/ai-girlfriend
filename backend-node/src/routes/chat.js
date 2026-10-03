@@ -57,6 +57,14 @@ function taskPayload(result) {
     return { taskResult: result.taskResult ?? null };
 }
 
+/**
+ * 模型输出不合规时的原因（emotion_delta 越界被裁剪、affinity_change 是无法识别的值…）。
+ * 以前这些情况全被静默归零，用户只会看到「好感度怎么一动不动」。
+ */
+function warningsPayload(result) {
+    return { parse_warnings: result.parseWarnings || [] };
+}
+
 router.post('/chat', asyncHandler(async (req, res) => {
     const { message } = req.body;
     if (!aiGirlfriend.apiKey) return res.status(400).json({ detail: "API Key not configured" });
@@ -78,6 +86,7 @@ router.post('/chat', asyncHandler(async (req, res) => {
         inner_thought: thinkingField(result.innerThought),
         model_reasoning: thinkingField(result.modelReasoning),
         ...taskPayload(result),
+        ...warningsPayload(result),
     });
 }));
 
@@ -109,21 +118,29 @@ router.post('/chat/stream', (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no'); // 禁止 Nginx 缓冲，否则流式会变成一次性返回
     res.flushHeaders?.();
 
+    // 客户端断开 → abort 上游 LLM 请求。
+    // 旧实现只置一个 closed 标志停止转发，生成照旧跑完、_finalize 照旧结算：
+    // 用户白等的那段时间照样花钱，而且关系分数被一条没人看到的回复改掉。
+    const controller = new AbortController();
     const send = (payload) => {
+        if (res.writableEnded) return;
         res.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
-    let closed = false;
-    res.on('close', () => { closed = true; });
+    res.on('close', () => controller.abort());
 
-    proactiveEngine.notifyUserActive();
+    // notifyUserActive 在 flushHeaders 之后：它一抛错就会变成 ERR_HTTP_HEADERS_SENT
+    // 且流永久挂起（/chat 里同一调用有 asyncHandler 兜底，这里必须自己包）
+    try {
+        proactiveEngine.notifyUserActive();
+    } catch (e) {
+        console.error(`[Chat/Stream] notifyUserActive failed: ${e.message}`);
+    }
 
     aiGirlfriend
-        .chatStream(message, (text) => {
-            if (!closed) send({ type: 'delta', text });
-        })
+        .chatStream(message, (text) => send({ type: 'delta', text }), { signal: controller.signal })
         .then((result) => {
-            if (closed) return;
+            if (res.writableEnded) return;
             send({
                 type: 'done',
                 reply: result.reply || "",
@@ -136,13 +153,15 @@ router.post('/chat/stream', (req, res) => {
                 inner_thought: thinkingField(result.innerThought),
                 model_reasoning: thinkingField(result.modelReasoning),
                 ...taskPayload(result),
+                ...warningsPayload(result),
+                ...(result.aborted ? { aborted: true } : {}),
             });
             res.end();
         })
         .catch((e) => {
             console.error(`[Chat/Stream] Error: ${e.message}`);
-            if (closed) return;
-            send({ type: 'error', detail: e.message || 'stream failed' });
+            if (res.writableEnded) return;
+            send({ type: 'error', detail: '生成失败，请重试' });
             res.end();
         });
 });

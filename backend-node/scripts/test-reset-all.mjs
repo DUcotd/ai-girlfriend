@@ -1,21 +1,29 @@
 /**
  * 「完全重置」范围回归测试。
  *
- * 覆盖 resetAll() 应清空的 6 类数据 + 容错行为：
+ * 覆盖 resetAll() 应清空的各类数据 + 容错行为：
  *   history / affinity / personality / emotion / tasks / memory
  * 直接构造各引擎并调用其 reset/clear 方法，断言内存态与落盘态。
+ * （resetAll 自身的编排行为——含 proactive/lifeLog 覆盖、与在途对话串行——
+ *  由 scripts/test-audit-b0.mjs 覆盖。）
+ *
+ * ⚠️ 全程写临时数据目录：本文件历史上会直接改真实 data/emotion_state.json 与
+ * tasks.json 且**不备份**，等于「跑一次测试删一次用户档案」（审计 INFRA-03）。
  *
  * 运行：node scripts/test-reset-all.mjs
  */
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import EmotionEngine from '../src/core/EmotionEngine.js';
-import TaskManager from '../src/core/TaskManager.js';
-import AffinityEngine from '../src/core/AffinityEngine.js';
-import { readJson } from '../src/utils/jsonStore.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// 必须在 import src/ 之前设置：jsonStore 在模块加载时就解析数据目录
+process.env.AI_GIRLFRIEND_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'aigf-reset-'));
+
+const { default: EmotionEngine } = await import('../src/core/EmotionEngine.js');
+const { default: TaskManager } = await import('../src/core/TaskManager.js');
+const { default: AffinityEngine, DEFAULT_AFFINITY } = await import('../src/core/AffinityEngine.js');
+const { readJson, dataPath } = await import('../src/utils/jsonStore.js');
+
 let pass = 0, fail = 0;
 const check = (name, cond) => {
     if (cond) { pass++; console.log('  PASS', name); }
@@ -47,11 +55,15 @@ aff.ledger = [{ delta: 1 }];
 aff.gainEvents = [{ t: 1 }];
 aff.daily = { dayKey: '2020-01-01', gained: 7 };
 aff.reset();
-check('affinity 回默认档', aff.affinity === aff._affinity && typeof aff.affinity === 'number');
+// 断言必须对着**常量默认值**比较。旧写法是
+// `aff.affinity === aff._affinity`（getter 比自己的后备字段），同义反复、永远为真。
+check(`affinity 回默认档 ${DEFAULT_AFFINITY}`, aff.affinity === DEFAULT_AFFINITY && aff._affinity === DEFAULT_AFFINITY);
 check('ledger 清空', aff.ledger.length === 0);
 check('gainEvents 清空', aff.gainEvents.length === 0);
 check('daily 归零', aff.daily.gained === 0);
-try { fs.unlinkSync(path.join(__dirname, '..', 'data', 'affinity_test_tmp.json')); } catch { /* ignore */ }
+const affSaved = readJson('affinity_test_tmp.json', null);
+check('affinity 落盘为默认档', affSaved?.affinity === DEFAULT_AFFINITY);
+try { fs.unlinkSync(dataPath('affinity_test_tmp.json')); } catch { /* ignore */ }
 
 console.log('== TaskManager.clearAll ==');
 TaskManager.tasks = [{ id: 't1' }, { id: 't2' }, { id: 't3' }];

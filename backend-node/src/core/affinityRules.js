@@ -150,5 +150,10 @@ export function validateAffinityChange(
         rule('daily_cap', Math.min(cur, remaining), `今天的好感额度只剩 ${remaining} 点`);
     }
 
+    // 8 取整：好感度是整数（clampAffinity 会 round），但中间规则放行浮点，
+    //    于是账本出现 before + finalChange ≠ after（审计 CORE-16）。
+    //    统一在这里取整并计入 trace，不变量 `rawChange + Σ(to-from) === change` 依然成立。
+    rule('integer_round', Math.round(cur), '好感度按整数记账');
+
     return { change: cur, trace };
 }

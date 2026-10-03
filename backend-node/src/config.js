@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 // REQ-04 事件层常量块的真源仍在 core/triggerEvents.js（T03 为避开并行任务的
 // 文件冲突放在那里）。这里 import 进来 re-export 进统一 config，落实「所有运行时数值
 // 统一从 config 读」的项目铁律，同时**不破坏 triggerEvents.js 的既有导出**（测试依赖它）。
-import { TRIGGER_REGISTRY_CONFIG } from './core/triggerEvents.js';
+import { TRIGGER_REGISTRY_CONFIG, TRIGGER_THRESHOLDS } from './core/triggerEvents.js';
 
 dotenv.config();
 
@@ -70,6 +70,19 @@ export const config = {
         // 响应里回传「思考」字段（inner_thought 人设独白 / model_reasoning 原生思考）的
         // 最大字符数，超出截断。原生 CoT 可能上万字，不宜整个塞进 HTTP 响应。
         thinkingMaxChars: Number(process.env.CHAT_THINKING_MAX_CHARS) || 2000,
+    },
+    /**
+     * 情绪模型（EmotionEngine）的输入约束。prompt 里已经告诉模型 emotion_delta 是
+     * −0.5~+0.5，但**代码必须自己守住**：PAD 同时驱动风格指南、主动消息情绪闸门与
+     * 记忆情绪染色，被模型一句话拉满就等于让模型自己开关这些行为（审计 CORE-05/CORE-13）。
+     */
+    emotion: {
+        // LLM 单轮每轴的最大幅度（超出即裁剪并记 warning）
+        llmAxisCap: envNumber(process.env.EMOTION_LLM_AXIS_CAP, 0.5, 0, 1),
+        // 词表与 LLM 两路的混合权重：同一轮里同一个情绪事件只该被记一次，
+        // 所以是加权混合而不是先后各 apply 一次（旧写法约 2 倍幅度）
+        keywordWeight: envNumber(process.env.EMOTION_KEYWORD_WEIGHT, 0.5, 0, 1),
+        llmWeight: envNumber(process.env.EMOTION_LLM_WEIGHT, 0.5, 0, 1),
     },
     // 记忆检索用的 embedding：慢就快速降级为关键词检索，不拖垮主链路
     embedding: {
@@ -148,6 +161,10 @@ export const config = {
         flushDebounceMs: envNumber(process.env.USER_EMOTION_FLUSH_DEBOUNCE_MS, 2000, 100, 60000),
         // excerpt 截断长度（仅用于调试/前端展示，不参与分析）
         excerptMax: envNumber(process.env.USER_EMOTION_EXCERPT_MAX, 40, 0, 500),
+        // 否定判定的邻域窗口：情绪词**前 N 个字符**内出现否定词才算否定该词。
+        // 0 = 退化成「永不否定」；过大等于整句判定（旧行为，会把
+        // 「今天不开会…超开心」读成低落）。见 core/userEmotionLexicon.js
+        negationWindow: envNumber(process.env.USER_EMOTION_NEGATION_WINDOW, 4, 0, 20),
     },
     /**
      * 共同经历叙事层（REQ-03，docs/companion-upgrade/02-architecture.md §2.3）。
@@ -189,8 +206,12 @@ export const config = {
         // 写入去重：新叙事与既有叙事嵌入余弦超过该值视为重复（标题包含判定另有时刻生效）
         dedupWriteSimilarity: envNumber(process.env.NARRATIVE_DEDUP_WRITE_SIMILARITY, 0.92, 0.5, 1),
         // ---- 纪念日查询（REQ-04 触发源）----
-        // 未来多少天内算「即将到来」
-        anniversaryWithinDays: envNumber(process.env.NARRATIVE_ANNIVERSARY_WITHIN_DAYS, 7, 0, 365),
+        // 纪念日**查询窗**：未来多少天内的纪念日会被挑出来发成事件。
+        // 默认值取自 triggerEvents 的 TRIGGER_THRESHOLDS.anniversary.queryWithinDays（唯一真源），
+        // 与「主动窗」announceWithinDays 是两个不同概念，别再合并成一个数字。
+        anniversaryWithinDays: envNumber(
+            process.env.NARRATIVE_ANNIVERSARY_WITHIN_DAYS,
+            TRIGGER_THRESHOLDS.anniversary.queryWithinDays, 0, 365),
     },
     /**
      * 事件层（REQ-04，docs/companion-upgrade/02-architecture.md §2.4）。

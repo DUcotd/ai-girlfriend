@@ -154,7 +154,7 @@ class TaskManager {
     }
 
     saveTasks() {
-        writeJson(TASKS_FILE, this.tasks);
+        return writeJson(TASKS_FILE, this.tasks);
     }
 
     /**

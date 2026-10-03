@@ -31,11 +31,15 @@ import { executeTaskAction } from './taskActions.js';
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
 import { config, REASONING_EFFORTS } from '../config.js';
 import { createStreamFilter, splitDelta, extractReasoning, parseFullText } from './streamFilter.js';
+import { normalizeDelta, blendDeltas, coerceAffinityChange, PAD_AXES } from './emotionDelta.js';
 
 dotenv.config();
 
 const STATE_FILE = 'state.json';
 const MAX_HISTORY = 200;
+// 人设 prompt 长度上限：它会挂在每一条请求的 history[0] 上，不设上限等于
+// 允许一次输入永久抬高所有后续请求的 token 成本。
+const SYSTEM_PROMPT_MAX = 8000;
 
 /**
  * 对话内提及同一任务的防抖窗口（P1-2）。
@@ -64,6 +68,13 @@ class AiGirlfriend {
         this.history = [];
 
         this._loadState();
+
+        // 服务端侧的 Key 兜底：让「不开浏览器也能起后端跑脚本/被 systemd 拉起」成为可能。
+        // 只进内存，绝不写进 state.json（那里只存 baseUrl/modelName 等非敏感项）。
+        // 优先级低于随后浏览器 POST /config 下发的值。
+        if (process.env.AI_GIRLFRIEND_API_KEY) {
+            this.apiKey = process.env.AI_GIRLFRIEND_API_KEY;
+        }
 
         if (config.apiKey) this.apiKey = config.apiKey;
         if (config.baseUrl) this.baseUrl = config.baseUrl;
@@ -115,12 +126,19 @@ class AiGirlfriend {
 
         this.openai = null;
         this._chatQueue = Promise.resolve();
+        // 状态世代号：resetAll() 递增它，用来作废那些**不在 _chatQueue 上**的后台副作用
+        // （setImmediate 里的记忆写入 / 用户情绪摄入 / 叙事抽取 / 落盘）。
+        // 没有它，一次「完全重置」会被几秒后才跑完的在途轮次悄悄写回旧数据。
+        this._stateGeneration = 0;
         // REQ-04 事件层（I16）：由 container.js 通过 attachEventBus() 注入；
         // 缺省为 null 时所有发布点静默 no-op（emit 走可选链），保证未装配事件层时零行为变更。
         this.eventBus = null;
         // 触发源注册表引用（可选，container 通过 attachTriggerRegistry 注入）：
         // 仅为 resetAll 能一并清空事件队列/冷却/去重标记；未注入时跳过该步，行为同改造前。
         this.triggerRegistry = null;
+        // 主动消息引擎引用（可选，container 通过 attachProactiveEngine 注入）：
+        // 仅为 resetAll 能清掉当日配额/冷却/滞留队列与生活日志。
+        this.proactiveEngine = null;
         if (this.apiKey) {
             this.initOpenAI();
         }
@@ -145,6 +163,17 @@ class AiGirlfriend {
     attachTriggerRegistry(registry) {
         this.triggerRegistry = registry || null;
         return this.triggerRegistry;
+    }
+
+    /**
+     * 注入主动消息引擎引用（容器装配时调用）。
+     * 只为让 resetAll() 能一并清掉配额/冷却/滞留队列；未注入时该步自动跳过。
+     * ProactiveEngine 自身持有 lifeSimulator，所以生活日志顺着这一条引用就能清。
+     * @param {object} engine - ProactiveEngine 实例（需有 resetRuntimeState()）
+     */
+    attachProactiveEngine(engine) {
+        this.proactiveEngine = engine || null;
+        return this.proactiveEngine;
     }
 
     /**
@@ -196,13 +225,29 @@ class AiGirlfriend {
             this.nickname = data.nickname;
             console.log(`[State] Loaded nickname: ${this.nickname}`);
         }
+        // 自定义人设：此前从不持久化 —— 改完人设若没再触发写盘，重启就回到默认人设，
+        // 而历史里还留着按旧人设生成的对话，人设与历史对不上。
+        if (typeof data.system_prompt === 'string' && data.system_prompt.trim()) {
+            this.systemPrompt = data.system_prompt;
+            if (this.history.length > 0 && this.history[0]?.role === 'system') {
+                this.history[0].content = this.systemPrompt;
+            }
+            console.log(`[State] Loaded custom system prompt (${this.systemPrompt.length} chars)`);
+        }
         // affinity 与 24h 增益事件已迁出到 data/affinity_state.json（AffinityEngine 自持）
     }
 
+    /**
+     * 落盘对话状态。**返回是否真正写成功** —— 调用方必须把它计入自己的失败面。
+     * 否则 Windows 上 rename 遇 EPERM（杀软/索引句柄占用，很常见）时会出现
+     * 「接口回 200 但磁盘还是旧文件」，下次开机整段关系回滚。
+     * 只存 baseUrl/modelName 等非敏感配置，API Key 从不落盘。
+     */
     _saveState() {
         const ok = writeJson(STATE_FILE, {
             nickname: this.nickname || "亲爱的",
             history: this.history.filter(msg => msg.role !== 'system'),
+            system_prompt: this.systemPrompt,
             config: {
                 baseUrl: this.baseUrl,
                 modelName: this.modelName,
@@ -213,7 +258,10 @@ class AiGirlfriend {
         });
         if (ok) {
             console.log(`[State] Saved state with history and configuration`);
+        } else {
+            console.error(`[State] 落盘失败：本次修改未持久化（详见 jsonStore 错误日志）`);
         }
+        return ok;
     }
 
     // ==================== LLM 客户端 ====================
@@ -347,7 +395,14 @@ class AiGirlfriend {
     _persistAfterReply(userInput, replyText, llmUserEmotion = null, affinityDelta = 0) {
         // 快照要在当前 tick 取，避免后台执行时读到已被后续对话改动的状态
         const snapshot = this.emotionEngine.getSnapshot();
+        const generation = this._stateGeneration;
         setImmediate(() => {
+            // 期间发生过 resetAll()：这一轮的后台副作用全部作废，
+            // 否则刚清空的记忆/用户情绪/叙事会被重置前那一轮的数据重新灌满。
+            if (generation !== this._stateGeneration) {
+                console.log('[State] 后台收尾已作废（期间执行了完全重置）');
+                return;
+            }
             if (this.memory) {
                 this.memory
                     .recordTurn(userInput, replyText, { emotionSnapshot: snapshot })
@@ -401,10 +456,19 @@ class AiGirlfriend {
         });
     }
 
+    /**
+     * 串行队列：同一时刻只允许一轮对话在改共享状态（history / affinity /
+     * personality / 各 store 数组）。
+     *
+     * ⚠️ catch 里**绝不能**把 `this._chatQueue` 重新赋成 `Promise.resolve()`：
+     * 旧实现在这里做过重置，而 catch 是异步执行的 —— 等它跑的时候，请求 B 已经
+     * 挂在 A 后面了，这一赋值会让后来的 C 挂到一条空队列上，与 B **并发执行**，
+     * 且此后永久失去互斥（要重启才恢复）。`.catch()` 本身就把 rejection 转成了
+     * fulfilled，链条天然不会断，不需要任何手动"续链"。
+     */
     async chat(userInput) {
         return this._chatQueue = this._chatQueue.then(() => this._doChat(userInput)).catch(e => {
             console.error(`[Chat] Queue error: ${e.message}`);
-            this._chatQueue = Promise.resolve();
             return { reply: "发生了点小意外", token_usage: {}, emotion: this.emotionEngine.getEmotionLabel(), affinity: this.affinity };
         });
     }
@@ -424,22 +488,35 @@ class AiGirlfriend {
         // 顺序不可颠倒：先按久未互动补扣衰减，再打卡刷新互动时间。
         // 反了会把待结算的空闲时间抹掉，衰减永远触发不了。
         this.affinityEngine.settleDecay(now);
-        this.affinityEngine.notifyUserActive(now);
 
         // ========== Layer 5: Ghosting 检测（优先于基准更新，避免 nudge 消解冷暴力） ==========
         if (this.emotionEngine.shouldGhost()) {
             console.log(`[Chat] Ghosting triggered: P=${this.emotionEngine.state.P.toFixed(2)}`);
             this.emotionEngine.decay(0.05);
+            // 冷暴力 = 已读不回，但**不能当没看见**：这条消息必须进历史并落盘，
+            // 否则情绪回正后她完全不知道用户说过什么（实测：连续三条被忽略的消息
+            // 在下一轮 prompt 里一条都不存在），刷新页面也会看到自己的消息凭空消失。
+            this._recordGhostedInput(userInput);
+            // 冷暴力期间用户仍然算「在场」：不打卡的话 lastActiveDate 会冻结，
+            // settleDaily 连着几天把他判成失联并触发 S01 扣分（审计 CORE-12）。
+            this.personalityDrift.markUserActive(now);
             return {
                 done: {
                     reply: null,
                     token_usage: {},
-                    emotion: "冷漠",
+                    // 用真实标签而不是硬编码字符串：前端情绪徽章据此渲染，
+                    // 硬编码 "冷漠" 不在前端映射表里，会回落到 default（= 开心）
+                    emotion: this.emotionEngine.getEmotionLabel(),
                     affinity: this.affinity,
                     special_action: "ghosting"
                 }
             };
         }
+
+        // 打卡只在**真正互动**时刷新：旧实现把 notifyUserActive 放在 ghost 判定之前，
+        // 于是冷暴力期间用户的每条消息都替她把「闲置计时」清零 —— miss_you 等
+        // 基于离开时长的机制在最该触发的时候永远不会响。
+        this.affinityEngine.notifyUserActive(now);
 
         // ========== Layer 0: 亲和度驱动情感基准 ==========
         this.emotionEngine.updateBaselineForAffinity(this.affinity);
@@ -538,6 +615,28 @@ class AiGirlfriend {
     }
 
     /**
+     * ghosting 早退时记录用户消息（不调 LLM、不进记忆、不改好感度）。
+     * 只保证一件事：这条消息在历史里存在，她「看见了但没回」。
+     */
+    _recordGhostedInput(userInput) {
+        if (!userInput || !userInput.trim()) return;
+        this.history.push({ role: 'user', content: userInput });
+        this._trimHistory();
+        try {
+            this._saveState();
+        } catch (e) {
+            console.error(`[Chat] ghost saveState failed: ${e.message}`);
+        }
+    }
+
+    /** 裁剪历史：保留最近 MAX_HISTORY 条（含 system prompt），成对删除避免孤立 assistant */
+    _trimHistory() {
+        while (this.history.length > MAX_HISTORY) {
+            this.history.splice(1, 2); // 跳过 [0]=system prompt
+        }
+    }
+
+    /**
      * LLM 返回后的收尾（非流式与流式共用）：
      * 任务动作执行、情绪更新、好感度校验、历史写入与裁剪。
      */
@@ -565,12 +664,16 @@ class AiGirlfriend {
         }
         this._markDialogMention(nudgeTaskIds);
 
-        // 关键词分析总是生效，LLM delta 叠加混合
+        // 情绪结算：词表与 LLM 两路**加权混合成一次** apply。
+        // 旧写法是先 apply(autoDelta) 再 apply(emotionDelta)，同一个「我今天好难过」
+        // 被词表判 −0.2、被模型判 −0.3，两轮叠加后幅度约为设计意图的 2 倍（CORE-13）；
+        // 而 LLM 那一路完全没有逐轴裁剪，`{"P":-5}` 可以单轮把 P 砸到 −1 直接 trip ghosting。
         const autoDelta = this.emotionEngine.analyzeInput(userInput, this.affinity);
-        this.emotionEngine.applyDelta(autoDelta);
-        if (emotionDelta) {
-            this.emotionEngine.applyDelta(emotionDelta);
-        }
+        const { delta: blendedEmotion } = blendDeltas(autoDelta, emotionDelta, {
+            keywordWeight: config.emotion.keywordWeight,
+            llmWeight: config.emotion.llmWeight,
+        });
+        this.emotionEngine.applyDelta(blendedEmotion);
 
         this.emotionEngine.decay(0.03);
 
@@ -579,7 +682,9 @@ class AiGirlfriend {
         const { affinity, change, trace, meta } =
             this.affinityEngine.recordUserTurn(userInput, affinityChange, replyText);
 
-        const sentiment = emotionDelta?.P ?? autoDelta.P;
+        // 性格漂移的情绪输入用**混合后的 P**：两路信号都已参与，且不再出现
+        // 「模型给了 0 就把词表判定整段抹掉」的情况（旧写法 `emotionDelta?.P ?? autoDelta.P`）
+        const sentiment = blendedEmotion.P ?? autoDelta?.P ?? 0;
         this.personalityDrift.recordUserTurn(userInput, {
             sentiment,
             affinity,
@@ -613,6 +718,9 @@ class AiGirlfriend {
             innerThought,
             modelReasoning,
             taskResult: taskResult ?? null,
+            // 模型给的情绪/好感度字段不合规时不再静默归零：把原因一路带到响应里，
+            // 用户与排障脚本都能看到「这一轮为什么好感度没动」
+            parseWarnings: parsed.parseWarnings || [],
         };
     }
 
@@ -645,14 +753,16 @@ class AiGirlfriend {
      * 流式对话：边生成边通过 onDelta 吐出正文，
      * 让用户看到第一个字的时间从「整段生成完」提前到「首个 token 到达」。
      *
+     * @param {AbortSignal} [opts.signal] 客户端断开时由路由 abort：上游 LLM 请求随即中止，
+     *        不再"用户都走了还继续把这段生成完并结算好感度"（白花钱 + 状态错位）。
      * @returns 与 chat() 相同结构的结果对象（含完整 reply）
      */
-    async chatStream(userInput, onDelta) {
+    async chatStream(userInput, onDelta, opts = {}) {
         return this._chatQueue = this._chatQueue
-            .then(() => this._doChatStream(userInput, onDelta))
+            .then(() => this._doChatStream(userInput, onDelta, opts))
             .catch(e => {
                 console.error(`[Chat] Stream queue error: ${e.message}`);
-                this._chatQueue = Promise.resolve();
+                // 同 chat()：不要在这里重置 _chatQueue，那会切断 B 的排队并让 C 并发
                 return {
                     reply: "发生了点小意外",
                     token_usage: {},
@@ -662,7 +772,7 @@ class AiGirlfriend {
             });
     }
 
-    async _doChatStream(userInput, onDelta) {
+    async _doChatStream(userInput, onDelta, { signal } = {}) {
         const guard = this._preChatGuard(userInput);
         if (guard) return guard;
 
@@ -677,10 +787,11 @@ class AiGirlfriend {
             const stream = await this.openai.chat.completions.create({
                 ...this._buildChatParams(messagesToSend),
                 stream: true
-            });
+            }, { signal });
 
             let reasoningText = "";
             for await (const chunk of stream) {
+                if (signal?.aborted) break;
                 const { content: delta, reasoning } = splitDelta(chunk);
                 if (reasoning) reasoningText += reasoning;
                 if (!delta) continue;
@@ -693,7 +804,7 @@ class AiGirlfriend {
             }
 
             const { tail, cot, monologue, metadata } = filter.finish();
-            if (tail) {
+            if (tail && !signal?.aborted) {
                 visibleText += tail;
                 onDelta(tail);
             }
@@ -703,11 +814,23 @@ class AiGirlfriend {
             if (visibleText.trim()) {
                 parsed.replyText = visibleText.trim();
             }
+            // 客户端中途断开：正文照旧入库（否则刷新后这条回复凭空消失），
+            // 但**跳过情绪/好感度/性格结算与任务动作** —— 半句话不该改变关系。
+            if (signal?.aborted) {
+                return this._finalizeAborted(userInput, parsed);
+            }
             // 注：正文为空（模型只输出了独白/CoT/元数据）时，此前这里再手写一刀正则剥离标签，
             // 现在已无必要——_parseReplyText 的 replyText 来自 streamFilter.parseFullText()
             // 单一真源，三类标签（含未闭合 metadata）都会被状态机统一剥离，不会残留在气泡里。
             return this._finalize(parsed, userInput, null, { nudgeTaskIds });
         } catch (e) {
+            // abort 会由 SDK 抛成 AbortError：这不是故障，按「中断的半轮」处理
+            if (signal?.aborted || e?.name === 'AbortError') {
+                const parsed = this._parseReplyText(fullContent, userInput);
+                if (visibleText.trim()) parsed.replyText = visibleText.trim();
+                console.log(`[Chat] Stream aborted by client after ${visibleText.length} chars`);
+                return this._finalizeAborted(userInput, parsed);
+            }
             console.error(`Chat Stream Error: ${e}`);
             return {
                 reply: `发生了点小意外: ${e.message}`,
@@ -716,6 +839,30 @@ class AiGirlfriend {
                 affinity: this.affinity
             };
         }
+    }
+
+    /**
+     * 客户端断开后的收尾：只把已生成的正文写进历史并落盘。
+     * 刻意不走 _finalize —— 情绪、好感度、性格漂移、任务动作、记忆记录都属于
+     * 「这一轮真的完成了」才该发生的结算，半轮不该改关系。
+     */
+    _finalizeAborted(userInput, parsed) {
+        const replyText = (parsed.replyText || '').trim();
+        this.history.push({ role: 'user', content: userInput });
+        if (replyText) {
+            const assistantMsg = { role: 'assistant', content: replyText };
+            if (parsed.innerThought) assistantMsg.thought = parsed.innerThought;
+            this.history.push(assistantMsg);
+        }
+        this._trimHistory();
+        this._persistAfterReply(userInput, replyText);
+        return {
+            reply: replyText,
+            token_usage: {},
+            emotion: this.emotionEngine.getEmotionLabel(),
+            affinity: this.affinity,
+            aborted: true,
+        };
     }
 
     /** 进入对话前的通用校验，返回非 null 时直接作为结果返回 */
@@ -773,6 +920,8 @@ class AiGirlfriend {
         let modelReasoning = null;
         let taskAction = null;
         let llmUserEmotion = null;
+        /** 模型给的情绪/好感度字段不合规时记录在此，随响应透出（不再静默归零） */
+        const parseWarnings = [];
 
         // ---- 标签剥离：单一真源 ----
         // 「三类标签如何被识别与剥离」只有 streamFilter 一处实现。
@@ -824,18 +973,38 @@ class AiGirlfriend {
                 const normalized = metadataJson.replace(/:\s*\+([0-9.]+)/g, ': $1');
                 const metadata = JSON.parse(normalized);
                 emotion = metadata.emotion || "default";
-                affinityChange = metadata.affinity_change || 0;
-                emotionDelta = metadata.emotion_delta || null;
+                // ---- 解析边界强类型（审计 CORE-11）----
+                // `{"affinity_change": "+3"}` 这类引号写法在这个 prompt 下极常见。
+                // 旧写法 `|| 0` + 下游 `Number.isFinite` 会把它静默变成 0，
+                // 于是「只要模型保持这个习惯，好感度就永久不动」且没有任何告警。
+                const coercedAffinity = coerceAffinityChange(metadata.affinity_change);
+                affinityChange = coercedAffinity.value;
+                if (coercedAffinity.rejected) parseWarnings.push(coercedAffinity.reason);
+                // emotion_delta 逐轴强转 + 裁剪到 config.emotion.llmAxisCap（CORE-05）
+                const normalizedEmotion = normalizeDelta(metadata.emotion_delta, config.emotion.llmAxisCap);
+                const hasAxis = PAD_AXES.some((axis) => normalizedEmotion.delta[axis] !== null);
+                emotionDelta = hasAxis ? normalizedEmotion.delta : null;
+                if (normalizedEmotion.clipped) parseWarnings.push(`emotion_delta 超出 ±${config.emotion.llmAxisCap} 已裁剪`);
+                for (const r of normalizedEmotion.rejected) parseWarnings.push(`emotion_delta.${r}`);
                 // 任务意图：老模型不输出这个字段时恒为 null，下游行为完全不变（向后兼容）
                 taskAction = metadata.task_action ?? null;
                 // 用户情绪（REQ-01）：可选字段，老模型不返回时恒为 null，下游纯用词表兜底
                 llmUserEmotion = metadata.user_emotion ?? null;
+                if (llmUserEmotion && typeof llmUserEmotion !== 'object') {
+                    parseWarnings.push('user_emotion 不是对象，已忽略');
+                    llmUserEmotion = null;
+                }
             } catch (e) {
                 console.error(`Metadata parse error: ${e}. Raw: ${metadataJson}`);
+                parseWarnings.push('metadata 不是合法 JSON，已忽略');
             }
         }
 
-        return { replyText, emotion, affinityChange, emotionDelta, innerThought, modelReasoning, taskAction, llmUserEmotion };
+        if (parseWarnings.length > 0) {
+            console.warn(`[Chat] metadata 解析告警: ${parseWarnings.join('; ')}`);
+        }
+
+        return { replyText, emotion, affinityChange, emotionDelta, innerThought, modelReasoning, taskAction, llmUserEmotion, parseWarnings };
     }
 
     // ==================== 主动消息生成 ====================
@@ -911,19 +1080,66 @@ class AiGirlfriend {
     async _buildProactiveContext(reason, data) {
         let context = "";
 
-        if (reason === 'memory_share' && this.memory) {
-            try {
-                // 走 facade 方法（内部避开最近 5 条与最近已分享的），不再直读内部数组
-                const memory = this.memory.getRandomMemory(5);
-                if (memory) {
-                    context += `\n- 可参考的历史记忆: "${memory.text.substring(0, 100)}..."`;
+        if (reason === 'memory_share') {
+            // 优先分享「我们之间的故事」（叙事层）而不是原始对话轮：
+            // PRD §2.3 的 memory_share 升级早就设计好了（NarrativeRetriever.getRandomStory
+            // + NarrativeStore.markRecalled），但一直没接上，她还在复述流水账（CORE-19）。
+            const story = this._pickStoryForSharing();
+            if (story) {
+                const summary = (story.summary || '').slice(0, 80);
+                context += `\n- 你们之间的一段共同经历: 「${story.title}」`
+                    + (summary ? `（${summary}）` : '')
+                    + '\n  可以自然地提起来（「你还记得那次…」），但不要逐字复述。';
+                return context;
+            }
+            if (this.memory) {
+                try {
+                    // 叙事池还空着（新用户）→ 退回情节记忆，走 facade 方法
+                    const memory = this.memory.getRandomMemory(5);
+                    if (memory) {
+                        context += `\n- 可参考的历史记忆: "${memory.text.substring(0, 100)}..."`;
+                    }
+                } catch (e) {
+                    // 忽略记忆检索失败，不影响主动消息生成
                 }
-            } catch (e) {
-                // 忽略记忆检索失败，不影响主动消息生成
             }
         }
 
         return context;
+    }
+
+    /**
+     * 挑一条「我们之间的故事」用于主动分享，并记账（recallCount + 最近分享集合）。
+     * 叙事层关闭或池子为空时返回 null，调用方退回情节记忆 —— 关闭态安全。
+     */
+    _pickStoryForSharing(excludeRecentN = 5, attempts = 4) {
+        if (!this._narrativeEnabled() || !this.narrativeRetriever || !this.narrativeStore) return null;
+        for (let i = 0; i < attempts; i++) {
+            let story = null;
+            try {
+                story = this.narrativeRetriever.getRandomStory(excludeRecentN);
+            } catch (e) {
+                console.error(`[Narrative] getRandomStory failed: ${e.message}`);
+                return null;
+            }
+            if (!story) return null;
+            if (!this._recentStoryIds.has(story.id)) {
+                this._recentStoryIds.add(story.id);
+                // 只记最近 10 条，旧故事过一阵子可以再被提起
+                while (this._recentStoryIds.size > 10) {
+                    this._recentStoryIds.delete(this._recentStoryIds.values().next().value);
+                }
+                this.narrativeStore.markRecalled(story.id);
+                this.narrativeStore.scheduleSave();
+                return story;
+            }
+        }
+        // 池子太小、几次都撞上最近分享过的：允许再提一次（人本来也会重复提起某件事）
+        try {
+            return this.narrativeRetriever.getRandomStory(excludeRecentN);
+        } catch {
+            return null;
+        }
     }
 
     /**
@@ -970,7 +1186,7 @@ class AiGirlfriend {
      */
     clearHistory() {
         this.history = [{ role: "system", content: this.systemPrompt }];
-        this._saveState();
+        return this._saveState();
     }
 
     /**
@@ -981,7 +1197,7 @@ class AiGirlfriend {
      * 与 memory.clearMemory() 各自会落盘，这里最后再补一次 _saveState() 把
      * history 一并收尾，保证多份数据同批落盘。
      *
-     * 清理范围（7 类，第 7 类仅在事件层已装配时生效）：
+     * 清理范围（11 类；proactive/lifeLog/triggerRegistry 仅在容器已装配时生效）：
      *   1. history        → data/state.json（保留 system prompt）
      *   2. affinityEngine → data/affinity_state.json（好感度/账本/增益）
      *   3. personalityDrift → data/personality_state.json（性格回预设）
@@ -990,16 +1206,26 @@ class AiGirlfriend {
      *   6. narrative      → data/narrative.json（共同经历叙事，REQ-03）
      *   7. TaskManager    → data/tasks.json（任务全清）
      *   8. memory         → data/memory.json（情节+事实）
-     *   9. triggerRegistry→ data/trigger_state.json（事件队列/冷却/去重，REQ-04，可选）
+     *   9. proactiveEngine→ data/proactive_state.json（配额/冷却/队列/复读样本，保留配置）
+     *  10. lifeSimulator  → data/life_log.json（生活日志）
+     *  11. triggerRegistry→ data/trigger_state.json（事件队列/冷却/去重，REQ-04）
      *
      * 容错策略：各引擎独立重置，任一失败只记录并继续，最后把失败的引擎名回传，
-     * 避免「某个引擎抛错导致后续引擎全部没重置」的半重置状态。
+     * 避免「某个引擎抛错导致后续引擎全部没重置」的半重置状态。落盘失败同样进 failed
+     * （旧实现只收集 throw，而 `_saveState` 从不 throw —— 写盘失败被吞成成功）。
      * （真正的事务回滚需要跨文件快照，成本过高；这里保证「尽力全部重置」并把
      *   失败面如实暴露给调用方与日志，好过静默留下半重置。）
      *
-     * @returns {{ reset: string[], failed: { step: string, message: string }[] }}
+     * @returns {Promise<{ reset: string[], failed: { step: string, message: string }[] }>}
      */
-    resetAll() {
+    async resetAll() {
+        // ① 先排空在途对话：resetAll 若与一轮生成并发，那一轮的 _finalize 会在清空之后
+        //    把 history/好感度/记忆重新写回去，用户拿到「重置成功」但数据只脏了一轮。
+        // ② 再递增世代号，作废那些**不在队列上**的后台副作用（setImmediate 收尾、
+        //    记忆嵌入、事实/叙事抽取、用户情绪摄入）。
+        await this._chatQueue.catch(() => { /* 队列内的错误已由 chat()/chatStream() 兜底 */ });
+        this._stateGeneration++;
+
         /** 依次执行的重置步骤；每步独立容错 */
         const steps = [
             ['history', () => {
@@ -1012,6 +1238,11 @@ class AiGirlfriend {
             ['narrative', () => this._resetNarratives()],
             ['tasks', () => TaskManager.clearAll()],
             ['memory', () => this.memory?.clearMemory()],
+            // 2026-10 审计 B0-5 补齐这两类：此前「完全重置」不清它们，于是
+            // 重置后仍会投递按旧关系生成的滞留主动消息（最多 5 条），且当日配额
+            // 已烧完 —— 主动关怀要到零点才恢复；生活日志也留着上一段关系的痕迹。
+            ['proactive', () => this.proactiveEngine?.resetRuntimeState?.()],
+            ['lifeLog', () => this.proactiveEngine?.lifeSimulator?.resetLog?.()],
         ];
         // 事件层重置（REQ-04）：仅当容器注入了 registry 才纳入，避免把「未装配」当成功重置。
         // registry.reset() 清空事件队列 + 冷却 + 去重标记（内部全防御式，不会抛）。
@@ -1033,8 +1264,11 @@ class AiGirlfriend {
         }
 
         // 收尾落盘（history 无独立落盘点，靠这里写入；其余引擎已各自落盘）
+        // 写失败必须进 failed：否则会出现「接口说重置成功、磁盘还是旧数据」。
         try {
-            this._saveState();
+            if (!this._saveState()) {
+                failed.push({ step: 'state', message: 'state.json 落盘失败（未持久化）' });
+            }
         } catch (e) {
             failed.push({ step: 'state', message: e?.message || String(e) });
             console.error(`[AiGirlfriend] resetAll: final _saveState failed: ${e?.message || e}`);
@@ -1061,9 +1295,36 @@ class AiGirlfriend {
         return this.systemPrompt;
     }
 
+    /**
+     * 更新人设 prompt。
+     *
+     * 旧实现是 `this.history = [{role:'system', content:newPrompt}]` —— 一次改人设
+     * 等于把整段对话清空（而且不落盘，重启后旧历史又带着默认人设复活）。
+     * 现在只**就地替换** history[0]，对话内容一条不动，并立即持久化。
+     *
+     * @returns {{saved:boolean, historyCount:number, promptLength:number}}
+     */
     updateSystemPrompt(newPrompt) {
+        if (typeof newPrompt !== 'string' || !newPrompt.trim()) {
+            throw Object.assign(new Error('system_prompt 必须是非空字符串'), { status: 400 });
+        }
+        if (newPrompt.length > SYSTEM_PROMPT_MAX) {
+            throw Object.assign(
+                new Error(`system_prompt 过长（${newPrompt.length} 字符，上限 ${SYSTEM_PROMPT_MAX}）`),
+                { status: 400 }
+            );
+        }
         this.systemPrompt = newPrompt;
-        this.history = [{ role: "system", content: this.systemPrompt }];
+        if (this.history.length > 0 && this.history[0]?.role === 'system') {
+            this.history[0].content = newPrompt;
+        } else {
+            this.history.unshift({ role: 'system', content: newPrompt });
+        }
+        return {
+            saved: this._saveState(),
+            historyCount: this.history.filter(m => m.role !== 'system').length,
+            promptLength: newPrompt.length,
+        };
     }
 
     getState() {
@@ -1229,8 +1490,10 @@ class AiGirlfriend {
         if (updates.nickname !== undefined) {
             this.nickname = updates.nickname;
         }
-        this._saveState();
-        return this.getState();
+        const state = this.getState();
+        // 把落盘结果随状态一起回给调用方：路由据此决定是 200 还是带 persisted:false
+        state.persisted = this._saveState();
+        return state;
     }
 
     /** 全量记忆导出：{facts, episodes(时间倒序), stats}；embedding 大字段不下发 */
@@ -1330,7 +1593,7 @@ class AiGirlfriend {
                     return;
                 }
                 if (generation !== this._narrativeGeneration) return;
-                await this._applyNarrativeOps(ops);
+                await this._applyNarrativeOps(ops, generation);
                 this.narrativeStore.setStats({ lastExtractTurn: turnCount, lastExtractAt: Date.now() });
                 this.narrativeStore.scheduleSave();
                 console.log(`[Narrative] Story: +${ops.add.length} ~${ops.update.length} -${ops.delete.length}`);
@@ -1342,7 +1605,10 @@ class AiGirlfriend {
      * 应用 LLM 返回的叙事操作（add/update/delete），与事实库 _applyFactOps 同构。
      * add 会算嵌入（可用时）用于后续语义检索；delete 直接按 id 移除。
      */
-    async _applyNarrativeOps(ops) {
+    async _applyNarrativeOps(ops, generation = this._narrativeGeneration) {
+        /** 每条 add/update 都要 await 嵌入，清空可能落在任意两次等待之间 */
+        const stale = () => generation !== this._narrativeGeneration;
+
         // delete
         for (const id of ops.delete) {
             this.narrativeStore.removeNarrative(id);
@@ -1350,6 +1616,7 @@ class AiGirlfriend {
 
         // update
         for (const upd of ops.update) {
+            if (stale()) return;
             const norm = NarrativeExtractor.normalizeUpdate(upd);
             if (!norm) continue;
             const updated = this.narrativeStore.updateNarrative(norm.id, norm);
@@ -1357,6 +1624,7 @@ class AiGirlfriend {
             if (updated && norm.summary && this.memory?.embedding) {
                 try {
                     const emb = await this.memory.embedding.embed(`${updated.title} ${updated.summary}`);
+                    if (stale()) return;
                     if (emb) {
                         updated.embedding = emb;
                         updated.embeddingModel = this.memory.embedding.model;
@@ -1370,6 +1638,7 @@ class AiGirlfriend {
         // add（单轮上限，防批量灌库）
         const adds = ops.add.slice(0, config.narrative.maxAddPerExtract);
         for (const add of adds) {
+            if (stale()) return;
             const norm = NarrativeExtractor.normalizeAdd(add);
             if (!norm) continue;
             if (this._isDuplicateNarrative(norm)) continue;
@@ -1383,6 +1652,7 @@ class AiGirlfriend {
                     console.error(`[Narrative] add embedding failed: ${e.message}`);
                 }
             }
+            if (stale()) return;
             this.narrativeStore.addNarrative({ ...norm, embedding, embeddingModel });
         }
     }
@@ -1429,6 +1699,25 @@ class AiGirlfriend {
             this._recentStoryIds.delete(id);
         }
         return ok;
+    }
+
+    /**
+     * 记录「她已经就某条约定追问过一次」（REQ-04 → REQ-05 的闭环，审计 CORE-03/CORE-19）。
+     *
+     * `followupCount` 是 promiseFollowupTrigger 的上限判定依据，同时也是它 dedupeKey 的
+     * 一部分：不自增的话，一条约定最多只会被追问一次（第 2 次起 dedupeKey 不变、被去重表拦掉），
+     * 而 maxFollowups=3 的判定永远为假。
+     * @returns {number|null} 自增后的次数；叙事不存在时返回 null
+     */
+    recordNarrativeFollowup(narrativeId) {
+        if (!this.narrativeStore || !narrativeId) return null;
+        const narrative = (this.narrativeStore.narratives || []).find((n) => n.id === narrativeId);
+        if (!narrative) return null;
+        narrative.followupCount = (Number.isFinite(narrative.followupCount) ? narrative.followupCount : 0) + 1;
+        narrative.lastFollowupAt = Date.now();
+        this.narrativeStore.scheduleSave();
+        console.log(`[Narrative] 约定「${narrative.title}」已追问 ${narrative.followupCount} 次`);
+        return narrative.followupCount;
     }
 
     /** 即将到来的纪念日（REQ-04 触发源）。 */

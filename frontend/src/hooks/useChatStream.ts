@@ -50,9 +50,14 @@ function settleTaskResult(data: ChatResponse): void {
 }
 
 /**
- * 发送管线：SSE 流式优先，非超时错误回退 /chat；60s AbortController 超时。
- * 行为契约与原 useChat.sendMessage 逐行一致（占位气泡由调用方提前放好）；
+ * 发送管线：SSE 流式优先；**只有在收到第一个 delta 之前**失败才回退非流式 /chat。
+ * 60s AbortController 超时（signal 同时透传给后端，断开即中止上游生成）。
+ * 行为契约与原 useChat.sendMessage 一致（占位气泡由调用方提前放好）；
  * inner_thought / model_reasoning 字段映射不可丢。
+ *
+ * ⚠️ 为什么不能无条件回退（审计 FE-04）：SSE 那一轮在服务端**已经走完**了 ——
+ * 历史、好感度、性格、记忆都已结算。此时再发一次 /chat 等于把同一句话聊两遍：
+ * 分数加两次、性格漂两次、模型钱付两遍。半路断流只能报错，不能重跑。
  */
 export async function streamSendMessage(
   text: string,
@@ -60,6 +65,7 @@ export async function streamSendMessage(
 ): Promise<void> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let gotDelta = false;
 
   const settle = (data: ChatResponse): void => {
     handlers.applyMeta(data);
@@ -75,7 +81,14 @@ export async function streamSendMessage(
 
   try {
     // 优先流式：模型一边生成，界面一边渲染，首字时间大幅提前
-    const data = await api.streamChat(text, handlers.appendDelta, controller.signal);
+    const data = await api.streamChat(
+      text,
+      (chunk: string) => {
+        gotDelta = true;
+        handlers.appendDelta(chunk);
+      },
+      controller.signal
+    );
     clearTimeout(timeoutId);
     settle(data);
     return;
@@ -83,8 +96,9 @@ export async function streamSendMessage(
     const isTimeout = error instanceof Error && error.name === "AbortError";
     clearTimeout(timeoutId);
 
-    // 超时不必重试；其余情况（后端不支持流式等）回退到非流式
-    if (!isTimeout) {
+    // 只在「一个 delta 都没收到」时回退非流式：那种情况下服务端确实什么都没做。
+    // 已收到 delta 说明这一轮已经在服务端结算过了，重发就是重复计费与重复加分。
+    if (!isTimeout && !gotDelta) {
       try {
         const data = await api.sendChat(text);
         settle(data);

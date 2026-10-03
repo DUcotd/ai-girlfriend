@@ -20,7 +20,9 @@ import { pruneGainEvents, recordGain } from './affinityFatigue.js';
 import { dayKey } from '../utils/dayKey.js';
 
 const STATE_FILE = 'affinity_state.json';        // 构造参数可覆盖（测试用）
-const DEFAULT_AFFINITY = 35;                      // 与前端默认档位一致
+// 导出为唯一真源：此前 35 这个魔数散落在 routes/chat.js（两处）、ProactiveEngine（两处）
+// 与本文件里，改默认档要同时改五个地方才能对齐。
+export const DEFAULT_AFFINITY = 35;              // 与前端默认档位一致
 const GAIN_WINDOW_MS = 24 * 60 * 60 * 1000;       // 加分疲劳的 24h 窗口
 const LEDGER_MAX = 200;                           // 账本上限，超出丢最旧
 
@@ -60,9 +62,27 @@ class AffinityEngine {
 
     get affinity() { return this._affinity; }
 
-    /** 手动覆盖（updateState 用），clamp 0-100 后存盘 */
-    setAffinity(value) {
+    /**
+     * 手动覆盖（updateState / 设置页调分用），clamp 0-100 后存盘。
+     * 也写一条 kind:'manual' 的账本：此前手动改分在「好感度变更账本」里完全无痕，
+     * 面板解释不了自己显示的数字（审计 HTTP-19）。不动日额度与疲劳窗口。
+     */
+    setAffinity(value, now = Date.now()) {
+        const before = this._affinity;
         this._affinity = clampAffinity(value);
+        if (this._affinity !== before) {
+            this._appendLedger({
+                at: new Date(now).toISOString(),
+                kind: 'manual',
+                before,
+                after: this._affinity,
+                rawChange: 0,
+                finalChange: this._affinity - before,
+                stage: getStageForAffinity(before).stage,
+                userInputDigest: null,
+                trace: [{ rule: 'manual_set', from: 0, to: this._affinity - before, reason: '你在设置里手动调整了数值' }],
+            });
+        }
         this._saveState();
         return this._affinity;
     }
@@ -115,6 +135,10 @@ class AffinityEngine {
             const finalChange = after - before;              // ≤ 0
             this._appendLedger({
                 at: new Date(now).toISOString(),
+                // kind 让「时间衰减」与「真实一轮」在账本里可区分：两者共用同一条
+                // 不变量口径（rawChange + Σ(to-from) === finalChange），
+                // 但混在一起做审计会得出无意义的结论（CORE-16）
+                kind: 'decay',
                 before,
                 after,
                 rawChange: 0,
@@ -147,32 +171,43 @@ class AffinityEngine {
         const dailyGainedToday = this._rollDayIfNeeded(now);
 
         const before = this._affinity;
+        // 引擎侧再兜一道强类型：非有限值不再静默当 0 却把原始脏值写进账本
+        // （旧写法账本里是 rawChange:"+3" / finalChange:0，任何按不变量做的审计都会错，
+        //  见 CORE-16；上游 AiGirlfriend 已做同样的强转，这里是纵深防御）
+        const raw = Number.isFinite(rawChange) ? rawChange : (Number(rawChange) || 0);
         const { change, trace } = validateAffinityChange(
-            rawChange, userInput, aiReply, before, recentPositiveCount, dailyGainedToday
+            raw, userInput, aiReply, before, recentPositiveCount, dailyGainedToday
         );
         const after = clampAffinity(before + change);
         this._affinity = after;
+        // 真正入到账上的分数：触到 0/100 边界时 change 会被 clamp 吃掉一部分
+        const credited = after - before;
 
-        if (change > 0) {
+        // 日配额与疲劳窗口按**实际入账分**计费。旧写法用 clamp 前的 change：
+        // 好感度 99 时模型给 +3 只涨 1 分，却扣掉 3 点日额度（上限 8），
+        // 满级用户一句贴心话烧掉 1/3 预算，UI 还显示 dailyCapReached（CORE-16）。
+        if (credited > 0) {
             this.gainEvents = recordGain(this.gainEvents, now);
-            this.daily.gained += change;
+            this.daily.gained += credited;
         }
 
         this._appendLedger({
             at: new Date(now).toISOString(),
+            kind: 'turn',
             before,
             after,
-            rawChange,
-            finalChange: change,
+            rawChange: raw,
+            finalChange: credited,
+            requestedChange: change,
             stage: getStageForAffinity(before).stage,
             userInputDigest: (userInput || '').slice(0, 40) || null,
             trace,
         });
         this._saveState();
 
-        console.log(`[Affinity] ${before} → ${after} (change ${change > 0 ? '+' : ''}${change}, stage ${getStageForAffinity(after).stage})`);
+        console.log(`[Affinity] ${before} → ${after} (change ${credited > 0 ? '+' : ''}${credited}, stage ${getStageForAffinity(after).stage})`);
 
-        return { affinity: after, change, trace, meta: this.getMeta(now) };
+        return { affinity: after, change: credited, trace, meta: this.getMeta(now) };
     }
 
     // ==================== 查询 ====================
@@ -293,7 +328,7 @@ class AffinityEngine {
     }
 
     _saveState() {
-        writeJson(this.stateFile, {
+        return writeJson(this.stateFile, {
             affinity: this._affinity,
             gainEvents: this.gainEvents,
             lastUserActiveTime: this.lastUserActiveTime,

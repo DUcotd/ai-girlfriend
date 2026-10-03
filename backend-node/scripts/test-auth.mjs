@@ -12,7 +12,7 @@
  *   - 缺 Authorization 头 / 格式错误 → 401
  *   - 健康检查 GET / 豁免
  *   - CORS 预检 OPTIONS 豁免
- *   - 静态资源 /static 豁免
+ *   - 静态资源 /static：未配 token 时随本机守卫放行；配了 token 需 ?token= 或请求头
  *   - token 长度不等时 timingSafeEqual 不抛异常
  */
 import assert from 'assert';
@@ -85,11 +85,13 @@ check('isLoopbackRequest：仅认 socket 层回环地址，不信任 X-Forwarded
     assert.strictEqual(isLoopbackRequest({}), false);
 });
 
-check('isExemptPath：OPTIONS / 健康检查 / 静态资源豁免，业务路由不豁免', () => {
+check('isExemptPath：OPTIONS / 健康检查豁免；静态资源与业务路由都不豁免', () => {
     assert.strictEqual(isExemptPath({ method: 'OPTIONS', path: '/chat' }), true);
     assert.strictEqual(isExemptPath({ method: 'GET', path: '/' }), true);
-    assert.strictEqual(isExemptPath({ method: 'GET', path: '/static/a.mp3' }), true);
-    assert.strictEqual(isExemptPath({ method: 'GET', path: '/static' }), true);
+    // 审计 B0-10：/static 不再无条件豁免（TTS 音频属于对话内容）。
+    // 未配 token 时由「本机守卫」分支放行；配了 token 则要求 ?token= 或请求头。
+    assert.strictEqual(isExemptPath({ method: 'GET', path: '/static/a.mp3' }), false);
+    assert.strictEqual(isExemptPath({ method: 'GET', path: '/static' }), false);
     assert.strictEqual(isExemptPath({ method: 'POST', path: '/config' }), false);
     assert.strictEqual(isExemptPath({ method: 'POST', path: '/reset' }), false);
     assert.strictEqual(isExemptPath({ method: 'GET', path: '/history' }), false);
@@ -190,9 +192,16 @@ console.log('集成层 · 已配置 token:');
             const { status } = await call(base, 'OPTIONS', '/config');
             assert.ok(status < 400, `OPTIONS 预检不应被拦截，实际 ${status}`);
         });
-        await checkAsync('静态资源 /static 豁免（即使无 token）', async () => {
-            const { status } = await call(base, 'GET', '/static/voice.mp3');
-            assert.strictEqual(status, 200);
+        await checkAsync('已配 token 时 /static 不再免鉴权，但允许 ?token= 通过', async () => {
+            const anon = await call(base, 'GET', '/static/voice.mp3');
+            assert.strictEqual(anon.status, 401, 'TTS 音频是对话内容的语音版，配了 token 就必须校验');
+            const withQuery = await call(base, 'GET', `/static/voice.mp3?token=${CONFIGURED_TOKEN}`);
+            assert.strictEqual(withQuery.status, 200, '<audio src> 带不了请求头，故允许查询串 token');
+            const wrongQuery = await call(base, 'GET', '/static/voice.mp3?token=wrong');
+            assert.strictEqual(wrongQuery.status, 401);
+            const headerStillWorks = await call(base, 'GET', '/static/voice.mp3',
+                { authorization: `Bearer ${CONFIGURED_TOKEN}` });
+            assert.strictEqual(headerStillWorks.status, 200);
         });
     } finally {
         await close();
