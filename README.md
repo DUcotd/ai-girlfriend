@@ -18,6 +18,34 @@ npm run dev
 
 打开 http://localhost:3000，首次运行会引导配置 API Key。
 
+> API Key 只保存在浏览器 localStorage，后端进程内存持有、**从不落盘**：
+> 单独重启后端后，需要先用浏览器打开一次页面（前端启动时会自动把配置回灌给后端），
+> 否则直接调 `/chat` 会返回「请先配置 API Key」。想让后端脱离浏览器可用时，
+> 设 `AI_GIRLFRIEND_API_KEY`（见下表）。
+
+## 环境变量
+
+后端全部运行时数值集中在 `src/config.js`（37 个旋钮），这里只列常用的：
+
+| 变量 | 默认 | 作用 |
+|------|------|------|
+| `PORT` / `HOST` | `8000` / `127.0.0.1` | 监听地址。**`HOST` 设成非回环地址而没配 token 会直接拒绝启动** |
+| `AI_GIRLFRIEND_TOKEN` | 未设置 | 设置后所有业务接口要求 `Authorization: Bearer <token>`；未设置时只允许本机回环访问 |
+| `AI_GIRLFRIEND_API_KEY` | 未设置 | 服务端侧的对话 Key（不落盘，仅本次进程有效） |
+| `AI_GIRLFRIEND_DATA_DIR` | `backend-node/data` | 数据目录。测试与多实例用它隔离，避免互相覆盖 |
+| `FRONTEND_ORIGIN` | 未设置 | 追加一个允许的前端源（改端口时才需要） |
+| `CHAT_MAX_PROMPT_HISTORY` / `CHAT_TEMPERATURE` / `CHAT_UNLIMITED_CONTEXT` | `30` / `0.75` / `false` | 上下文条数、采样温度、无限上下文 |
+| `MEMORY_RETRIEVAL_MODE` / `MEMORY_FACTS_ENABLED` | `auto` / `true` | 记忆检索模式与事实提取开关 |
+| `USER_EMOTION_ENABLED` / `NARRATIVE_ENABLED` / `TRIGGER_REGISTRY_ENABLED` | 全部 `true` | 陪伴感三个子系统总开关（关 = 退回改造前行为） |
+
+## 安全边界
+
+- 默认只监听 `127.0.0.1`，局域网与外部一律 401。
+- 配了 `AI_GIRLFRIEND_TOKEN` 后，`/static`（TTS 音频，等同对话内容）也要凭证：
+  `<audio>` 标签带不了请求头，因此支持 `?token=<token>` 查询串。
+- 关闭浏览器不等于数据出境：所有对话、记忆、好感度都只写在 `backend-node/data/`。
+
+
 ## 技术栈
 
 - **前端**: Next.js 16 (App Router) + React 19 + TypeScript + TailwindCSS + Framer Motion + zustand
