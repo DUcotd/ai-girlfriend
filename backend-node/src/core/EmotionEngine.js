@@ -31,6 +31,20 @@ const EMOTION_RULES = {
 /** 亲密度词表 = 重度 ∪ 轻度（统一来自 lexicon） */
 const INTIMACY_WORDS = [...DEEP_INTIMACY, ...MILD_INTIMACY];
 
+/**
+ * `getEmotionLabel()` 可能产出的**全部**标签（17 档）。
+ *
+ * 为什么单独导出：prompt 里给模型的 emotion 取值枚举、以及测试的一致性断言都必须
+ * 与引擎实际输出同源。此前 prompt 只写「情绪名」不给枚举，模型全靠猜；
+ * 而 ghost 路径硬编码的 "冷漠" 根本不在映射表里，前端回落到 default（= 开心），
+ * 于是「她在冷暴力、界面却在笑」（审计 PROMPT-04 / FE-01）。
+ */
+export const EMOTION_LABELS = Object.freeze([
+    "愤怒", "暴躁", "抑郁", "焦虑", "低落", "烦躁",
+    "狂喜", "兴奋", "满足", "开心", "撒娇", "傲娇",
+    "强势", "依赖", "困倦", "亢奋", "平静",
+]);
+
 // 各阶段的 PAD 情感基准（阈值本身在 relationshipStages.js 统一维护）
 const TIER_PAD = {
     stranger:     { P: 0.0,  A: 0.0,  D: 0.1  },
@@ -147,7 +161,8 @@ class EmotionEngine {
 
     getEmotionLabel() {
         const { P, A, D } = this.state;
-
+        // ⚠️ 新增/改名标签时必须同步 EMOTION_LABELS：prompt 里的取值枚举由它生成，
+        // 前端 emotionMap 也有自己的一份映射（三处一致性由 test-audit-b4 的网格测试钉住）。
         if (P < -0.6 && A > 0.4) return "愤怒";
         if (P < -0.5 && A > 0.2 && D > 0.3) return "暴躁";
         if (P < -0.4 && A < -0.2) return "抑郁";
@@ -254,12 +269,12 @@ class EmotionEngine {
         const emotion = this.getEmotionDescription();
         const style = this.getStyleGuide();
 
-        return `[Emotional State - 当前情绪]
+        return `【情绪状态 · 你此刻的情绪】
 - 情绪: ${emotion.label}
 - P(愉悦): ${emotion.P.toFixed(2)} | A(激活): ${emotion.A.toFixed(2)} | D(优势): ${emotion.D.toFixed(2)}
 - 状态描述: ${emotion.description}
 
-[Response Style - 回复风格]
+【回复风格】
 ${style.guide}
 - 标点倾向: ${style.punctuation}
 - Emoji使用: ${style.emojiFrequency === 'high' ? '频繁使用' : style.emojiFrequency === 'none' ? '禁止使用' : '适度使用'}`;

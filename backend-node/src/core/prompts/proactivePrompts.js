@@ -80,7 +80,7 @@ export function buildProactivePrompt(reason, data = {}, affinity = 35) {
         random_chat: buildRandomChatPrompt(affinityLevel, hour),
         miss_you: pickByLevel(missYouPrompts(inactiveDesc(data.inactiveMinutes || 0)), affinityLevel),
         mood_check: pickByLevel(moodCheckPrompts(hour < 18 ? "今天" : "这几天"), affinityLevel),
-        memory_share: `你想起了和用户之前聊过的某件事，想和他们分享这个回忆。可以说"突然想起来..."或"之前你说过..."开头，然后表达你对这段回忆的感受。语气要符合当前关系阶段(${affinityLevel})。`,
+        memory_share: `你想起了和用户之前聊过的某件事，想和他们分享这个回忆。可以说"突然想起来..."或"之前你说过..."开头，然后表达你对这段回忆的感受。语气要`,
         life_update: buildLifeUpdatePrompt(affinityLevel, data),
         // 事件驱动类型（REQ-04，仅追加分支，旧分支不动）
         emotion_resonance: buildEmotionResonancePrompt(affinityLevel, data),
@@ -145,7 +145,7 @@ export function buildTaskReminderPrompt(task, kind, affinityLevel) {
     else if (kind === 'custom') prompt = pickByLevel(taskCustomPrompts(title, dueText), affinityLevel);
     else prompt = pickByLevel(taskDuePrompts(title, dueText), affinityLevel);
 
-    return `${prompt}\n只说这一件就好，不要罗列任务清单，不要道歉式铺垫，符合当前关系阶段(${affinityLevel})。`;
+    return `${prompt}\n只说这一件就好，不要罗列任务清单，不要道歉式铺垫，`;
 }
 
 function buildRandomChatPrompt(affinityLevel, hour) {
@@ -185,7 +185,7 @@ function buildLifeUpdatePrompt(affinityLevel, { activities, currentActivity, ina
 function buildEmotionResonancePrompt(affinityLevel, data = {}) {
     const label = data.label || '低落';
     const trendText = data.trend && data.trend.declining ? '（最近似乎一直在往下走）' : '';
-    return `你察觉到用户此刻的情绪是「${label}」${trendText}。像真正在意他的人那样，轻轻接住这份情绪、给一句温柔的陪伴或关心，不要追问原因，不要给建议，不要报数值。符合当前关系阶段(${affinityLevel})。`;
+    return `你察觉到用户此刻的情绪是「${label}」${trendText}。像真正在意他的人那样，轻轻接住这份情绪、给一句温柔的陪伴或关心，不要追问原因，不要给建议，不要报数值。`;
 }
 
 /**
@@ -196,7 +196,7 @@ function buildAnniversaryRecallPrompt(affinityLevel, data = {}) {
     const title = data.title || '我们的纪念日';
     const days = Number.isFinite(data.daysUntil) ? data.daysUntil : null;
     const whenText = days === 0 ? '就是今天' : (days === 1 ? '就在明天' : (days !== null && days > 0 ? `快到了（还有 ${days} 天）` : ''));
-    return `「${title}」这个属于你和用户的纪念日${whenText ? ` ${whenText}` : ''}。以轻松温暖的方式提起来，一起回味那天的心情，可以用"突然想起…"或"记得吗…"开头。符合当前关系阶段(${affinityLevel})。`;
+    return `「${title}」这个属于你和用户的纪念日${whenText ? ` ${whenText}` : ''}。以轻松温暖的方式提起来，一起回味那天的心情，可以用"突然想起…"或"记得吗…"开头。`;
 }
 
 /**
@@ -206,26 +206,30 @@ function buildAnniversaryRecallPrompt(affinityLevel, data = {}) {
 function buildPromiseFollowupPrompt(affinityLevel, data = {}) {
     const title = data.title || '之前说好的事';
     const summary = data.summary ? `（${data.summary}）` : '';
-    return `你想起和用户之前有个约定「${title}」${summary}。用撒娇或关心的语气轻轻问一句进展，表达你还记得、也尊重他的节奏，绝不催促、不绝不施压。符合当前关系阶段(${affinityLevel})。`;
+    return `你想起和用户之前有个约定「${title}」${summary}。用撒娇或关心的语气轻轻问一句进展，表达你还记得、也尊重他的节奏，绝不催促、不绝不施压。`;
 }
 
 /**
  * 构建主动消息的元指令（告诉 LLM 它要主动发起对话）。
+ *
+ * 2026-10-05 B4-9：不再打印 "Action: Proactive Message / Reason: task_reminder" 这类
+ * 内部字段——它与同一条链里「不要提及你是被触发的」直接矛盾，而且关系阶段在
+ * AiGirlfriend 发来的【关系阶段】块里已经完整给过，这里再复述一遍只会稀释重点。
  */
 export function buildProactiveDirective(reason, affinity, contextInfo) {
-    const prompt = buildProactivePrompt(reason, {}, affinity);
-    return `\n[System Info]: \n- Action: Proactive Message\n- Reason: ${reason}\n- Current Time: ${new Date().toLocaleString('zh-CN', {
+    const time = new Date().toLocaleString('zh-CN', {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
         hour: '2-digit', minute: '2-digit'
-    })}\n- Current Affinity: ${affinity}/100\n- Relationship Stage: ${getAffinityLevel(affinity)}\n${contextInfo}`;
+    });
+    return `\n【本轮情境】\n- 现在：${time}\n- 你对他的好感度：${affinity}/100${contextInfo}`;
 }
 
-/** 主动消息的人设强化指令 */
+/** 主动消息的人设强化指令（阶段边界由【关系阶段】块负责，这里不再重复） */
 export function buildProactivePersonaDirective(prompt, affinity) {
-    return `你现在要主动发起一段对话。${prompt}\n\n【重要提醒】
-- 保持你的二次元少女"小爱"的人设
-- 严格按当前关系阶段(${getAffinityLevel(affinity)})调整语气和称呼——阶段不到就绝不使用亲昵称呼
-- 回复中必须包含 <metadata> 情绪标签
-- 不要提及你是"被触发"的，要表现得像你自发想说的话
-- 消息长度适中，1-3句话为宜`;
+    return `你决定主动找他聊两句。${prompt}\n\n【注意】
+- 保持你的人物设定（外貌、性格底色、说话方式见前面的人设与【关系阶段】【性格状态】）
+- 分寸按【关系阶段】来：阶段没到就绝不使用亲昵称呼
+- 结尾必须带 <metadata> 情绪标签
+- 表现得像你自发想起他，不要出现"系统触发""按规则发消息"这类痕迹
+- 长度适中，1-3 句为宜`;
 }

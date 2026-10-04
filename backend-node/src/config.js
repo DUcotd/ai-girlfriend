@@ -115,6 +115,10 @@ export const config = {
             // 情绪染色权重：当前 PAD 与记忆快照相似度的加权（负效价时用 negative 档）
             emotionWeight: envNumber(process.env.MEMORY_EMOTION_WEIGHT, 0.2, 0, 1),
             emotionWeightNegative: envNumber(process.env.MEMORY_EMOTION_WEIGHT_NEG, 0.4, 0, 1),
+            // 每条「相关回忆」注入前的字符上限：episode 文本是 "User: …\nXiao Ai: …"
+            // 的原文，用户单条最长可达 chat.maxMessageLength(8000)，不设上限时
+            // 3 条回忆就能把整段人设挤出请求（审计 CORE-09 的预算护栏）
+            injectEpisodeMaxChars: envNumber(process.env.MEMORY_INJECT_EPISODE_MAX_CHARS, 300, 20, 4000),
         },
         // 检索结果去重：相邻入选记忆相似度超过该值视为重复丢弃（语义用余弦，关键词用 bigram Jaccard）
         dedupSimilarity: envNumber(process.env.MEMORY_DEDUP_SIMILARITY, 0.92, 0.5, 1),
@@ -129,6 +133,8 @@ export const config = {
             maxFacts: envNumber(process.env.MEMORY_MAX_FACTS, 100, 10, 10000),
             // 每轮注入 prompt 的事实条数（按重要度→最新排序取前 N）
             injectTopN: envNumber(process.env.MEMORY_FACTS_INJECT_TOP_N, 12, 1, 50),
+            // 每条事实注入前的字符上限（事实由 LLM 生成，可能超长）
+            injectFactMaxChars: envNumber(process.env.MEMORY_FACTS_INJECT_CHAR_LIMIT, 120, 20, 2000),
             // 提取用的模型：空 = 复用主对话模型
             extractModel: process.env.MEMORY_EXTRACT_MODEL || '',
             // 提取调用的采样温度（低温保证 JSON 输出稳定）

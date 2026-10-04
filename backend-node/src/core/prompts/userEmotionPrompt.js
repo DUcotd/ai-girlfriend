@@ -35,8 +35,12 @@ export const USER_EMOTION_RESPONSE_STRATEGY = {
 };
 
 /**
- * 构建注入 LLM 的 [User Emotion] 段（若引擎已有自己的注入文本，则以引擎为准，
- * 本函数用于 engine 之外的独立调用/测试）。
+ * 构建注入 LLM 的 [User Emotion] 段 —— **运行链路的唯一出口**（B4-1）。
+ *
+ * ⚠️ 历史坑：本函数一度只被 `scripts/test-user-emotion.mjs` 调用，运行时走的是
+ * 引擎里另一份「只有一句『体贴地照顾他的状态』」的文本 —— 于是这张策略表
+ * 是死代码，REQ-02 的地基没接上（审计 PROMPT-01）。两份同名 `[User Emotion]`
+ * 文本也必然漂移，现在合并为这一份，引擎只负责喂参数。
  *
  * @param {object} emotion - { label, valence, arousal, intensity }
  * @param {object} [trend] - getRecentTrend() 结果
@@ -48,14 +52,19 @@ export function buildUserEmotionContext(emotion, trend) {
     const strategy = USER_EMOTION_RESPONSE_STRATEGY[label] || FALLBACK_STRATEGY;
 
     const lines = [
-        '[User Emotion - 用户当前情绪]',
+        '【用户情绪 · 他此刻的状态】',
         `- 用户情绪: ${label}`,
     ];
+    const dims = [emotion.valence, emotion.arousal, emotion.intensity]
+        .map((v) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(2) : null));
+    if (dims.every((v) => v !== null)) {
+        lines.push(`- 维度（仅供你判断轻重，不要念出来）: valence=${dims[0]} arousal=${dims[1]} intensity=${dims[2]}`);
+    }
     if (trend && trend.available) {
         lines.push(`- 近期趋势: ${describeTrend(trend)}`);
     }
     lines.push(`- 回应策略: ${strategy}`);
-    lines.push('- 这是对"他"此刻情绪的观察，不是小爱自己的情绪；体贴照顾即可，不要念出数值。');
+    lines.push('- 这是对"他"此刻情绪的观察，不是小爱自己的情绪；按上面的策略回应，但不要把策略本身说成「我先共情你再…」这种话。');
     return lines.join('\n');
 }
 

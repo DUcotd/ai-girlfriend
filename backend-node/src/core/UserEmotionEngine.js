@@ -21,6 +21,7 @@ import {
     USER_EMOTION_LABELS, NEUTRAL_LABEL,
 } from './userEmotionLexicon.js';
 import { toFiniteNumber } from './emotionDelta.js';
+import { buildUserEmotionContext } from './prompts/userEmotionPrompt.js';
 
 const STATE_FILE = 'user_emotion_state.json';
 const SCHEMA_VERSION = 1;
@@ -272,28 +273,14 @@ class UserEmotionEngine {
             // 从未分析过（updatedAt 为 null）→ 不注入，避免首轮凭空断言
             if (this.state.updatedAt === null) return '';
 
-            const trend = this.getRecentTrend();
-            const trendText = this._describeTrend(trend);
-            const dims = `valence=${this.state.valence.toFixed(2)} arousal=${this.state.arousal.toFixed(2)} intensity=${this.state.intensity.toFixed(2)}`;
-
-            return [
-                '[User Emotion - 用户当前情绪]',
-                `- 用户情绪: ${this.state.label}（${dims}）`,
-                `- 近期趋势: ${trendText}`,
-                '- 这是对"他"此刻情绪的观察，不是小爱自己的情绪。回应时体贴地照顾他的状态，但不要直接念出这些数值。',
-            ].join('\n');
+            // 文本由 prompt 层唯一持有（含「回应策略」映射表）。
+            // 旧实现在这里另写了一份只有一句「体贴地照顾他的状态」的文本，
+            // 于是策略表成了死代码 —— 用户难过时她不会「先共情后建议」（PROMPT-01）。
+            return buildUserEmotionContext(this.state, this.getRecentTrend());
         } catch (e) {
             console.error(`[UserEmotion] getPromptInjection failed: ${e.message}`);
             return '';
         }
-    }
-
-    /** 趋势人话描述。 */
-    _describeTrend(trend) {
-        if (!trend.available || trend.samples < 2) return '数据不足（本轮为最新状态）';
-        if (trend.declining) return `情绪在下滑（均值 ${trend.avgValence}，斜率 ${trend.slope}），请温和安抚、不要追问`;
-        if (trend.slope > 0.05) return `情绪在回升（均值 ${trend.avgValence}），状态不错`;
-        return `情绪较平稳（均值 ${trend.avgValence}）`;
     }
 
     // ==================== 访问器 ====================

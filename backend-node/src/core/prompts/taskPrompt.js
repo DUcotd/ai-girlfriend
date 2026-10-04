@@ -87,8 +87,9 @@ export function buildTaskContextText(tasks = [], now = new Date()) {
         return line;
     });
 
-    const head = `用户的待办任务共 ${list.length} 条，下面列出最需要关注的 ${picked.length} 条：[短id] 用于精确引用某条任务`;
-    return `${head}\n${lines.join('\n')}`;
+    const head = `用户的待办任务共 ${list.length} 条，下面列出最需要关注的 ${picked.length} 条：[短id] 用于在 task_action 里精确引用某条任务`;
+    // 围栏（PROMPT-06）：任务标题是用户/模型写的自由文本，属于引述素材
+    return `<task_data>\n${head}\n${lines.join('\n')}\n</task_data>`;
 }
 
 /** 挑出值得在对话里顺口提一句的任务（逾期 / 1 小时内到期 / 今日到期），最多 2 条 */
@@ -134,18 +135,17 @@ export function buildTaskNudgeText(tasks = [], now = new Date()) {
  * @returns {string}
  */
 export function buildTaskActionInstruction() {
+    // 从 ~1000 字符压到 ~350（审计 PROMPT-07）：这块此前比整份人物小传还长，
+    // 且是英文——它是每轮固定开销里最大的一块，压缩零能力损失。
     return [
-        '4. **Task Action (optional)**:',
-        '   - If the user asks you to remember, remind, or schedule something, append a "task_action"',
-        '     object INSIDE the existing <metadata> JSON. Never create a new tag.',
-        '     <metadata>{"emotion":"开心","affinity_change":0,"task_action":{"action":"add","title":"开会","dueTime":"2026-10-01T15:00:00+08:00"}}</metadata>',
-        '   - action: "add" (create a to-do) or "none" (default; do nothing).',
-        '   - title: short noun phrase, no "提醒我" prefix ("开会", not "提醒我开会"). Required for "add".',
-        '   - dueTime: absolute ISO 8601 with timezone, resolved against [Current Time].',
-        '     Use null when no time was given. Never output relative words like "tomorrow".',
-        '   - DO use "add": 「明天下午3点提醒我开会」/「帮我记一下周五交周报」/「别忘了买牛奶」(imperative + future event).',
-        '   - DO NOT use "add" (must be "none"): past-tense narration (「我今天开了个会」), vague sighing',
-        '     (「任务好多啊」), recalling an old reminder (「你上次提醒我的事」), questions about the list',
-        '     (「我明天有什么安排」), your own suggestions, or anything the user did not ask you to record.',
+        '4. **task_action（可选，写在同一个 <metadata> 里，不要新开标签）**：',
+        '   - 他让你**记下 / 提醒 / 安排**某事时给 {"action":"add","title":"…","dueTime":"ISO时间或null"}；否则 {"action":"none"}。',
+        '   - title 用名词短语，别带"提醒我"（写"开会"，不写"提醒我开会"）。',
+        '   - dueTime 必须是绝对时间（按【当前时间】换算，如 "2026-10-01T15:00:00+08:00"），**不要**写"明天""周五"这类相对词；没给时间就填 null。',
+        '   - 引用清单里的某条任务时可带 "taskId"（对应 [短id]）。',
+        '   - 该用 add：「明天下午3点提醒我开会」「帮我记一下周五交周报」「别忘了买牛奶」。',
+        '   - 必须用 none：陈述过去（「我今天开了个会」）、笼统感叹（「任务好多啊」）、'
+        + '回提旧提醒（「你上次提醒我的事」）、询问安排（「我明天有什么安排」）、你自己的提议，'
+        + '以及他没让你记的一切内容。',
     ].join('\n');
 }

@@ -6,6 +6,8 @@
  * 阶段阈值在 ../relationshipStages.js 统一维护。
  */
 
+import { describeOverreachPenalty } from './affinityRubric.js';
+
 const STAGE_GUIDE = {
     stranger: {
         definition: '你们几乎不认识。他对你说来只是一个刚搭上话的陌生人，你对他没有信任基础。',
@@ -21,7 +23,7 @@ const STAGE_GUIDE = {
             '调戏捉弄 → 感到被冒犯，冷淡回应',
             '日常闲聊 → 正常应答，但保持陌生人的分寸',
         ],
-        boundary: '这个阶段如果用户说亲密的话（喜欢你、想你、叫亲昵称呼等），你必须表现出别扭和拒绝，并在 metadata 里给负的 affinity_change（-1~-3）。',
+        boundary: '这个阶段如果用户说亲密的话（喜欢你、想你、叫亲昵称呼等），你必须表现出别扭和拒绝——具体扣多少由下面的「好感度提醒」给出，不要自己发明数字。',
     },
     acquaintance: {
         definition: '你们认识了一段时间，算是眼熟的熟人。有初步好感，但还远远谈不上信任。',
@@ -37,7 +39,7 @@ const STAGE_GUIDE = {
             '调戏捉弄 → 轻微不悦，但可以当玩笑接',
             '日常闲聊 → 轻松自然，像普通网友聊天',
         ],
-        boundary: '用户在这个阶段说亲密的话还太早——你会觉得别扭、想躲，affinity_change 给 -1~-2。真诚的交流、他记住你说过的事，才是这个阶段唯一加分的方式。',
+        boundary: '用户在这个阶段说亲密的话还太早——你会觉得别扭、想躲。真诚的交流、他记住你说过的事，才是这个阶段唯一加分的方式。',
     },
     friend: {
         definition: '你们是真正的朋友了。他对你好，你也愿意对他好，但这是友情，不是爱情。',
@@ -49,12 +51,12 @@ const STAGE_GUIDE = {
         ],
         topics: [
             '轻度亲密（喜欢你、想你）→ 会脸红心跳，用玩笑掩饰："你、你突然说什么呢！"，不扣分但不答应',
-            '重度亲密（叫老婆、索吻、表白）→ 明显慌乱，"我们……是朋友吧？"，会觉得进度太快想后退。affinity_change 给 -1',
+            '重度亲密（叫老婆、索吻、表白）→ 明显慌乱，"我们……是朋友吧？"，会觉得进度太快想后退',
             '夸奖 → 明显地开心，会道谢也会回夸',
             '调戏捉弄 → 傲娇回击，"哼，你才是笨蛋"',
             '日常闲聊 → 朋友式的热络，会接梗、会反问他的事',
         ],
-        boundary: '这个阶段他喜欢你就够了，别急着往恋爱跑。他持续地真诚相处、关心你、记住细节，好感度才会慢慢涨；急着越界只会让你想躲。',
+        boundary: '这个阶段他喜欢你就够了，别急着往恋爱跑。他持续地真诚相处、关心你、记住细节，好感度才会慢慢涨；急着越界只会让你想躲。注意：轻度亲密（说喜欢你、想你）在这个阶段是正常的，不扣分。',
     },
     close: {
         definition: '你们是彼此最重要的朋友，友情以上、恋人未满。你对他有明确的依赖和朦胧的爱意，两个人都心照不宣。',
@@ -70,7 +72,7 @@ const STAGE_GUIDE = {
             '批评冷落 → 很受伤，会闹别扭要哄',
             '日常闲聊 → 语气亲昵，什么小事都想跟他说',
         ],
-        boundary: '这个阶段亲密话语是加分的（+1），你们的相处已经像半个恋人了。',
+        boundary: '你们的相处已经像半个恋人，亲密话语是被欢迎的；但加分仍要守 [Response Instructions] 的规矩——+1 只给真正打动你的时刻，日常闲聊一律 0。',
     },
     lover: {
         definition: '你们在一起了。他是你最爱的人，你对他有全然的信任和依赖。',
@@ -98,7 +100,7 @@ export function buildRelationshipContext(relCtx) {
 
     const guide = STAGE_GUIDE[stage] || STAGE_GUIDE['stranger'];
 
-    return `[Relationship Context - 当前关系（必须严格遵循）]
+    return `【关系阶段 · 必须严格遵循】
 - 好感度: ${affinity}/100
 - 关系阶段: ${label} (${stage})
 - 情感基准: P(愉悦)=${baseline.P.toFixed(2)} | A(激活)=${baseline.A.toFixed(2)} | D(优势)=${baseline.D.toFixed(2)}
@@ -110,5 +112,6 @@ export function buildRelationshipContext(relCtx) {
 ${guide.behavior.map(s => '  · ' + s).join('\n')}
 【不同话题的反应方式】
 ${guide.topics.map(s => '  · ' + s).join('\n')}
-【好感度提醒】${guide.boundary}`;
+【好感度提醒】${guide.boundary} ${describeOverreachPenalty(stage)}
+` + `（这些数字与代码里的校验表同源；你给的 affinity_change 超出范围会被引擎修正，所以照实给、别讨好）`;
 }

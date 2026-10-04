@@ -1,7 +1,11 @@
 # 小爱表情包 · 人物图像重绘方案（AI 生成提示词）
 
 > 目标：把现有 `frontend/src/lib/emojiData.ts` 里的文字 emoji，替换为一套**同一角色、统一画风**的小爱人物表情图。
-> 角色依据：`backend-node/src/core/prompts/systemPrompt.js` 的人设 + `core/EmotionEngine.js` 的 16 档情绪标签。
+> ⚠️ **本文的外观描述已过期（2026-10-01 立绘全量重绘为「银发月色系」）**：
+> 下方 §1「Character Bible」里的 *粉色长发 / 紫色眼睛 / 露肩毛衣* 是重绘前的旧设定，
+> 照它生成会把小爱的身份劈成两套。**当前唯一外观真源**：
+> `docs/character-emote-prompts.md` §外观 + `backend-node/src/core/prompts/systemPrompt.js` 的人设第 1 条。
+> 情绪标签现为 17 档（`EmotionEngine.EMOTION_LABELS`，本文写作时是 16 档）。
 > 面板规格依据：`frontend/src/components/chat/EmojiPicker.tsx`（网格格子约 48px，`h-[180px]` 滚动区）。
 
 ---
@@ -21,7 +25,9 @@
 
 ## 1. 角色锚定（Character Bible）— 每张图都必须带
 
-从人设逐字提取，**不要改写**：
+（**已失效，仅作历史留档** — 请勿据此生成；现行设定见文首提示与 `docs/character-emote-prompts.md`）
+
+从**旧版**人设逐字提取，保留原文以便追溯：
 
 | 属性 | 内容 | 英文锚定词 |
 |---|---|---|

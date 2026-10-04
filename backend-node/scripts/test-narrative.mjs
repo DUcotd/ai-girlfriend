@@ -301,7 +301,7 @@ check('无叙事 → 空串', () => {
 });
 check('正常叙事 → 含表头与条目', () => {
     const seg = buildNarrativeContext([makeStory({ type: 'promise', title: '陪复习', summary: '答应陪他复习' })]);
-    assert.ok(seg.includes('[我们的故事'));
+    assert.ok(seg.includes('【我们的故事'));
     assert.ok(seg.includes('约定'));
     assert.ok(seg.includes('陪复习'));
 });
@@ -328,9 +328,9 @@ check('全空叙事对象 → 空串', () => {
 console.log('systemPrompt 集成:');
 check('narrativePrompt 缺省 = 不注入（行为不变）', () => {
     const base = buildSystemContext({ nickname: 'u', taskText: '', contextStr: '', relationshipContext: '', emotionPrompt: '', personalityPrompt: '', styleGuide: { guide: 'g' } });
-    const withNarrative = buildSystemContext({ nickname: 'u', taskText: '', contextStr: '', relationshipContext: '', emotionPrompt: '', personalityPrompt: '', styleGuide: { guide: 'g' }, narrativePrompt: '[我们的故事 - 测试]' });
-    assert.ok(!base.includes('[我们的故事'));
-    assert.ok(withNarrative.includes('[我们的故事 - 测试]'));
+    const withNarrative = buildSystemContext({ nickname: 'u', taskText: '', contextStr: '', relationshipContext: '', emotionPrompt: '', personalityPrompt: '', styleGuide: { guide: 'g' }, narrativePrompt: '【我们的故事 - 测试]' });
+    assert.ok(!base.includes('【我们的故事'));
+    assert.ok(withNarrative.includes('【我们的故事 - 测试]'));
 });
 
 // ==================== 9. 落盘重载一致 ====================

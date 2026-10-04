@@ -98,5 +98,5 @@ export function buildPersonalityPrompt({
         }
     }
 
-    return `[Personality State - 性格状态]\n你的底色是「${presetName}」，当前性格表现如下：\n${descriptions.join('\n')}${recentLine}\n\n请在回复中自然体现这些特点，保持底色稳定，不要刻意解释数值或过度表演。`;
+    return `【性格状态】\n你的底色是「${presetName}」，当前性格表现如下：\n${descriptions.join('\n')}${recentLine}\n\n请在回复中自然体现这些特点，保持底色稳定，不要刻意解释数值或过度表演。`;
 }

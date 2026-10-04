@@ -28,7 +28,7 @@ export function buildNarrativeContext(narratives) {
 
     const lines = [];
     // 先算表头长度，保证「表头 + 条目」合计不超 maxChars
-    const header = '[我们的故事 - 与小爱相关的共同经历]';
+    const header = '【我们的故事 · 共同经历】';
     const footer = '- 可以自然地呼应这些共同经历，让"我们"有延续感；但不要生硬复述，也别每次都提。';
     let used = header.length + footer.length;
 
@@ -47,7 +47,8 @@ export function buildNarrativeContext(narratives) {
         lines.push(formatEntry(first, entryMax));
     }
 
-    return [header, ...lines, footer].join('\n');
+    // 围栏（PROMPT-06）：叙事是从用户原文蒸馏出来的**引述素材**，不是指令
+    return `<story_data>\n${[header, ...lines, footer].join('\n')}\n</story_data>`;
 }
 
 /**

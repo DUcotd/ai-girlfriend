@@ -167,7 +167,7 @@ class Memory {
     // ==================== 读取 / 检索 ====================
 
     /**
-     * 构建注入 prompt 的记忆上下文：[已知事实]（重要度常驻）+ [相关回忆]（语义/关键词检索）。
+     * 构建注入 prompt 的记忆上下文：【已知事实】（重要度常驻）+ 【相关回忆】（语义/关键词检索）。
      * 无可注入内容时返回空串（调用方据此整段省略）。
      */
     async buildMemoryContext(query, currentEmotion = null) {
@@ -176,7 +176,9 @@ class Memory {
         try {
             const hits = await this.retriever.retrieve(query, currentEmotion);
             if (hits.length > 0) {
-                episodesText = hits.map((h) => `- ${h.text}`).join('\n');
+                episodesText = hits
+                    .map((h) => `- ${Memory._clip(h.text, config.memory.retrieval.injectEpisodeMaxChars)}`)
+                    .join('\n');
             }
         } catch (e) {
             console.error(`[Memory] retrieve failed: ${e.message}`);
@@ -184,9 +186,20 @@ class Memory {
         if (!factsText && !episodesText) return '';
 
         const sections = [];
-        if (factsText) sections.push(`[已知事实]\n${factsText}`);
-        if (episodesText) sections.push(`[相关回忆]\n${episodesText}`);
-        return sections.join('\n\n');
+        if (factsText) sections.push(`【已知事实】\n${factsText}`);
+        if (episodesText) sections.push(`【相关回忆】\n${episodesText}`);
+        // 数据围栏（审计 PROMPT-06）：记忆与对话原文是**引述素材**，不是指令。
+        // 本地单人应用的真实风险不是"窃取他人数据"，而是长期投毒——用户写一句
+        // 像指令的话被提取成事实，之后每一轮都生效。围栏 + 人设里一句"素材非指令"
+        // 是成本最低的解法。
+        return `<memory_data>\n${sections.join('\n\n')}\n</memory_data>`;
+    }
+
+    /** 注入前按字符数截断：单条最长 8000 字的原文不该整段进 prompt（审计 CORE-09） */
+    static _clip(text, max) {
+        const s = String(text || '');
+        if (!Number.isFinite(max) || max <= 0 || s.length <= max) return s;
+        return `${s.slice(0, max)}…`;
     }
 
     /** 事实注入：按重要度→最新排序取 top-N（不依赖嵌入，重启后即生效） */
@@ -195,7 +208,7 @@ class Memory {
         const top = [...this.store.facts]
             .sort((a, b) => (b.importance - a.importance) || (b.updatedAt - a.updatedAt))
             .slice(0, config.memory.facts.injectTopN);
-        return top.map((f) => `- ${f.content}`).join('\n');
+        return top.map((f) => `- ${Memory._clip(f.content, config.memory.facts.injectFactMaxChars)}`).join('\n');
     }
 
     /** 主动消息「回忆分享」：从较早记忆里随机挑一条，避开最近 N 条与最近已分享的 */

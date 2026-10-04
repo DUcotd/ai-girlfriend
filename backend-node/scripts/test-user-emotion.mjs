@@ -316,7 +316,7 @@ check('分析后 → 注入段含标签', () => {
     const e = freshEngine();
     e.ingestTurn('今天好难过', '', null);
     const seg = e.getPromptInjection();
-    assert.ok(seg.includes('[User Emotion'));
+    assert.ok(seg.includes('【用户情绪'));
     assert.ok(seg.includes('低落'));
 });
 check('buildUserEmotionContext：含策略映射', () => {
