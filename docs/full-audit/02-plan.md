@@ -221,6 +221,25 @@
 **已完成**：B0（除 B0-6 后半）、B2（除 2 个尾巴）、**B9 全部**、**B4 全部（除 B4-8 后半）**、B1-3、B3-1、B3-10、B5 的 6 项前置。
 **已取消**：B1-1（事实提取节流 / 省钱模式）—— 成本不作为削减理由。
 
+## 会话日志（便于下次接续）
+
+| 日期 | 内容 | commit |
+|---|---|---|
+| 2026-10-03 | 全面审计（5 路专项 + 进程内探针实测）→ 本文件与 `01-analysis.md` 产出 | `4485512` |
+| 2026-10-04 | **B0**（数据/并发/重置/鉴权/流式）+ **B2**（解析边界/情绪/检索 BM25/账本/叙事接线）+ B1-3 + B5 前置（`run-tests.mjs` 聚合器与沙盒数据目录） | `80e8729` |
+| 2026-10-05 | **B9**（三个子系统真关得掉 + 开关持久化 + 设置页开关） | `98eb821` |
+| 2026-10-05 | **B4**（prompt 层九项：策略接线、好感度单一真源、表达优先级、metadata 统一、中文化、引述围栏、体积压缩、主动消息链去重、身份外观对齐） | `966820e` |
+
+**下次开工的断点**：B6-α（依赖已全部满足）——
+① REQ-02 情绪共振：`_finalize` 里让她的 PAD 增量受 `userEmotionEngine` 结果调制（现在只是"读到了但不影响她自己"）；
+② 跃迁仪式感：`updateBaselineForAffinity` 返回的 `tierChanged` 目前在 `AiGirlfriend.js:445` 被丢弃，接上 `TRIGGER_EVENTS` 新事件即可复用事件层；
+③ 主动消息情绪回灌：`recordProactiveMessage` 之后调 `applyDelta`（`docs/proactive-consistency/DIAGNOSIS.md:161-163` 三条遗留里的两条）；
+④ `_recentStoryIds` 与 `getRandomStory` 的防复读账已在 B4/B2 接好，可顺带验证。
+
+**开工前必做的健康检查**：`cd backend-node && npm run check && npm test`（16 套）与
+`cd frontend && npx tsc --noEmit && npx eslint src && npx vitest run`（85 例）。
+测试全程写沙盒目录，不会碰 `backend-node/data/`。
+
 ## 执行顺序与里程碑（按「拟人化优先」重排）
 
 ```
