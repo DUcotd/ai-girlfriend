@@ -263,6 +263,20 @@ export class TriggerRegistry {
      * @param {object} payload
      */
     _onEvent(event, payload = {}) {
+        // 关闭态安全（审计 CORE-10 / B9-1）：旧实现只在 ProactiveEngine.consumeEventQueue()
+        // 一个读取点上判开关，于是「关掉事件层」之后仍然每轮发布→派发→评估→入队→扣冷却
+        // →写 trigger_state.json，队列在整段关闭期间持续累积（maxQueueSize 20、TTL 20~120min），
+        // 重新打开时会把几小时前算好的消息一次性倒出来。
+        if (!isEventLayerEnabled()) {
+            // 顺手把已积压的候选清掉：关掉之后不该再有任何待发事件，重开也不该倒灌历史
+            if (this.eventQueue.length > 0) {
+                this.eventQueue = [];
+                this.scheduleSave();
+                console.log('[TriggerRegistry] 事件层已关闭，清空积压候选');
+            }
+            return;
+        }
+
         const ids = this.subscribers.get(event);
         if (!ids || ids.length === 0) return;
 

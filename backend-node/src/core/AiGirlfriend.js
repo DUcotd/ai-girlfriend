@@ -184,6 +184,9 @@ class AiGirlfriend {
      */
     _emitEvent(event, payload) {
         if (!this.eventBus || typeof this.eventBus.emit !== 'function') return;
+        // 关闭态安全（B9-1）：事件层关掉后不该再发布任何事件。
+        // 旧实现只在下游消费点判开关，发布侧照跑不误（审计 CORE-10）。
+        if (!isEventLayerEnabled()) return;
         try {
             this.eventBus.emit(event, payload);
         } catch (e) {
@@ -211,6 +214,27 @@ class AiGirlfriend {
             this.modelName = data.config.modelName || this.modelName;
             this.embeddingBaseUrl = data.config.embeddingBaseUrl;
             this.embeddingModelName = data.config.embeddingModelName;
+        }
+
+        // 恢复运行时开关与高级参数（B9-2）：env 给默认值，上次会话的显式设置覆盖它。
+        // 事件层走 setEventLayerEnabled（模块级运行时态的唯一写点），不直接改 config 常量。
+        if (data.toggles && typeof data.toggles === 'object') {
+            const t = data.toggles;
+            if (typeof t.userEmotionEnabled === 'boolean') config.userEmotion.enabled = t.userEmotionEnabled;
+            if (typeof t.narrativeEnabled === 'boolean') config.narrative.enabled = t.narrativeEnabled;
+            if (typeof t.memoryFactsEnabled === 'boolean') config.memory.facts.enabled = t.memoryFactsEnabled;
+            if (['auto', 'embedding', 'keyword'].includes(t.memoryRetrievalMode)) {
+                config.memory.retrieval.mode = t.memoryRetrievalMode;
+            }
+            if (typeof t.triggerEnabled === 'boolean') setEventLayerEnabled(t.triggerEnabled);
+            console.log(
+                `[State] 恢复开关: userEmotion=${config.userEmotion.enabled ? 'on' : 'off'}`
+                + ` narrative=${config.narrative.enabled ? 'on' : 'off'}`
+                + ` eventLayer=${isEventLayerEnabled() ? 'on' : 'off'}`
+            );
+        }
+        if (data.chatParams && typeof data.chatParams === 'object') {
+            this._applyChatParams(data.chatParams);
         }
 
         if (data.history && Array.isArray(data.history)) {
@@ -254,6 +278,17 @@ class AiGirlfriend {
                 embeddingBaseUrl: this.embeddingBaseUrl,
                 embeddingModelName: this.embeddingModelName
             },
+            // 运行时开关与高级参数（审计 CORE-10 / D-7.4）：此前只存 baseUrl/modelName，
+            // 于是用户关掉的子系统在下次重启后全部弹回默认「开」，而且界面看不出来。
+            // ⚠️ 这里绝不写任何 Key —— state.json 是明文落盘的用户数据文件。
+            toggles: {
+                userEmotionEnabled: config.userEmotion.enabled,
+                narrativeEnabled: config.narrative.enabled,
+                triggerEnabled: isEventLayerEnabled(),
+                memoryFactsEnabled: config.memory.facts.enabled,
+                memoryRetrievalMode: config.memory.retrieval.mode,
+            },
+            chatParams: this.getChatParams(),
             lastUpdated: new Date().toISOString()
         });
         if (ok) {
@@ -413,7 +448,11 @@ class AiGirlfriend {
             let userEmotionTurned = false;
             let userEmotionResult = null;
             try {
-                if (this.userEmotionEngine) {
+                // 关闭态安全（B9-1）：开关关掉后不分析、不改状态、不落盘。
+                // 旧实现照跑不误 —— ingestTurn 会更新时间线并全量重写
+                // user_emotion_state.json，还会继续给事件层供数（config.js 注释里
+                // 承诺的「关 = 不分析、不注入、不落盘」三条全不成立）。
+                if (this.userEmotionEngine && config.userEmotion.enabled) {
                     const r = this.userEmotionEngine.ingestTurn(userInput, replyText, llmUserEmotion);
                     userEmotionTurned = !!(r && r.turned);
                     userEmotionResult = r;
@@ -543,12 +582,12 @@ class AiGirlfriend {
         const taskActionText = [buildTaskActionInstruction(), nudgeText].filter(Boolean).join('\n\n');
 
         // ========== 用户情绪识别（REQ-01，I2） ==========
-        // 词表分析当轮即得、零网络成本；这里先 analyze 一次给 prompt 注入用。
         // 全链路容错：任何异常都降级为空段，绝不打断主对话。
+        // 关掉开关时整段跳过（B9-1）：旧代码在这里还白跑一次 analyze()，
+        // 返回值被丢弃（注释自己承认只是"预热"），约 160 次 includes 扫描/轮。
         let userEmotionPrompt = '';
         try {
-            if (this.userEmotionEngine) {
-                this.userEmotionEngine.analyze(userInput); // 预热（ingestTurn 会再次融合，纯计算无副作用）
+            if (config.userEmotion.enabled && this.userEmotionEngine) {
                 userEmotionPrompt = this.userEmotionEngine.getPromptInjection();
             }
         } catch (e) {
@@ -1478,6 +1517,10 @@ class AiGirlfriend {
             }
             this._saveState();
             console.log(`[Config] Updated: model=${this.modelName}, baseUrl=${this.baseUrl}`);
+        } else if (paramsChanged || memoryParamsChanged || companionParamsChanged) {
+            // 只改了开关/高级参数（没动连接配置）也必须落盘：旧实现这里不写盘，
+            // 于是用户关掉的子系统在下次重启后全部弹回默认「开」（审计 CORE-10 / D-7.4）。
+            this._saveState();
         }
 
         return { modelName: this.modelName, baseUrl: this.baseUrl };
@@ -1538,13 +1581,15 @@ class AiGirlfriend {
      * 事件层开关取模块级运行时态（isEventLayerEnabled），与纯 config 常量区分。
      */
     getCompanionStatus() {
+        const { enabled: _staticEnabled, ...registryConfig } = config.triggerRegistry;
         return {
             userEmotionEnabled: config.userEmotion.enabled,
             narrativeEnabled: config.narrative.enabled,
-            // 事件层运行时开关（可由 POST /config 热更新）
+            // 事件层运行时开关（可由 POST /config 热更新，重启后从 state.json 恢复）
             triggerEnabled: isEventLayerEnabled(),
-            // 事件层配置块（唯一事实源：core/triggerEvents.js TRIGGER_REGISTRY_CONFIG）
-            triggerRegistry: { ...config.triggerRegistry },
+            // 事件层配置块。**剔除其中的静态 enabled 默认值**：它和上面的 triggerEnabled
+            // 同时下发会出现一个响应里两个真相（前端读到哪个都可能错，审计 CORE-10/HTTP-19）
+            triggerRegistry: registryConfig,
         };
     }
 
@@ -1740,6 +1785,11 @@ class AiGirlfriend {
     _publishNarrativeMilestones(now = new Date()) {
         if (!this.eventBus) return;              // 未装配事件层 → 直接跳过（O(1)）
         if (!this.narrativeStore) return;
+        // 关闭态安全（B9-1）：叙事层关掉后不再发里程碑事件。
+        // 旧实现没有这道判定，关着叙事仍会为每条纪念日/约定发 NARRATIVE_MILESTONE，
+        // 进而产出 anniversary_recall / promise_followup 主动消息 —— 等于引用一个
+        // 已被用户关闭的功能的素材（审计 CORE-10）。
+        if (!this._narrativeEnabled()) return;
 
         // —— 纪念日 ——
         const anniversaries = this.getUpcomingAnniversaries(now);

@@ -23,6 +23,7 @@
 | B2 前置 | ✅ 顺手做掉 | `EmotionEngine._loadState` 逐轴校验（损坏状态文件不再能打死对话链路）；`DEFAULT_AFFINITY` 导出为单一真源；`Memory.addFact` 不再返回错的事实；`_applyFactOps` 判重前置到嵌入之前。 |
 | B2 | ✅ 已完成 | 新增 `scripts/test-audit-b2.mjs`（73 断言）：情绪增量强类型+逐轴裁剪+两路加权混合、`"+3"` 不再冻结好感度、ghost 不再被误判失联、约定追问计数自增、纪念日两窗分离、否定判定改邻域窗口（「今天不开会…超开心」不再判成低落）、关键词检索改真 BM25（**500 条 × 100 字查询 2888 ms → 5.1 ms**，且召回从「最近的」变成「相关的」）、好感度账本可加性与日配额按实际入账扣、`memory_share` 接上叙事层（她开始分享「我们之间的故事」而不是复述流水账）。<br>顺带把 3 条「源码字符串断言」换成行为断言（INFRA-04）。 |
 | B1-3 | ✅ 已完成 | `AI_GIRLFRIEND_API_KEY` 支持服务端侧 Key 兜底（只进内存，测试断言它不落盘）；README 新增「环境变量」「安全边界」「重启后需先用浏览器打开一次」三段说明。 |
+| B9 | ✅ 已完成 | 新增 `scripts/test-audit-b9.mjs`（22 断言）+ `frontend/src/lib/__tests__/configPayload.test.ts`（4 例）。四个入口加真 `enabled` 判定（`_emitEvent` / `TriggerRegistry._onEvent` / `_publishNarrativeMilestones` / 用户情绪 `analyze`+`ingestTurn`）；开关与高级参数持久化进 `state.json`（不含任何 Key），只改开关也会落盘；关闭瞬间清空积压候选，重开不倒灌；`/config/status.companion` 去掉静态 `enabled` 双真相；设置页 →「系统」新增三个开关（以后端真值为准，本地仅离线兜底）。实测：`POST /config {"narrative_enabled":false}` → 状态与 `state.json` 同步变化，重启保持。 |
 | B2 未做项 | ⬜ 剩 2 条 | B2-10 里 `EmotionEngine.history` 仍无消费者（留给 REQ-10 情绪时间线可视化）；`narrative` 的 `jokeTrigger/tags/sourceEpisodeId` 仍无写路径（属 REQ-05 前置，放 B6-α）。 |
 | B5 前置 | ✅ 顺手做掉 | 新增 `scripts/run-tests.mjs`：跑完全部套件再汇总（不再 `&&` 一断全断），并统一注入沙盒数据目录；`test-memory` 的 async-传给-同步-check 缺陷已修 + 加了防呆；`test-stream-filter` 补 failed 计数与用例数校验；`test-reset-all` 改走沙盒目录并修掉同义反复断言；`test-auth` 更新 /static 语义并新增查询串 token 用例。 |
 | B3~B9 | ⬜ 未开始 | 按计划顺序 B2 → B8 → B9 → B1 → B5 → B3 → B7 → B4。 |
@@ -201,6 +202,24 @@
 | REQ-10~13（P2） | 情绪时间线已有（`GET /state/user-emotion` 但前端无 UI）；叙事已有但无删除 UI；纪念日机制已有但 `occurredAt` 与 `recurring.anniversaryDate` 互不校验、`monthly` 会把 30 号钳成 28 号（CORE-21 附） | B7（前端补视图）、B2（日期修正） | 先修日期正确性，再谈可视化与虚拟约会 |
 
 **结论**：陪伴感下一轮的地基不是「再加子系统」，而是 **B0（不丢数据）+ B2（模型给的数不骗人）+ B9（关得掉）+ B4（prompt 说得上话）**。REQ-02 是这批做完后性价比最高的一件，因为它 90% 已经写好，只是没接线。
+
+## 剩余清单（2026-10-05 核对代码后的实况，共约 58 项）
+
+| 批次 | 剩余 | 重点项 |
+|---|---|---|
+| B0 | 0.5 | B0-6 后半：`MemoryStore`/`NarrativeStore`/`UserEmotionEngine` 的去抖 flush 仍不回传写盘结果 |
+| B1 | 3.5 | B1-2 调用计数可见、B1-4 嵌入熔断、B1-5 query 嵌入 memoize、B1-6 后台队列合并（不丢信息） |
+| B2 | 0.5 | B2-10 尾巴：`EmotionEngine.history` 无消费者（留给 REQ-10）、narrative 的 `tags/jokeTrigger/sourceEpisodeId` 无写路径（REQ-05 前置） |
+| B3 | 9 | `POST /config` 零校验、baseUrl 可指向任意主机、GET 会改状态、上游错误当回复、上传/413、自由文本无上限、一致性小修打包、日志隐私与队列无界 |
+| B4 | 9 | **全部未动**：共情策略表接线、好感度规则 4 处矛盾、语气无优先级、metadata 三份示例、全英文 prompt、数据围栏、token 瘦身、身份卡 |
+| B5 | 11 | CI 补后端 eslint/`next build`/boot smoke、`/health` + logger、`.env.example`、路由层测试、全量档案导出导入、依赖升级与 `.gitattributes`、`start_services.py` 去硬编码 |
+| B7 | 17 | 主动消息 FIFO 与串气泡、后端离线态与重试、乐观更新回滚、401 可操作提示 + token 输入框、向导提前置完成、a11y 基线、触屏 hover-only、类型收口、移动端视口与 safe-area、IME 回车误发 |
+| B8 | 7 | `memory.json` 15 MB 反复重写、prompt 无预算护栏、tasks/dedupeSeen/正文长度无界、每轮 9-13 次同步写盘、system 消息位置 |
+| B9 | 4 | 三个开关关不干净（emit/ingest/milestone 仍跑）、开关不持久化、前端无 UI、关闭后队列倒灌 |
+| B6 | α/β | α（REQ-02 共情 + 跃迁仪式感 + 主动消息情绪回灌）依赖 B2/B4/B9；β（REQ-05/07/09）需 PRD §5 的 Q1~Q3 拍板 |
+
+**已完成**：B0 全部（除 B0-6 后半）、B2 全部（除 2 个尾巴）、**B9 全部**、B1-3、B3-1、B3-10 主体、B5 的 6 项前置。
+**已取消**：B1-1（事实提取节流 / 省钱模式）—— 成本不作为削减理由。
 
 ## 执行顺序与里程碑（按「拟人化优先」重排）
 

@@ -9,7 +9,8 @@ import ConfirmDialog from "../ui/ConfirmDialog";
 import Dialog from "../ui/Dialog";
 import { useToast } from "../ui/Toast";
 import { api } from "@/lib/api";
-import { get, getAdvancedChatConfig, remove, set, setAdvancedChatConfig } from "@/lib/storage";
+import { get, getAdvancedChatConfig, getCompanionConfig, remove, set, setAdvancedChatConfig } from "@/lib/storage";
+import type { CompanionConfig } from "@/lib/storage";
 import { DEFAULT_PROVIDER } from "@/lib/providers";
 import { getMemoryConfig } from "@/lib/storage";
 import { normalizeAdvancedConfig } from "@/lib/chatParams";
@@ -65,6 +66,8 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
     );
     // 高级选项四项（storage 读取时已钳制/补默认，这里拿到的就是合法值）
     const [advanced, setAdvanced] = useState<AdvancedChatConfig>(getAdvancedChatConfig);
+    // 陪伴感三子系统开关：本地值先兜底，挂载后用后端真值覆盖（后端现在会持久化它们）
+    const [companion, setCompanion] = useState<CompanionConfig>(getCompanionConfig);
     const [activeTab, setActiveTab] = useState<SettingsTab>("general");
     const [isLoading, setIsLoading] = useState(false);
     const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -138,9 +141,35 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         };
     }, []);
 
+    // 陪伴感开关以**后端真值**为准：后端现在会把它们持久化，本地镜像只作离线兜底，
+    // 否则会出现「界面显示开着、后端其实早就回弹了」的假象（审计 HTTP-10）。
+    useEffect(() => {
+        let cancelled = false;
+        api.getConfigStatus()
+            .then((data) => {
+                if (cancelled || !data.companion) return;
+                setCompanion({
+                    userEmotionEnabled: !!data.companion.userEmotionEnabled,
+                    narrativeEnabled: !!data.companion.narrativeEnabled,
+                    triggerEnabled: !!data.companion.triggerEnabled,
+                });
+            })
+            .catch((e) => {
+                if (!cancelled) console.error("Failed to fetch companion status:", e);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
     /** 高级选项增量变更（页签只上报改动的字段） */
     const patchAdvanced = (patch: Partial<AdvancedChatConfig>) => {
         setAdvanced((prev) => ({ ...prev, ...patch }));
+    };
+
+    /** 陪伴感开关增量变更 */
+    const patchCompanion = (patch: Partial<CompanionConfig>) => {
+        setCompanion((prev) => ({ ...prev, ...patch }));
     };
 
     const handleSave = async () => {
@@ -163,6 +192,11 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         set("memoryFactsEnabled", memoryFactsEnabled.toString());
         set("memoryRetrievalMode", memoryRetrievalMode);
 
+        // 陪伴感三开关写本地镜像（真值以后端为准，这里只是离线兜底与下次预填）
+        set("userEmotionEnabled", companion.userEmotionEnabled.toString());
+        set("narrativeEnabled", companion.narrativeEnabled.toString());
+        set("triggerEnabled", companion.triggerEnabled.toString());
+
         // 保存主动消息配置到本地
         set("proactiveEnabled", proactiveEnabled.toString());
         set("frequencyLevel", frequencyLevel);
@@ -181,6 +215,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 embModelName,
                 memoryFactsEnabled,
                 memoryRetrievalMode,
+                ...companion,
                 ...safeAdvanced,
             });
 
@@ -353,7 +388,11 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                             )}
 
                             {activeTab === "advanced" && (
-                                <SettingsAdvancedTab onReset={() => setShowResetConfirm(true)} />
+                                <SettingsAdvancedTab
+                                    onReset={() => setShowResetConfirm(true)}
+                                    companion={companion}
+                                    onCompanionChange={patchCompanion}
+                                />
                             )}
                         </motion.div>
                     </AnimatePresence>

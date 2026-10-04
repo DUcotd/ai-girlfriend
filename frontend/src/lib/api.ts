@@ -83,6 +83,12 @@ export interface UiChatConfig {
   memoryFactsEnabled?: boolean;
   /** 检索模式：auto（配置了嵌入 Key 用语义，否则关键词）/ embedding / keyword */
   memoryRetrievalMode?: "auto" | "embedding" | "keyword";
+  /** 用户情绪识别通道（REQ-01） */
+  userEmotionEnabled?: boolean;
+  /** 共同经历叙事层（REQ-03） */
+  narrativeEnabled?: boolean;
+  /** 事件驱动主动消息（REQ-04） */
+  triggerEnabled?: boolean;
 }
 
 /**
@@ -124,6 +130,11 @@ export function toBackendConfigPayload(cfg: UiChatConfig) {
     // 记忆选项：布尔开关必须显式下发 false，不能写 || undefined（会被吞成「没传」）
     memory_facts_enabled: cfg.memoryFactsEnabled ?? undefined,
     memory_retrieval_mode: cfg.memoryRetrievalMode,
+    // 陪伴感三开关（后端 configRoutes 解构的就是这三个 snake_case 名）：
+    // 用 ?? undefined 保证 false 能发出去、没带字段时后端保留原值（审计 HTTP-10）
+    user_emotion_enabled: cfg.userEmotionEnabled ?? undefined,
+    narrative_enabled: cfg.narrativeEnabled ?? undefined,
+    trigger_enabled: cfg.triggerEnabled ?? undefined,
   };
 }
 
@@ -217,6 +228,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify(toBackendConfigPayload(cfg)),
     }),
+
+  /**
+   * 后端当前生效的配置快照（排查用 + 陪伴感开关的服务端真值）。
+   * ⚠️ 只回非敏感字段：不含任何 API Key。
+   */
+  getConfigStatus: () =>
+    request<{
+      isConfigured: boolean;
+      hasEmbeddingConfig: boolean;
+      currentModel: string | null;
+      baseUrl: string | null;
+      chat?: Partial<import("./chatParams").AdvancedChatConfig>;
+      memory?: { episodeCount: number; factCount: number; retrievalMode: string; factsEnabled: boolean };
+      companion?: {
+        userEmotionEnabled: boolean;
+        narrativeEnabled: boolean;
+        triggerEnabled: boolean;
+        triggerRegistry?: Record<string, unknown>;
+      };
+    }>("/config/status"),
 
   getProactiveConfig: () =>
     request<{

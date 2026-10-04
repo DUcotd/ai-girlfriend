@@ -51,6 +51,10 @@ const KEYS = {
   // 记忆设置（设置页 → 记忆）：事实提取开关与检索模式
   memoryFactsEnabled: "memoryFactsEnabled",
   memoryRetrievalMode: "memoryRetrievalMode",
+  // 陪伴感三子系统开关（设置页 → 系统）：用户情绪 / 共同经历叙事 / 事件驱动主动消息
+  userEmotionEnabled: "userEmotionEnabled",
+  narrativeEnabled: "narrativeEnabled",
+  triggerEnabled: "triggerEnabled",
   // 以下四项为「高级选项」（设置页 → 通用 → 高级选项），语义见 lib/chatParams.ts
   maxPromptHistory: "maxPromptHistory",
   temperature: "temperature",
@@ -125,6 +129,30 @@ export function getChatConfig() {
     ...getAdvancedChatConfig(),
     // 记忆设置：后端重启后需要重新下发（与嵌入配置同款生命周期）
     ...getMemoryConfig(),
+    // 陪伴感三开关：同样要在后端重启后重新下发，否则与界面显示的状态不一致
+    ...getCompanionConfig(),
+  };
+}
+
+/**
+ * 陪伴感三子系统开关（设置页 → 系统）。
+ *
+ * 缺省全为 true（与后端 config 默认一致）。这三个开关此前只有环境变量能改：
+ * README 把它们写成用户可配的 POST /config 契约，但前端从不发送（审计 HTTP-10）。
+ * 后端现在会把它们持久化进 state.json，所以重启也不会弹回默认值。
+ */
+export interface CompanionConfig {
+  userEmotionEnabled: boolean;
+  narrativeEnabled: boolean;
+  triggerEnabled: boolean;
+}
+
+export function getCompanionConfig(): CompanionConfig {
+  const on = (key: string) => read(key) !== "false";   // 只有显式 "false" 才算关
+  return {
+    userEmotionEnabled: on(KEYS.userEmotionEnabled),
+    narrativeEnabled: on(KEYS.narrativeEnabled),
+    triggerEnabled: on(KEYS.triggerEnabled),
   };
 }
 
