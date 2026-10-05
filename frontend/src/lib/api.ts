@@ -399,10 +399,17 @@ export const api = {
     return final;
   },
 
-  /** 拉取一条待展示的主动消息；无消息时返回 null（后端 204） */
+  /**
+   * 取走一条待展示的主动消息；无消息时返回 null（后端 204）。
+   *
+   * ⚠️ 必须是 POST：这个动作会把消息**出队**，GET 语义下任何预取、`<img src>`、
+   * 浏览器重播或跨站请求都会让她刚生成的那条消息凭空消失（审计 HTTP-13）。
+   * 旧版 GET /chat/proactive 现在返回 405，不会再静默消耗。
+   */
   async fetchProactiveMessage(): Promise<ProactiveMessage | null> {
-    const res = await fetch(`${BACKEND_URL}/chat/proactive`, {
-      headers: withAuth(undefined),
+    const res = await fetch(`${BACKEND_URL}/chat/proactive/consume`, {
+      method: "POST",
+      headers: withAuth({ "Content-Type": "application/json" }),
     });
     if (res.status === 204) return null;
     if (!res.ok) throw new Error("Failed to fetch proactive message");

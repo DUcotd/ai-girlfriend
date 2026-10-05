@@ -11,7 +11,7 @@
  * 检索双模式：事实注入按重要度常驻、与嵌入无关，故无嵌入 Key 时记忆系统依然完整。
  */
 import { config } from '../config.js';
-import { MemoryStore } from './memory/MemoryStore.js';
+import { MemoryStore, clipText } from './memory/MemoryStore.js';
 import { EmbeddingClient } from './memory/EmbeddingClient.js';
 import { MemoryRetriever } from './memory/MemoryRetriever.js';
 import { FactExtractor, clampImportance, normalizeCategory } from './memory/FactExtractor.js';
@@ -127,7 +127,8 @@ class Memory {
             if (stale()) return;
             const fact = this.store.facts.find((f) => f.id === upd.id);
             if (!fact) continue;
-            const content = upd.content.trim();
+            const content = clipText(upd.content, config.textLimits.factContent);
+            if (!content) continue;                 // 模型可能回传 {"content": 123} 之类的脏值
             if (content !== fact.content) {
                 fact.content = content;
                 const embedding = await this.embedding.embed(content);
@@ -144,7 +145,8 @@ class Memory {
 
         for (const add of ops.add) {
             if (stale()) return;
-            const content = add.content.trim();
+            const content = clipText(add.content, config.textLimits.factContent);
+            if (!content) continue;
             // 判重先于嵌入：旧实现先 await embed 再 isDuplicateFact，
             // 于是每条重复事实都白付一次嵌入请求（钱与时延都白花）。
             if (FactExtractor.isDuplicateFact(content, null, this.store.facts)) continue;
@@ -264,7 +266,7 @@ class Memory {
 
     /** 手动添加事实；与既有事实重复时抛 DUPLICATE_FACT */
     async addFact(content, { importance = 3, category = 'other' } = {}) {
-        const trimmed = String(content || '').trim();
+        const trimmed = clipText(content, config.textLimits.factContent);
         if (!trimmed) return null;
         const embedding = await this.embedding.embed(trimmed);
         if (FactExtractor.isDuplicateFact(trimmed, embedding, this.store.facts)) {
@@ -289,7 +291,7 @@ class Memory {
         const fact = this.store.facts.find((f) => f.id === id);
         if (!fact) return null;
         if (content !== undefined) {
-            const trimmed = String(content).trim();
+            const trimmed = clipText(content, config.textLimits.factContent);
             if (trimmed && trimmed !== fact.content) {
                 fact.content = trimmed;
                 const embedding = await this.embedding.embed(trimmed);

@@ -243,7 +243,11 @@ class AffinityEngine {
         const recentChangeReason = this._reasonFor(lastChanged);
         const idle = now - this.lastUserActiveTime;
         const decaying = idle >= DECAY.START_MS && this._affinity > stage.min;
-        const dailyCapReached = this.daily.gained >= AFFINITY_RULES.DAILY_POSITIVE_CAP;
+        // 日额度必须**读时也 roll**（审计 HTTP-19）：以前只有 recordUserTurn 写之前才 roll，
+        // 于是过了零点还没说过话的用户，面板仍然显示「今日额度已满」——那是昨天的账。
+        // roll 本身幂等（同一天多次调用只归零一次），读路径调用它没有副作用。
+        const gainedToday = this._rollDayIfNeeded(now);
+        const dailyCapReached = gainedToday >= AFFINITY_RULES.DAILY_POSITIVE_CAP;
 
         return { ...meta, recentChange, recentChangeReason, decaying, dailyCapReached };
     }

@@ -25,7 +25,7 @@ npm run dev
 
 ## 环境变量
 
-后端全部运行时数值集中在 `src/config.js`（37 个旋钮），这里只列常用的：
+后端全部运行时数值集中在 `src/config.js`（模块里不允许出现裸数字，一律走 `envNumber` 并带范围裁剪），这里只列常用的：
 
 | 变量 | 默认 | 作用 |
 |------|------|------|
@@ -37,6 +37,29 @@ npm run dev
 | `CHAT_MAX_PROMPT_HISTORY` / `CHAT_TEMPERATURE` / `CHAT_UNLIMITED_CONTEXT` | `30` / `0.75` / `false` | 上下文条数、采样温度、无限上下文 |
 | `MEMORY_RETRIEVAL_MODE` / `MEMORY_FACTS_ENABLED` | `auto` / `true` | 记忆检索模式与事实提取开关 |
 | `USER_EMOTION_ENABLED` / `NARRATIVE_ENABLED` / `TRIGGER_REGISTRY_ENABLED` | 全部 `true` | 陪伴感三个子系统总开关（关 = 退回改造前行为） |
+| `EMOTION_RESONANCE_ENABLED` | `true` | 情绪共振：他的情绪改变她自己的 PAD（关掉后她的增量与改造前逐轴一致） |
+| `PROACTIVE_EMOTION_ENABLED` | `true` | 主动消息的情绪回灌：被接住 / 落了空都会改变她的心情 |
+| `AI_GIRLFRIEND_DEBUG` | 未设置 | 设为 `true` 才把内心独白与模型 CoT 的**原文**打进日志（默认只记长度） |
+| `CHAT_QUEUE_MAX` | `4` | 对话队列深度上限，超出直接 429（`error_code: service_busy`） |
+
+### 凭据去向相关（重要）
+
+`base_url` / `embedding_base_url` 决定**你的 API Key 会被发到哪里**，因此后端做了分级校验：
+
+| 地址类型 | 行为 |
+|---|---|
+| 公网 http(s) 地址 | 正常接受 |
+| `127.0.0.1`、`localhost`、`10/8`、`172.16/12`、`192.168/16`、内网裸主机名 | **接受，但响应里带 warning**（本地 Ollama / LM Studio 这类用法是合法的，只是 Key 会跟着发过去） |
+| `169.254.0.0/16`（AWS/Azure/GCP 元数据）、`100.100.100.200`（阿里云元数据）、`metadata.*`、`0.0.0.0`、IPv6 链路本地 `fe80::/10` | **一律拒绝**（400），这类地址只会把 Key 送进元数据服务 |
+| 非 http(s) 协议、URL 里内嵌账号密码、超过 2048 字符 | 拒绝 |
+
+需要放行特例时用 `AI_GIRLFRIEND_BASE_URL_ALLOWLIST=host1,host2`（精确主机名）或
+`AI_GIRLFRIEND_ALLOW_PRIVATE_BASE_URLS=true`（整体放行，包括元数据段，仅在你清楚自己在做什么时用）。
+
+`POST /config` 的字段校验很严格（类型、长度、枚举、布尔不接受 `'false'` 字符串），
+错误会逐条列在响应的 `errors` 里；空串对**主 `api_key` 表示「不动」**（前端每次挂载都会发 `''`，
+把它当清空会抹掉 `AI_GIRLFRIEND_API_KEY` 的兜底值），要显式清空请传 `null`；
+嵌入与 TTS 的 Key 则相反，空串就是清除。
 
 ## 安全边界
 
@@ -44,6 +67,12 @@ npm run dev
 - 配了 `AI_GIRLFRIEND_TOKEN` 后，`/static`（TTS 音频，等同对话内容）也要凭证：
   `<audio>` 标签带不了请求头，因此支持 `?token=<token>` 查询串。
 - 关闭浏览器不等于数据出境：所有对话、记忆、好感度都只写在 `backend-node/data/`。
+- 内心独白（`<monologue>`）与模型 CoT 默认**不进日志**，只记长度；`AI_GIRLFRIEND_DEBUG=true` 才打原文。
+- 上游模型服务的错误不再当回复文本吐出来：气泡里是可读的中文分类提示，
+  细节只进日志，程序侧稳定码在响应的 `error_code` 字段
+  （`upstream_auth` / `upstream_rate_limited` / `upstream_network` / `not_configured` / `service_busy` …）。
+- 取主动消息是 `POST /chat/proactive/consume` 而不是 GET：GET 语义下任何预取或重播都会
+  吃掉一条消息，旧地址现在返回 405。
 
 
 ## 技术栈
@@ -139,10 +168,12 @@ framer-motion 经 MotionConfig reducedMotion="user" 跟随）。
 |------|------|------|
 | POST | `/chat` | 发送消息（非流式） |
 | POST | `/chat/stream` | 发送消息，SSE 流式返回正文 |
-| GET | `/chat/proactive` | 取一条主动消息（无则 204） |
+| POST | `/chat/proactive/consume` | 取走一条主动消息（无则 204）。**必须是 POST**：这个动作会出队 |
+| GET | `/chat/proactive/peek` | 只读预览队首，不消耗 |
+| GET | `/chat/proactive` | 已废弃，回 405（旧的消费型 GET 会被预取和重播误吃消息） |
 | POST | `/chat/proactive/trigger` | 手动触发主动消息（reason 需在类型目录内） |
 | GET | `/chat/proactive/status` | 主动消息引擎运行时状态 |
-| POST | `/config` | 模型 / API 配置（无 GET；回显走 `/config/status`） |
+| POST | `/config` | 模型 / API 配置（无 GET；回显走 `/config/status`）。字段严格按类型校验：错误列在 `errors`，未知字段列在 `warnings` |
 | GET | `/config/status` | 配置状态 |
 | GET/POST | `/config/proactive` | 主动消息配置 |
 | GET/POST/PUT/DELETE | `/tasks` | 任务清单 |
@@ -159,24 +190,37 @@ framer-motion 经 MotionConfig reducedMotion="user" 跟随）。
 | GET/POST | `/personality` | 性格状态 / 更新（预设 / 七维 / 开关） |
 | GET | `/personality/ledger` | 性格变化账本 |
 | POST | `/personality/reset` | 恢复默认预设并清空账本 |
-| GET | `/life/current` `/life/history` | 当前活动 / 活动历史 |
+| GET | `/life/current` `/life/history` | 当前活动 / 活动历史（两条都是纯读，不再顺手生成并写盘） |
 | POST | `/audio/speak` `/audio/transcribe` | TTS / 语音转文字 |
 
-## 陪伴感增强（REQ-01 / REQ-03 / REQ-04）
+## 陪伴感增强（REQ-01 ~ REQ-04 / REQ-06）
 
-在既有「记忆 + 情绪 + 好感度 + 主动消息」之上叠加三个子系统，让主动关怀更「懂你」、
-更「有共同经历」。三者均默认开启，且都遵循「关闭态安全」——任一开关关掉即完全退回改造前行为。
+在既有「记忆 + 情绪 + 好感度 + 主动消息」之上叠加子系统，让她更「懂你」、更「有共同经历」，
+并且**自己的情绪真的被牵动**。均默认开启，且都遵循「关闭态安全」——任一开关关掉即完全退回改造前行为。
 
 - **用户情绪识别通道（REQ-01）**：单独追踪「用户」的情绪（与描述小爱自身状态的
-  `EmotionEngine` 解耦）。词表优先、复用主对话 `<metadata>.user_emotion` 做 LLM 校准，
-  **不新增任何 LLM 调用**；产出情绪时间线并落 `user_emotion_state.json`，为情绪共振触发源供数。
+  `EmotionEngine` 解耦）。词表优先，复用主对话 `<metadata>.user_emotion` 做 LLM 校准；
+  产出情绪时间线并落 `user_emotion_state.json`。
+- **情绪共振（REQ-02）**：他此刻的情绪会**改变她自己的 PAD**，作为第三个成因**叠加**在
+  「词表判定 + 模型 emotion_delta」的混合结果之上（不是再平均一次），幅度按关系阶段调制
+  （陌生 0 / 初识 0.3 / 朋友 0.6 / 挚友 0.85 / 恋人 1），叠加后统一裁剪到单轮每轴总上限。
+  共振与她自己的情绪时间线共用同一份融合读数，两条链路是一本账。
+  纯函数与阶段表在 `core/emotionResonance.js`，开关 `EMOTION_RESONANCE_ENABLED`。
 - **共同经历叙事层（REQ-03）**：从情节记忆派生「我们的故事」（第一次、约定、纪念日等），
-  独立落 `narrative.json`，不改动 `MemoryStore` schema；每轮以 topK + 字数上限克制注入，
-  并在后台按「轮次 / 时间窗 / 好感度跃迁」三层节流调用 LLM 抽取。
-- **事件层（REQ-04）**：`EventBus` + `TriggerRegistry` 把情绪转折、纪念日、约定到期
-  翻译成事件候选入队，再由 `ProactiveEngine` 复用既有全闸门（情绪 / ghost / 配额 / 自发间隔 /
-  去重）触达，**不旁路任何经济模型**。三个触发源：`emotion_turn` / `anniversary` / `promise_followup`。
+  独立落 `narrative.json`，不改动 `MemoryStore` schema；每轮以 topK + 字数上限克制注入。
+  主动回顾的防复读账从**已落盘的 `lastRecalledAt` + 冷却窗**派生，重启也拦得住复读。
+- **事件层（REQ-04 / REQ-06）**：`EventBus` + `TriggerRegistry` 把情绪转折、纪念日、约定到期、
+  **关系阶段跃迁**翻译成事件候选入队，再由 `ProactiveEngine` 复用既有全闸门（情绪 / ghost / 配额 /
+  自发间隔 / 去重）触达，**不旁路任何经济模型**。四个触发源：
+  `emotion_turn` / `anniversary` / `promise_followup` / `stage_advanced`。
   运行时状态见 `GET /chat/proactive/status` 的 `triggerRegistry` 字段。
+- **关系跃迁仪式感（REQ-06）**：好感度跨过阶段线的那一轮就发布 `stage_advanced` 事件，
+  她会主动说一句「我们好像不一样了」，说的内容取自 `relationshipStages.js` 里那个阶段
+  **新解锁的行为**（与每轮的【关系阶段】说明书同一份措辞）。目前只对向上跃迁发消息，
+  向下（正在疏远）只发事件不发消息 —— 那要先等 PRD §5 的 Q2 拍板。
+- **主动消息的情绪回灌**：她递出去的话被接住会开心、落了空（超时未送达）会失落，
+  增量表在 `core/proactiveTypes.js` 各类型的 `emotionFeedback`。失落会自然收紧情绪闸门，
+  「被冷落」不再需要另写规则。开关 `PROACTIVE_EMOTION_ENABLED`。
 
 开关（`POST /config`，snake_case，缺省不动原值）：`user_emotion_enabled` / `narrative_enabled` /
 `trigger_enabled`；当前生效值见 `GET /config/status` 的 `companion` 字段。

@@ -10,9 +10,24 @@
  * 便于单独验证，也方便 prompt 文案集中维护。
  */
 import { formatTaskDue, toDate } from '../taskTime.js';
+import { config } from '../../config.js';
 
 /** 注入给 LLM 的上下文最多几条（多了既费 token 又降低命中率） */
 const MAX_CONTEXT_TASKS = 5;
+
+/**
+ * 注入端再兜一层长度裁剪（审计 HTTP-18）。
+ * 写入端已经按 config.textLimits 截过了，这里专为**修复前就存在**的脏数据兜底：
+ * tasks.json 里一条 100KB 的标题会让每一轮 prefill 都多读 100KB，
+ * 而用户没有任何入口删掉它。
+ */
+function safeTitle(task) {
+    const t = typeof task?.title === 'string' ? task.title : String(task?.title ?? '');
+    const trimmed = t.trim();
+    if (!trimmed) return '(未命名)';
+    const max = config.textLimits.taskTitle;
+    return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
+}
 
 /** 「多久之内到期」在上下文里要单独标出来（毫秒） */
 const SOON_WINDOW_MS = 60 * 60 * 1000;
@@ -79,7 +94,7 @@ export function buildTaskContextText(tasks = [], now = new Date()) {
     const picked = sorted.slice(0, MAX_CONTEXT_TASKS);
 
     const lines = picked.map(({ task, dueMs }) => {
-        let line = `- [${shortId(task.id)}] ${task.title || '(未命名)'}（${formatTaskDue(task.dueTime, now)}）`;
+        let line = `- [${shortId(task.id)}] ${safeTitle(task)}（${formatTaskDue(task.dueTime, now)}）`;
         if (!task.completed && dueMs !== null) {
             if (dueMs <= nowMs) line += ' ⚠️已逾期';
             else if (dueMs <= nowMs + SOON_WINDOW_MS) line += ' ⏰1小时内到期';
@@ -116,7 +131,7 @@ export function buildTaskNudgeText(tasks = [], now = new Date()) {
     const picked = pickNudgeTasks(tasks, now);
     if (picked.length === 0) return '';
 
-    const lines = picked.map(task => `     · ${task.title}（${formatTaskDue(task.dueTime, now)}）`);
+    const lines = picked.map(task => `     · ${safeTitle(task)}（${formatTaskDue(task.dueTime, now)}）`);
     return [
         '5. **Soft Nudge (optional)**:',
         '   - 下面几条待办已经逾期或即将到期：',

@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
-import { BACKEND_ROOT } from '../config.js';
+import { BACKEND_ROOT, config } from '../config.js';
 
 dotenv.config();
 
@@ -12,8 +12,10 @@ const AUDIO_DIR = path.join(BACKEND_ROOT, 'static', 'audio');
 const AUDIO_TTL_MS = 60 * 60 * 1000;
 /** 清理扫描周期 */
 const AUDIO_CLEANUP_INTERVAL_MS = 30 * 60 * 1000;
-/** OpenAI tts-1 的输入上限是 4096 字符，超出直接 400——超长文本截断朗读而不是整体失败 */
-const TTS_MAX_INPUT_CHARS = 4000;
+/**
+ * OpenAI tts-1 的输入上限是 4096 字符，超出直接 400 —— 超长文本截断朗读而不是整体失败。
+ * 数值本身在 config.js 的 tts.maxInputChars（项目约定：运行时数字集中在 config）。
+ */
 
 class VoiceEngine {
     constructor(config = {}) {
@@ -71,6 +73,13 @@ class VoiceEngine {
             err.status = 400;
             throw err;
         }
+        // 纵深防御：路由层已经拦过类型，这里再守一道 —— 旧写法 `text.slice(...)`
+        // 收到数字/对象会抛 TypeError 并落成 500（审计 HTTP-16）
+        if (typeof text !== 'string' || !text.trim()) {
+            const err = new Error("text 必须是非空字符串");
+            err.status = 400;
+            throw err;
+        }
 
         const speechFile = path.join(AUDIO_DIR, `${uuidv4()}.mp3`);
 
@@ -84,7 +93,7 @@ class VoiceEngine {
             const mp3 = await this.openai.audio.speech.create({
                 model: "tts-1",
                 voice: "nova", // Options: alloy, echo, fable, onyx, nova, shimmer
-                input: text.slice(0, TTS_MAX_INPUT_CHARS),
+                input: text.slice(0, config.tts.maxInputChars),
             });
 
             const buffer = Buffer.from(await mp3.arrayBuffer());

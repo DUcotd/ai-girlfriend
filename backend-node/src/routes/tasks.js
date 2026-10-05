@@ -6,6 +6,7 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 import { fail } from '../middleware/validate.js';
 import TaskManager from '../core/TaskManager.js';
 import { parseDueTime } from '../core/taskTime.js';
+import { config } from '../config.js';
 
 const router = Router();
 
@@ -16,6 +17,17 @@ router.get('/tasks', (req, res) => {
 /** title 的统一入参校验：非字符串会在这之前抛 TypeError 落成 500，必须先拦下 */
 function badTitle(title) {
     return typeof title !== 'string' || title.trim() === '';
+}
+
+/**
+ * 自由文本长度守卫（审计 HTTP-18）：超限直接 400 并给出实际上限，
+ * 而不是「收下了但每轮偷偷截断」—— 那会让用户看到的与模型看到的对不上。
+ * @returns {string|null} 错误信息；合法返回 null
+ */
+function tooLongError(body, field, limit) {
+    const value = body?.[field];
+    if (typeof value !== 'string' || value.length <= limit) return null;
+    return `${field} 最长 ${limit} 个字符（收到 ${value.length}）`;
 }
 
 /** dueTime/reminderTime 给了就必须能解析成合法日期（TaskManager 只归一化，不拒绝） */
@@ -29,6 +41,9 @@ router.post('/tasks', (req, res) => {
     if (fail(res, badTitle(req.body?.title), 'title is required and must be a non-empty string')) return;
     if (fail(res, badTimeField(req.body, 'dueTime') || badTimeField(req.body, 'reminderTime'),
         'dueTime/reminderTime is not a valid date')) return;
+    const tooLong = tooLongError(req.body, 'title', config.textLimits.taskTitle)
+        || tooLongError(req.body, 'description', config.textLimits.taskDescription);
+    if (fail(res, !!tooLong, tooLong)) return;
     const task = TaskManager.addTask({ ...req.body, title: req.body.title.trim() });
     res.json(task);
 });
@@ -39,6 +54,9 @@ router.put('/tasks/:id', (req, res) => {
         'title must be a non-empty string')) return;
     if (fail(res, badTimeField(req.body, 'dueTime') || badTimeField(req.body, 'reminderTime'),
         'dueTime/reminderTime is not a valid date')) return;
+    const tooLong = tooLongError(req.body, 'title', config.textLimits.taskTitle)
+        || tooLongError(req.body, 'description', config.textLimits.taskDescription);
+    if (fail(res, !!tooLong, tooLong)) return;
     const task = TaskManager.updateTask(req.params.id, req.body);
     task ? res.json(task) : res.status(404).json({ detail: "Task not found" });
 });

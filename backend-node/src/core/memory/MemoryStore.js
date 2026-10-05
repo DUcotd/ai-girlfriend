@@ -19,6 +19,19 @@ const DB_FILE = 'memory.json';
 const V1_BACKUP_FILE = 'memory.json.v1.bak';
 
 /**
+ * 自由文本入库前的截断（审计 HTTP-18）。
+ * 非字符串一律先 String() 再 trim：调用方可能是模型给的 JSON（数字/null 都可能）。
+ * @param {*} value
+ * @param {number} max
+ * @returns {string}
+ */
+export function clipText(value, max) {
+    const s = typeof value === 'string' ? value : String(value ?? '');
+    const trimmed = s.trim();
+    return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
+}
+
+/**
  * v1 裸数组 → v2 episodes。
  * v1 每条：{ id, text, embedding, embeddingModel, metadata:{emotionSnapshot}, emotionSnapshot, timestamp }
  * v2 顶层只保留一份 emotionSnapshot（旧版 metadata 里是冗余双写，迁移时清除）。
@@ -113,8 +126,10 @@ export class MemoryStore {
     addFact({ content, category = 'other', importance = 3, source = 'extracted', embedding = null, embeddingModel = null }) {
         const fact = {
             id: uuidv4(),
-            content,
-            category,
+            // 入库前截断（审计 HTTP-18）：事实会被每一轮注入 [已知事实]，
+            // 一条超长事实存进来就是每轮都多读一遍，且没有任何出口。
+            content: clipText(content, config.textLimits.factContent),
+            category: clipText(category, config.textLimits.factCategory) || 'other',
             importance,
             source,
             embedding,

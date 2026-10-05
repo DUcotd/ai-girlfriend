@@ -253,15 +253,27 @@ class LifeSimulator {
     }
 
     /**
-     * 获取当前活动状态
+     * 获取当前活动状态 —— **纯读**（审计 HTTP-13）。
+     *
+     * 旧实现在这里懒生成：`GET /life/current` 会调 startNewActivity() 并 saveState() 写盘，
+     * 于是「看一眼她现在在干嘛」变成一次有副作用的请求（预取/重播/脚本都能触发，
+     * 并且会把活动计时器悄悄重置）。活动的生成归定时器（startSimulation）独家负责，
+     * 还没抽出第一条活动时如实回「在想事情」。
      */
     getCurrentActivity() {
         if (!this.currentActivity) {
-            this.startNewActivity();
+            return {
+                activity: '在想事情',
+                emoji: '🌙',
+                mood: null,
+                since: null,
+                duration: 0,
+                period: this.getTimePeriod(),
+            };
         }
 
         const now = Date.now();
-        const duration = Math.floor((now - this.activityStartTime?.getTime()) / 60000);
+        const duration = Math.floor((now - (this.activityStartTime?.getTime() ?? now)) / 60000);
 
         return {
             activity: this.currentActivity.activity,

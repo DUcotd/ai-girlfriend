@@ -7,6 +7,7 @@ import { fail } from '../middleware/validate.js';
 import { aiGirlfriend, proactiveEngine, triggerRegistry } from '../services/container.js';
 import { config } from '../config.js';
 import { PROACTIVE_TYPE_IDS } from '../core/proactiveTypes.js';
+import { classifyUpstreamError, upstreamLogLine, classifiedByCode, UPSTREAM_ERROR_CODES } from '../utils/upstreamError.js';
 
 const router = Router();
 
@@ -65,18 +66,21 @@ function warningsPayload(result) {
     return { parse_warnings: result.parseWarnings || [] };
 }
 
-router.post('/chat', asyncHandler(async (req, res) => {
-    const { message } = req.body;
-    if (!aiGirlfriend.apiKey) return res.status(400).json({ detail: "API Key not configured" });
-    if (fail(res, typeof message !== 'string' || message.length > config.chat.maxMessageLength,
-        `message is required and must be under ${config.chat.maxMessageLength} characters`)) return;
-
-    proactiveEngine.notifyUserActive();
-    const result = await aiGirlfriend.chat(message);
-    res.json({
+/**
+ * /chat 的响应体与 /chat/stream 的 done 事件体 —— **同一份构造**（B3-8 / HTTP-19）。
+ *
+ * 这两处曾经是两份手写的 object 字面量，字段靠人肉同步，已经出过至少三次
+ * 「流式有 stage 元数据、非流式没有」这类不一致（前端在回退路径上拿到残缺数据）。
+ * 现在只有一份，任何新字段自动两边生效；差异只在流式独有的 aborted。
+ */
+function chatResponsePayload(result) {
+    return {
         reply: result.reply || "",
         token_usage: result.token_usage || {},
-        context_count: aiGirlfriend.history.length,
+        // 统一口径（B3-8 / HTTP-19）：这里以前是 `history.length`（含 1 条 system），
+        // 而 GET /state 的 historyCount 是不含 system 的轮数 —— 两个名字相近的数对不上，
+        // 排查时永远要心算一遍。现在两边都是 getHistory().length。
+        context_count: aiGirlfriend.getHistory().length,
         emotion: result.emotion || "平静",
         affinity: result.affinity ?? 35,
         ...affinityPayload(result),
@@ -87,7 +91,32 @@ router.post('/chat', asyncHandler(async (req, res) => {
         model_reasoning: thinkingField(result.modelReasoning),
         ...taskPayload(result),
         ...warningsPayload(result),
-    });
+        // 上游故障的稳定码（null = 这一轮正常）。前端按它分支给可操作提示，
+        // 不再靠匹配气泡文案（HTTP-14）
+        error_code: result.errorCode || null,
+    };
+}
+
+router.post('/chat', asyncHandler(async (req, res) => {
+    const { message } = req.body;
+    if (!aiGirlfriend.apiKey) {
+        return res.status(400).json({
+            detail: classifiedByCode(UPSTREAM_ERROR_CODES.NOT_CONFIGURED).message,
+            error_code: UPSTREAM_ERROR_CODES.NOT_CONFIGURED,
+        });
+    }
+    if (fail(res, typeof message !== 'string' || !message.trim(), 'message is required and must be a non-empty string')) return;
+    if (fail(res, typeof message === 'string' && message.length > config.chat.maxMessageLength,
+        `message is required and must be under ${config.chat.maxMessageLength} characters`)) return;
+
+    proactiveEngine.notifyUserActive();
+    // 队列已满：直接 429，而不是让请求在串行链上无限排队（审计 HTTP-19）
+    if (aiGirlfriend.isQueueSaturated()) {
+        const busy = classifiedByCode(UPSTREAM_ERROR_CODES.BUSY);
+        return res.status(busy.status).json({ detail: busy.message, error_code: busy.code });
+    }
+    const result = await aiGirlfriend.chat(message);
+    res.json(chatResponsePayload(result));
 }));
 
 /**
@@ -96,7 +125,7 @@ router.post('/chat', asyncHandler(async (req, res) => {
  * 事件序列：
  *   {type:'delta', text}  逐段正文，收到即可渲染
  *   {type:'done', ...}    完整结果与情绪/好感度等元数据
- *   {type:'error', detail}
+ *   {type:'error', detail, error_code}
  *
  * 前端应优先用它；不可用时回退到 /chat（非流式，行为不变）。
  */
@@ -104,12 +133,23 @@ router.post('/chat/stream', (req, res) => {
     const { message } = req.body;
 
     if (!aiGirlfriend.apiKey) {
-        return res.status(400).json({ detail: "API Key not configured" });
+        return res.status(400).json({
+            detail: classifiedByCode(UPSTREAM_ERROR_CODES.NOT_CONFIGURED).message,
+            error_code: UPSTREAM_ERROR_CODES.NOT_CONFIGURED,
+        });
     }
-    if (typeof message !== 'string' || message.length > config.chat.maxMessageLength) {
+    if (typeof message !== 'string' || !message.trim()) {
+        return res.status(400).json({ detail: 'message is required and must be a non-empty string' });
+    }
+    if (typeof message === 'string' && message.length > config.chat.maxMessageLength) {
         return res.status(400).json({
             detail: `message is required and must be under ${config.chat.maxMessageLength} characters`
         });
+    }
+    // 队列已满：必须在**写 SSE 头之前**拒，否则客户端收到一个 200 的空流
+    if (aiGirlfriend.isQueueSaturated()) {
+        const busy = classifiedByCode(UPSTREAM_ERROR_CODES.BUSY);
+        return res.status(busy.status).json({ detail: busy.message, error_code: busy.code });
     }
 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -143,31 +183,50 @@ router.post('/chat/stream', (req, res) => {
             if (res.writableEnded) return;
             send({
                 type: 'done',
-                reply: result.reply || "",
-                emotion: result.emotion || "平静",
-                affinity: result.affinity ?? 35,
-                ...affinityPayload(result),
-                emotionalState: result.emotionalState || null,
-                special_action: result.special_action || null,
-                context_count: aiGirlfriend.history.length,
-                inner_thought: thinkingField(result.innerThought),
-                model_reasoning: thinkingField(result.modelReasoning),
-                ...taskPayload(result),
-                ...warningsPayload(result),
+                ...chatResponsePayload(result),
                 ...(result.aborted ? { aborted: true } : {}),
             });
             res.end();
         })
         .catch((e) => {
-            console.error(`[Chat/Stream] Error: ${e.message}`);
+            const classified = classifyUpstreamError(e);
+            console.error(`[Chat/Stream] Error: ${upstreamLogLine(e, classified)}`);
             if (res.writableEnded) return;
-            send({ type: 'error', detail: '生成失败，请重试' });
+            // 分类文案 + 稳定码：旧写法固定回「生成失败，请重试」，前端无法区分
+            // 「Key 失效」与「网络抖动」，只能让用户瞎重试
+            send({ type: 'error', detail: classified.message, error_code: classified.code });
             res.end();
         });
 });
 
+/**
+ * ⚠️ 这条 GET 已经**不再消耗队列**（B3-4 / 审计 HTTP-13）。
+ *
+ * 消费型 GET 的老问题：GET 语义上应当是幂等只读，任何一次触发都会吃掉一条主动消息 ——
+ * 预取、`<img src=…>`、浏览器重播、监控脚本、甚至 CSRF 式的跨站请求都能让她刚生成的
+ * 「想你了」凭空消失且永不重发。取消息改用 POST /chat/proactive/consume。
+ * 保留路由是为了让旧客户端**明确失败**（而不是悄悄变成只读、反复显示同一条）。
+ */
 router.get('/chat/proactive', (req, res) => {
+    res.status(405).json({
+        detail: '取主动消息请改用 POST /chat/proactive/consume（GET 不再消耗队列）',
+        allow: ['POST'],
+    });
+});
+
+/**
+ * 取走一条主动消息（会出队，因此必须是 POST）。
+ * 队列为空仍回 204，与旧契约一致，前端无需改判断。
+ */
+router.post('/chat/proactive/consume', (req, res) => {
     const message = proactiveEngine.consumeMessage();
+    if (message) res.json(message);
+    else res.status(204).end();
+});
+
+/** 只读预览队首（不消耗），给排查与健康检查用 */
+router.get('/chat/proactive/peek', (req, res) => {
+    const message = proactiveEngine.messageQueue[0] || null;
     if (message) res.json(message);
     else res.status(204).end();
 });

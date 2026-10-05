@@ -11,8 +11,20 @@ import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { fail } from '../middleware/validate.js';
 import { aiGirlfriend } from '../services/container.js';
+import { config } from '../config.js';
 
 const router = Router();
+
+/** 事实内容/分类的长度守卫（审计 HTTP-18）：超限的文本会被每一轮注入 prompt，必须挡在入库前 */
+function badFactText(content, category) {
+    if (typeof content === 'string' && content.trim().length > config.textLimits.factContent) {
+        return `content 最长 ${config.textLimits.factContent} 个字符（收到 ${content.trim().length}）`;
+    }
+    if (typeof category === 'string' && category.trim().length > config.textLimits.factCategory) {
+        return `category 最长 ${config.textLimits.factCategory} 个字符`;
+    }
+    return null;
+}
 
 router.get('/history', (req, res) => {
     res.json(aiGirlfriend.getHistory());
@@ -78,6 +90,8 @@ router.post('/memories/facts', asyncHandler(async (req, res) => {
         'importance must be a number between 1 and 5')) return;
     if (fail(res, category !== undefined && typeof category !== 'string',
         'category must be a string')) return;
+    const tooLong = badFactText(content, category);
+    if (fail(res, !!tooLong, tooLong)) return;
     try {
         const fact = await aiGirlfriend.addFact(content.trim(), {
             importance,
@@ -104,6 +118,8 @@ router.patch('/memories/facts/:id', asyncHandler(async (req, res) => {
         'importance must be a number between 1 and 5')) return;
     if (fail(res, category !== undefined && typeof category !== 'string',
         'category must be a string')) return;
+    const tooLong = badFactText(content, category);
+    if (fail(res, !!tooLong, tooLong)) return;
     const fact = await aiGirlfriend.updateFact(req.params.id, {
         content: content?.trim(),
         importance,
@@ -158,8 +174,11 @@ router.post('/state', (req, res) => {
         'affinity must be a number')) return;
     if (fail(res, nickname !== undefined && typeof nickname !== 'string',
         'nickname must be a string')) return;
-    if (fail(res, typeof nickname === 'string' && nickname.length > 50,
-        'nickname must be at most 50 characters')) return;
+    // 上限数值在 config.textLimits（唯一事实源），不再这里抄一份 50
+    if (fail(res, typeof nickname === 'string' && nickname.length > config.textLimits.nickname,
+        `nickname 最长 ${config.textLimits.nickname} 个字符`)) return;
+    if (fail(res, typeof affinity === 'number' && !Number.isFinite(affinity),
+        'affinity 必须是有限数字')) return;
     const newState = aiGirlfriend.updateState({ affinity, nickname });
     res.json({ status: "updated", ...newState });
 });

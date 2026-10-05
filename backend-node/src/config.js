@@ -35,7 +35,9 @@ export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high'];
 export { TRIGGER_REGISTRY_CONFIG };
 
 export const config = {
-    port: Number(process.env.PORT) || 8000,
+    // 端口也走 envNumber：`Number('abc') || 8000` 恰好也能兜住，但 `PORT=0` 会被
+    // 悄悄换成 8000、`PORT=999999` 会一路传到 listen 才报错。统一成有范围、会裁剪的一种口径。
+    port: envNumber(process.env.PORT, 8000, 1, 65535),
     cors: {
         origins: [
             'http://localhost:3000',
@@ -46,8 +48,44 @@ export const config = {
     upload: {
         dir: path.join(BACKEND_ROOT, 'temp_uploads'),
         maxFileSize: 10 * 1024 * 1024, // 10MB
+        // 单次请求只允许一个音频部件（多部件会让临时文件在磁盘上堆积）
+        maxFiles: 1,
+    },
+    /**
+     * 语音（TTS/ASR）入参边界（审计 HTTP-16）。
+     * maxInputChars = 真正送去朗读的字数（超出截断，长文朗读比整体失败更贴合用户预期）；
+     * maxRequestChars = 请求体允许的上限（超出直接 400，不再让一个 400 万字的 POST
+     *   走完 JSON 解析再截断）。
+     */
+    tts: {
+        maxInputChars: envNumber(process.env.TTS_MAX_INPUT_CHARS, 4000, 100, 8192),
+        maxRequestChars: envNumber(process.env.TTS_MAX_REQUEST_CHARS, 20000, 100, 200000),
     },
     staticDir: path.join(BACKEND_ROOT, 'static'),
+    /**
+     * 日志策略（审计 HTTP-19）。
+     * 内心独白 / 模型 CoT / metadata 原文默认**不进日志**：那是这个应用里最私密的文本，
+     * 却会长期躺在 dev.log 里。要排障请显式设 `AI_GIRLFRIEND_DEBUG=true`。
+     */
+    logging: {
+        verbose: process.env.AI_GIRLFRIEND_DEBUG === 'true',
+        textPreviewChars: envNumber(process.env.LOG_PREVIEW_CHARS, 120, 0, 2000),
+        // 对话请求队列上限：超出直接 429，而不是让请求无限排队把进程拖死
+        maxChatQueue: envNumber(process.env.CHAT_QUEUE_MAX, 4, 1, 64),
+    },
+    /**
+     * 自由文本入库前的长度上限（审计 HTTP-18）。
+     * 这些字段会被**每一轮**对话注入 prompt：一条 100KB 的任务标题存进 tasks.json 之后，
+     * 每一轮的 prefill 都要多读 100KB，而且永远没有出口 —— 所以必须在写入时就拦下，
+     * 光靠注入端截断等于让脏数据永久占着磁盘与内存。
+     */
+    textLimits: {
+        taskTitle: envNumber(process.env.LIMIT_TASK_TITLE, 200, 10, 2000),
+        taskDescription: envNumber(process.env.LIMIT_TASK_DESCRIPTION, 2000, 10, 20000),
+        factContent: envNumber(process.env.LIMIT_FACT_CONTENT, 500, 10, 5000),
+        factCategory: envNumber(process.env.LIMIT_FACT_CATEGORY, 40, 2, 200),
+        nickname: envNumber(process.env.LIMIT_NICKNAME, 50, 1, 200),
+    },
     chat: {
         // 单条消息长度上限，防止异常超长输入打爆 LLM 上下文
         maxMessageLength: 8000,
@@ -66,10 +104,10 @@ export const config = {
             ? process.env.CHAT_REASONING_EFFORT
             : '',
         // 主 LLM 请求超时（与前端 60s 超时对齐，避免后端无限挂起）
-        timeoutMs: Number(process.env.CHAT_TIMEOUT_MS) || 60_000,
+        timeoutMs: envNumber(process.env.CHAT_TIMEOUT_MS, 60_000, 1_000, 600_000),
         // 响应里回传「思考」字段（inner_thought 人设独白 / model_reasoning 原生思考）的
         // 最大字符数，超出截断。原生 CoT 可能上万字，不宜整个塞进 HTTP 响应。
-        thinkingMaxChars: Number(process.env.CHAT_THINKING_MAX_CHARS) || 2000,
+        thinkingMaxChars: envNumber(process.env.CHAT_THINKING_MAX_CHARS, 2000, 100, 100_000),
     },
     /**
      * 情绪模型（EmotionEngine）的输入约束。prompt 里已经告诉模型 emotion_delta 是
@@ -132,7 +170,7 @@ export const config = {
     },
     // 记忆检索用的 embedding：慢就快速降级为关键词检索，不拖垮主链路
     embedding: {
-        timeoutMs: Number(process.env.EMBEDDING_TIMEOUT_MS) || 2500,
+        timeoutMs: envNumber(process.env.EMBEDDING_TIMEOUT_MS, 2500, 200, 60_000),
         maxRetries: 0,
     },
     /**

@@ -35,6 +35,8 @@ import { normalizeDelta, blendDeltas, coerceAffinityChange, PAD_AXES } from './e
 import { computeResonanceDelta, combineWithResonance } from './emotionResonance.js';
 import { getStageForAffinity, RELATIONSHIP_STAGES } from './relationshipStages.js';
 import { getProactiveType, PROACTIVE_EXPIRY_FEEDBACK } from './proactiveTypes.js';
+import { classifyUpstreamError, upstreamLogLine, classifiedByCode, UPSTREAM_ERROR_CODES } from '../utils/upstreamError.js';
+import { debugText } from '../utils/log.js';
 
 dotenv.config();
 
@@ -50,16 +52,22 @@ const SYSTEM_PROMPT_MAX = 8000;
  */
 const DIALOG_MENTION_DEBOUNCE_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * 默认服务商与模型：与前端 lib/providers.ts 的 DEFAULT_PROVIDER 保持一致（商汤 Sensenova）。
+ * 改这里就要同步改前端，否则前后端默认服务商会打架。
+ * 构造函数与「清空连接配置」两条路径都读这两个常量，避免默认值出现第二份。
+ */
+const DEFAULT_BASE_URL = "https://token.sensenova.cn/v1";
+const DEFAULT_MODEL_NAME = "sensenova-6.8-flash-lite";
+
 class AiGirlfriend {
     constructor(config = {}) {
         this.statePath = dataPath(STATE_FILE);
         this.systemPrompt = PERSONA_SYSTEM_PROMPT;
 
-        // 默认值与前端 lib/providers.ts 的 DEFAULT_PROVIDER 保持一致（商汤 Sensenova）。
-        // 改这里就要同步改前端，否则前后端默认服务商会打架。
         this.apiKey = null;
-        this.baseUrl = "https://token.sensenova.cn/v1";
-        this.modelName = "sensenova-6.8-flash-lite";
+        this.baseUrl = DEFAULT_BASE_URL;
+        this.modelName = DEFAULT_MODEL_NAME;
         this.embeddingApiKey = null;
         this.embeddingBaseUrl = null;
         this.embeddingModelName = null;
@@ -130,6 +138,9 @@ class AiGirlfriend {
 
         this.openai = null;
         this._chatQueue = Promise.resolve();
+        // 队列里**等待+在途**的轮数（审计 HTTP-19）：过去没有上限，脚本或卡死的
+        // 前端可以一直 POST /chat，每轮都要等上一轮跑完，请求在链上无限堆积。
+        this._queueDepth = 0;
         // 状态世代号：resetAll() 递增它，用来作废那些**不在 _chatQueue 上**的后台副作用
         // （setImmediate 里的记忆写入 / 用户情绪摄入 / 叙事抽取 / 落盘）。
         // 没有它，一次「完全重置」会被几秒后才跑完的在途轮次悄悄写回旧数据。
@@ -305,6 +316,11 @@ class AiGirlfriend {
 
     // ==================== LLM 客户端 ====================
 
+    /**
+     * 建立 OpenAI 客户端。
+     * @returns {boolean} 成功与否 —— 调用方（POST /config）据此决定是 200 还是 400：
+     *   旧写法把异常吞进日志、界面照样显示「已保存」，用户要到下一次对话才发现配置坏了。
+     */
     initOpenAI() {
         try {
             this.openai = new OpenAI({
@@ -313,9 +329,18 @@ class AiGirlfriend {
                 // 与前端等待上限对齐，避免后端请求无限挂起
                 timeout: config.chat.timeoutMs,
             });
+            this._configError = null;
+            return true;
         } catch (e) {
             console.error(`Error initializing OpenAI: ${e}`);
+            this._configError = `客户端初始化失败：${e?.message || e}`;
+            return false;
         }
+    }
+
+    /** 当前配置是否能真正发起对话（有 Key 且客户端已建起来） */
+    isConfigured() {
+        return !!this.apiKey && !!this.openai;
     }
 
     // ==================== 对话主流程 ====================
@@ -504,6 +529,56 @@ class AiGirlfriend {
     }
 
     /**
+     * 失败轮的统一构造（HTTP-14 / B3-8）：/chat、/chat/stream、队列兜底三处
+     * 必须给出同一份文案 + 同一个 error_code，前端只需写一个分支。
+     * emotion 取实时标签：兜底轮也必须给前端一个真实存在的标签，不能写死字符串。
+     */
+    _fallbackResult(classified) {
+        return {
+            reply: classified.message,
+            errorCode: classified.code,
+            token_usage: {},
+            emotion: this.emotionEngine.getEmotionLabel(),
+            affinity: this.affinity,
+        };
+    }
+
+    /** 还没配 Key 的兜底（稳定码 not_configured，前端据此提示去设置页） */
+    _notConfiguredResult() {
+        return this._fallbackResult(classifiedByCode(UPSTREAM_ERROR_CODES.NOT_CONFIGURED));
+    }
+
+    /**
+     * 对话队列是否已经挤满（HTTP-19）。路由在动手写 SSE 头之前先问一句，超出直接 429。
+     * 上限 config.logging.maxChatQueue：单用户应用默认 4 轮，够吸收连点，又不会让
+     * 一个卡死的前端或脚本把请求堆到无限长。
+     */
+    isQueueSaturated() {
+        return this._queueDepth >= config.logging.maxChatQueue;
+    }
+
+    _queueOverflowResult() {
+        console.warn(`[Chat] 队列已满（${this._queueDepth}/${config.logging.maxChatQueue}），本轮被拒`);
+        return this._fallbackResult(classifiedByCode(UPSTREAM_ERROR_CODES.BUSY));
+    }
+
+    /**
+     * 入队执行一轮对话。
+     *
+     * ⚠️ `.catch` 必须留在**被存进 _chatQueue 的那条链内部**：如果先存链、再把 catch
+     * 挂在链外，一旦某轮 reject，存下来的就是 rejected promise —— 下一个请求
+     * `.then(nextRun)` 会被直接跳过并把同一个 rejection 传下去，于是「A 失败」
+     * 连带把 B 也变成兜底回复（互斥队列最坏的失效方式）。
+     */
+    _enqueueTurn(run, onError) {
+        this._queueDepth += 1;
+        return this._chatQueue = this._chatQueue
+            .then(run)
+            .catch(onError)
+            .finally(() => { this._queueDepth = Math.max(0, this._queueDepth - 1); });
+    }
+
+    /**
      * 串行队列：同一时刻只允许一轮对话在改共享状态（history / affinity /
      * personality / 各 store 数组）。
      *
@@ -514,9 +589,13 @@ class AiGirlfriend {
      * fulfilled，链条天然不会断，不需要任何手动"续链"。
      */
     async chat(userInput) {
-        return this._chatQueue = this._chatQueue.then(() => this._doChat(userInput)).catch(e => {
-            console.error(`[Chat] Queue error: ${e.message}`);
-            return { reply: "发生了点小意外", token_usage: {}, emotion: this.emotionEngine.getEmotionLabel(), affinity: this.affinity };
+        if (this.isQueueSaturated()) return this._queueOverflowResult();
+        return this._enqueueTurn(() => this._doChat(userInput), (e) => {
+            const classified = classifyUpstreamError(e);
+            console.error(`[Chat] Queue error: ${upstreamLogLine(e, classified)}`);
+            // 兜底轮同样走分类文案：旧写法在这里回的是硬编码「发生了点小意外」，
+            // 与 _doChat 的兜底不是同一份，前端无法统一处理
+            return this._fallbackResult(classified);
         });
     }
 
@@ -833,13 +912,11 @@ class AiGirlfriend {
             const parsed = this._parseCompletion(completion, userInput);
             return this._finalize(parsed, userInput, completion.usage, { nudgeTaskIds });
         } catch (e) {
-            console.error(`Chat Error: ${e}`);
-            return {
-                reply: `发生了点小意外: ${e.message}`,
-                token_usage: {},
-                emotion: this.emotionEngine.getEmotionLabel(),
-                affinity: this.affinity
-            };
+            // 上游异常一律翻译成分级文案（HTTP-14）：SDK 原文带着上游主机名/模型名，
+            // 旧写法把它当回复气泡显示、写进历史、再喂回下一轮 prompt。
+            const classified = classifyUpstreamError(e);
+            console.error(`Chat Error: ${upstreamLogLine(e, classified)}`);
+            return this._fallbackResult(classified);
         }
     }
 
@@ -852,18 +929,16 @@ class AiGirlfriend {
      * @returns 与 chat() 相同结构的结果对象（含完整 reply）
      */
     async chatStream(userInput, onDelta, opts = {}) {
-        return this._chatQueue = this._chatQueue
-            .then(() => this._doChatStream(userInput, onDelta, opts))
-            .catch(e => {
-                console.error(`[Chat] Stream queue error: ${e.message}`);
-                // 同 chat()：不要在这里重置 _chatQueue，那会切断 B 的排队并让 C 并发
-                return {
-                    reply: "发生了点小意外",
-                    token_usage: {},
-                    emotion: this.emotionEngine.getEmotionLabel(),
-                    affinity: this.affinity
-                };
-            });
+        if (this.isQueueSaturated()) return this._queueOverflowResult();
+        // 同 chat()：catch 留在链内（见 _enqueueTurn 的说明），文案与 chat() 同出一处
+        return this._enqueueTurn(
+            () => this._doChatStream(userInput, onDelta, opts),
+            (e) => {
+                const classified = classifyUpstreamError(e);
+                console.error(`[Chat] Stream queue error: ${upstreamLogLine(e, classified)}`);
+                return this._fallbackResult(classified);
+            }
+        );
     }
 
     async _doChatStream(userInput, onDelta, { signal } = {}) {
@@ -925,13 +1000,9 @@ class AiGirlfriend {
                 console.log(`[Chat] Stream aborted by client after ${visibleText.length} chars`);
                 return this._finalizeAborted(userInput, parsed);
             }
-            console.error(`Chat Stream Error: ${e}`);
-            return {
-                reply: `发生了点小意外: ${e.message}`,
-                token_usage: {},
-                emotion: this.emotionEngine.getEmotionLabel(),
-                affinity: this.affinity
-            };
+            const classified = classifyUpstreamError(e);
+            console.error(`Chat Stream Error: ${upstreamLogLine(e, classified)}`);
+            return this._fallbackResult(classified);
         }
     }
 
@@ -959,21 +1030,24 @@ class AiGirlfriend {
         };
     }
 
-    /** 进入对话前的通用校验，返回非 null 时直接作为结果返回 */
+    /**
+     * 进入对话前的通用校验，返回非 null 时直接作为结果返回。
+     *
+     * ⚠️ emotion 一律取**实时标签**，不再写死 "default"（B3-8 情绪哨兵值统一）：
+     * "default" 不在 EMOTION_LABELS 里，前端拿到它就回落到开心立绘 —— 于是「她拒绝了你、
+     * 界面却在笑」这类穿帮（审计 FE-01 同一个根）。兜底路径最容易忘，所以在这里一次改齐。
+     */
     _preChatGuard(userInput) {
         if (!this.openai) {
-            return {
-                reply: "请先配置 API Key 才能和小爱聊天哦~ (在侧边栏输入或配置 .env 文件)",
-                token_usage: {},
-                emotion: "default",
-                affinity: this.affinity
-            };
+            const notConfigured = this._notConfiguredResult();
+            notConfigured.token_usage = {};
+            return notConfigured;
         }
         if (!userInput || !userInput.trim()) {
             return {
                 reply: "",
                 token_usage: {},
-                emotion: "default",
+                emotion: this.emotionEngine.getEmotionLabel(),
                 affinity: this.affinity
             };
         }
@@ -1046,14 +1120,14 @@ class AiGirlfriend {
         }
 
         if (innerThought) {
-            console.log(`\n[Inner Monologue]: ${innerThought}\n`);
+            // 独白是「只对前端 hover 可见」的私密文本，默认不再整段进日志（HTTP-19）
+            debugText('Chat', '内心独白', innerThought);
             if (innerThought.length > 400) {
                 console.warn(`[Chat] 内心独白异常长（${innerThought.length} 字符），注意是否混入了模型 CoT`);
             }
         }
         if (modelReasoning) {
-            const preview = modelReasoning.length > 300 ? modelReasoning.slice(0, 300) + ' …' : modelReasoning;
-            console.log(`\n[Model Reasoning] (${modelReasoning.length} chars): ${preview}\n`);
+            debugText('Chat', `模型 CoT（${modelReasoning.length} 字）`, modelReasoning);
         }
 
         // ---- 元数据 ----
@@ -1163,7 +1237,8 @@ class AiGirlfriend {
                 }
             }
 
-            console.log(`[AiGirlfriend] Proactive message generated: ${reason} -> ${reply.substring(0, 50)}...`);
+            console.log(`[AiGirlfriend] 主动消息已生成: ${reason}（${reply.length} 字）`);
+            debugText('AiGirlfriend', `主动消息正文 (${reason})`, reply);
             return { reply, emotion, reason };
         } catch (e) {
             console.error("[AiGirlfriend] Proactive generation error:", e);
@@ -1506,15 +1581,25 @@ class AiGirlfriend {
     updateConfig(cfg) {
         let changed = false;
 
-        if (cfg.apiKey && cfg.apiKey !== this.apiKey) {
+        // 空值语义（与 routes/configRoutes.js + utils/configValidation.js 同一套口径）：
+        //   undefined = 没带这个字段，不动；null = 显式清空；'' 对主 Key 表示「未提供」，
+        //   因为前端 useBootstrap 每次挂载都会把 localStorage 的空值序列化成 ''，
+        //   把 '' 当成清空会在一个没存 Key 的浏览器里抹掉 AI_GIRLFRIEND_API_KEY 的兜底值。
+        if (cfg.apiKey === null) {
+            if (this.apiKey !== null) { this.apiKey = null; changed = true; }
+        } else if (cfg.apiKey && cfg.apiKey !== this.apiKey) {
             this.apiKey = cfg.apiKey;
             changed = true;
         }
-        if (cfg.baseUrl && cfg.baseUrl !== this.baseUrl) {
+        if (cfg.baseUrl === null || cfg.baseUrl === '') {
+            if (this.baseUrl !== DEFAULT_BASE_URL) { this.baseUrl = DEFAULT_BASE_URL; changed = true; }
+        } else if (cfg.baseUrl && cfg.baseUrl !== this.baseUrl) {
             this.baseUrl = cfg.baseUrl;
             changed = true;
         }
-        if (cfg.modelName && cfg.modelName !== this.modelName) {
+        if (cfg.modelName === null || cfg.modelName === '') {
+            if (this.modelName !== DEFAULT_MODEL_NAME) { this.modelName = DEFAULT_MODEL_NAME; changed = true; }
+        } else if (cfg.modelName && cfg.modelName !== this.modelName) {
             this.modelName = cfg.modelName;
             changed = true;
         }
@@ -1620,8 +1705,9 @@ class AiGirlfriend {
             );
         }
 
+        let clientOk = true;
         if (changed) {
-            if (this.apiKey) this.initOpenAI();
+            if (this.apiKey) clientOk = this.initOpenAI();
             if (this.memory) {
                 this.memory.updateConfig({
                     apiKey: this.apiKey,
@@ -1631,7 +1717,18 @@ class AiGirlfriend {
                     embeddingModelName: this.embeddingModelName
                 });
             }
-            this._saveState();
+            // 初始化失败也绝不落盘那份坏配置：旧写法先 _saveState() 再建客户端，
+            // 于是一次填错的 Base URL 会跟着重启一起活过来，每轮都失败。
+            if (clientOk) this._saveState();
+            else {
+                console.error(`[Config] 拒绝保存：${this._configError}`);
+                return {
+                    modelName: this.modelName,
+                    baseUrl: this.baseUrl,
+                    configured: false,
+                    configError: this._configError,
+                };
+            }
             console.log(`[Config] Updated: model=${this.modelName}, baseUrl=${this.baseUrl}`);
         } else if (paramsChanged || memoryParamsChanged || companionParamsChanged) {
             // 只改了开关/高级参数（没动连接配置）也必须落盘：旧实现这里不写盘，
@@ -1639,7 +1736,12 @@ class AiGirlfriend {
             this._saveState();
         }
 
-        return { modelName: this.modelName, baseUrl: this.baseUrl };
+        return {
+            modelName: this.modelName,
+            baseUrl: this.baseUrl,
+            configured: clientOk && (!this.apiKey || !!this.openai),
+            configError: clientOk ? null : this._configError,
+        };
     }
 
     updateState(updates) {

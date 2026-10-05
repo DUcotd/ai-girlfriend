@@ -15,6 +15,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+import { config } from '../config.js';
 import { parseDueTime, startOfLocalDay, toDate } from './taskTime.js';
 
 const TASKS_FILE = 'tasks.json';
@@ -181,6 +182,19 @@ class TaskManager {
             picked[field] = source[field];
         }
         if (typeof picked.title === 'string') picked.title = picked.title.trim();
+        if (typeof picked.description === 'string') picked.description = picked.description.trim();
+        /**
+         * 自由文本入库前截断（审计 HTTP-18）：任务标题/描述会被**每一轮**注入 prompt，
+         * 一条 100KB 的标题存盘后每轮 prefill 都要多读它，而且没有出口。
+         * 这里无条件截（AI 建单与用户手写都走这条路）；HTTP 入口另有 400，见 routes/tasks.js。
+         */
+        if (typeof picked.title === 'string' && picked.title.length > config.textLimits.taskTitle) {
+            picked.title = picked.title.slice(0, config.textLimits.taskTitle);
+        }
+        if (typeof picked.description === 'string'
+            && picked.description.length > config.textLimits.taskDescription) {
+            picked.description = picked.description.slice(0, config.textLimits.taskDescription);
+        }
         // 时间字段统一归一化成 ISO 8601 落盘（前端 datetime-local 发来的是本地写法）；
         // 解析失败的保留原值，由路由层拒绝
         for (const field of ['dueTime', 'reminderTime']) {

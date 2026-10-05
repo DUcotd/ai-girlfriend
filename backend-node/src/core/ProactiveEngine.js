@@ -63,6 +63,9 @@ const FREQUENCY = {
     high: { cooldown: 0.7, dailyLimit: 1.5 },
 };
 
+/** 频率档位唯一事实源（路由校验入参时读这里，别再抄一份 ['low','medium','high']） */
+export const FREQUENCY_LEVELS = Object.keys(FREQUENCY);
+
 /** 深夜免打扰时段（当天分钟数，跨零点） */
 const QUIET_HOURS = { from: 23 * 60 + 30, to: 7 * 60 };
 
