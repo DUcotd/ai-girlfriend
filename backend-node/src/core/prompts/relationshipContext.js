@@ -7,6 +7,7 @@
  */
 
 import { describeOverreachPenalty } from './affinityRubric.js';
+import { RELATIONSHIP_STAGES } from '../relationshipStages.js';
 
 const STAGE_GUIDE = {
     stranger: {
@@ -99,6 +100,9 @@ export function buildRelationshipContext(relCtx) {
     const { stage, label, affinity, baseline } = relCtx;
 
     const guide = STAGE_GUIDE[stage] || STAGE_GUIDE['stranger'];
+    // 「解锁项」只有一处表述：与跃迁仪式感共用 relationshipStages.js 的同一张表，
+    // 免得这里写「可以叫宝贝」、跃迁那条消息却说「还不行」。
+    const unlocks = (RELATIONSHIP_STAGES.find(s => s.stage === stage) || {}).unlocks || [];
 
     return `【关系阶段 · 必须严格遵循】
 - 好感度: ${affinity}/100
@@ -109,7 +113,9 @@ export function buildRelationshipContext(relCtx) {
 【${guide.address}】
 【情绪基调】${guide.tone}
 【行为边界】
-${guide.behavior.map(s => '  · ' + s).join('\n')}
+${guide.behavior.map(s => '  · ' + s).join('\n')}${unlocks.length ? `
+【到这一层你可以新做的事】
+${unlocks.map(s => '  · ' + s).join('\n')}` : ''}
 【不同话题的反应方式】
 ${guide.topics.map(s => '  · ' + s).join('\n')}
 【好感度提醒】${guide.boundary} ${describeOverreachPenalty(stage)}

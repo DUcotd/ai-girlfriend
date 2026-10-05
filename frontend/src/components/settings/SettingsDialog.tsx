@@ -9,7 +9,7 @@ import ConfirmDialog from "../ui/ConfirmDialog";
 import Dialog from "../ui/Dialog";
 import { useToast } from "../ui/Toast";
 import { api } from "@/lib/api";
-import { get, getAdvancedChatConfig, getCompanionConfig, remove, set, setAdvancedChatConfig } from "@/lib/storage";
+import { get, getAdvancedChatConfig, getCompanionConfig, remove, set, setAdvancedChatConfig, DEFAULT_ENABLED_PROACTIVE_TYPES } from "@/lib/storage";
 import type { CompanionConfig } from "@/lib/storage";
 import { DEFAULT_PROVIDER } from "@/lib/providers";
 import { getMemoryConfig } from "@/lib/storage";
@@ -103,10 +103,10 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 // fall through to default
             }
         }
-        // 与 backend/src/core/proactiveTypes.js 的 defaultEnabled 保持镜像；
+        // 与 backend-node/src/core/proactiveTypes.js 的 defaultEnabled 保持镜像
+        // （同一份常量，跨端一致性由 proactiveDefaults.test.ts 钉住）；
         // 挂载后会被服务端下发的列表覆盖，这里只是后端不可用时的兜底。
-        return ['morning_greeting', 'night_greeting', 'task_reminder',
-                'random_chat', 'miss_you', 'mood_check', 'memory_share', 'life_update'];
+        return [...DEFAULT_ENABLED_PROACTIVE_TYPES];
     });
     const [availableTypes, setAvailableTypes] = useState<ProactiveTypeInfo[]>([]);
     const [availableGroups, setAvailableGroups] = useState<ProactiveGroupInfo[]>([]);

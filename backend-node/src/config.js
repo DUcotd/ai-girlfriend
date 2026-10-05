@@ -83,6 +83,52 @@ export const config = {
         // 所以是加权混合而不是先后各 apply 一次（旧写法约 2 倍幅度）
         keywordWeight: envNumber(process.env.EMOTION_KEYWORD_WEIGHT, 0.5, 0, 1),
         llmWeight: envNumber(process.env.EMOTION_LLM_WEIGHT, 0.5, 0, 1),
+        /**
+         * 混合后再加共振项的**单轮总上限**（逐轴）。
+         * 词表通道原本就是 P±0.5 / A±0.4 / D±0.3，加上共振之后允许略高一点，
+         * 但绝不能没有上限：一轮之内把 PAD 拉满等于让「他今天心情不好」
+         * 直接 trip 她的冷暴力判定（审计 CORE-05 守的是同一条不变量）。
+         */
+        totalAxisCap: {
+            P: envNumber(process.env.EMOTION_TOTAL_P_CAP, 0.6, 0, 1),
+            A: envNumber(process.env.EMOTION_TOTAL_A_CAP, 0.5, 0, 1),
+            D: envNumber(process.env.EMOTION_TOTAL_D_CAP, 0.4, 0, 1),
+        },
+        /**
+         * 情绪共振（REQ-02）：他的情绪改变她自己的 PAD。
+         * 纯函数与阶段系数表在 core/emotionResonance.js，这里只放可调数值。
+         */
+        resonance: {
+            // 关 = 她的增量与改造前逐轴一致（关闭态安全）
+            enabled: process.env.EMOTION_RESONANCE_ENABLED !== 'false',
+            // 全局强度：共振增量 = strength × 阶段系数 × 他的强度 × 各通道系数
+            strength: envNumber(process.env.EMOTION_RESONANCE_STRENGTH, 0.35, 0, 2),
+            // 他的情绪强度低于此值就不打扰她的情绪（中性噪声不该传染）
+            minIntensity: envNumber(process.env.EMOTION_RESONANCE_MIN_INTENSITY, 0.25, 0, 1),
+            // 唤醒传染系数：他激动/焦急，她的 A 跟着抬
+            arousalContagion: envNumber(process.env.EMOTION_RESONANCE_AROUSAL, 0.4, 0, 2),
+            // 担心系数：他越低落，她越提心吊胆（A 上升，与「他也一起低沉」是两回事）
+            concernArousal: envNumber(process.env.EMOTION_RESONANCE_CONCERN, 0.5, 0, 2),
+            // 让步系数：他低落时她放低姿态（D 下移）
+            yieldD: envNumber(process.env.EMOTION_RESONANCE_YIELD_D, 0.4, 0, 2),
+            // 共振项自己的逐轴上限（在总上限之前先裁一道）
+            axisCap: {
+                P: envNumber(process.env.EMOTION_RESONANCE_P_CAP, 0.2, 0, 1),
+                A: envNumber(process.env.EMOTION_RESONANCE_A_CAP, 0.15, 0, 1),
+                D: envNumber(process.env.EMOTION_RESONANCE_D_CAP, 0.15, 0, 1),
+            },
+        },
+        /**
+         * 主动消息的情绪回灌（B6-α③）：她主动找他说话这件事本身要让她有感觉。
+         * 增量表在 core/proactiveTypes.js 的各类型 emotionFeedback 字段（唯一事实源），
+         * 这里只管开关与衰减系数。
+         */
+        proactiveFeedback: {
+            // 关 = 主动消息完全不改动她的情绪（与改造前一致）
+            enabled: process.env.PROACTIVE_EMOTION_ENABLED !== 'false',
+            // 惯性：与 applyDelta 同一口径，实际位移 = delta × (1 - inertia)
+            inertia: envNumber(process.env.PROACTIVE_EMOTION_INERTIA, 0.55, 0, 0.95),
+        },
     },
     // 记忆检索用的 embedding：慢就快速降级为关键词检索，不拖垮主链路
     embedding: {
@@ -204,6 +250,18 @@ export const config = {
         injectMaxChars: envNumber(process.env.NARRATIVE_INJECT_MAX_CHARS, 300, 50, 2000),
         // 单条注入条目字符上限（超出截断）
         injectEntryMaxChars: envNumber(process.env.NARRATIVE_INJECT_ENTRY_MAX_CHARS, 80, 20, 500),
+        /**
+         * 主动回顾的冷却窗（B6-α④）：一条故事提起后多久之内不再拿出来讲。
+         * 旧做法是在内存里记一个 `_recentStoryIds` 集合（重启即失忆，
+         * 而且 getRandomStory 是随机重掷，小池子里几乎每次都掷回同一条），
+         * 现在改为从**已落盘的 lastRecalledAt** 派生，重启也拦得住复读。
+         */
+        recallCooldownMs: envNumber(
+            process.env.NARRATIVE_RECALL_COOLDOWN_MS,
+            3 * 24 * 60 * 60 * 1000,
+            60 * 1000,
+            30 * 24 * 60 * 60 * 1000
+        ),
         // 语义检索模式：余弦入选门槛
         semanticThreshold: envNumber(process.env.NARRATIVE_SEMANTIC_THRESHOLD, 0.3, 0, 1),
         // 关键词检索模式：至少命中的查询词项数（叙事池小、注入已按 topK+重要度收敛，

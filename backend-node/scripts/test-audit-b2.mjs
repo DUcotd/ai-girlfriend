@@ -351,7 +351,10 @@ console.log('== B2-10 主动回忆接上叙事层（不再只会复述流水账�
     const story = store.narratives.find((n) => n.id === 's1');
     check('recallCount 自增（防复读的账真的记上了）', story?.recallCount === 1,
         `实际 ${story?.recallCount}`);
-    check('_recentStoryIds 真的记录了', ag._recentStoryIds.has('s1'));
+    // B6-α④：防复读账改为「已落盘的 lastRecalledAt + 冷却窗」，不再是重启即失忆的内存集合
+    check('lastRecalledAt 写了（防复读的账落在盘上）', Number.isFinite(story?.lastRecalledAt),
+        String(story?.lastRecalledAt));
+    check('冷却窗内的故事被认定为「刚提过」', ag._recentlyRecalledStoryIds().has('s1'));
 
     // 关闭态安全：叙事层关掉后必须退回原来的情节记忆路径
     const prev = config.narrative.enabled;

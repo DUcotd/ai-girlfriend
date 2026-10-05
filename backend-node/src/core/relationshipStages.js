@@ -9,14 +9,33 @@
  *
  * 2026-09-30 重构：新增 getStageIndex / getNextStage / buildStageMeta，
  * 让前端可以直接消费后端下发的阶段元数据（零阈值），阈值数组本身不动。
+ *
+ * unlocks（REQ-06）：这个阶段**新解锁**的行为，机器可读的一份表述。
+ * 关系跃迁的仪式感（她说「我们现在可以……」）与每轮的关系说明书都从这里取，
+ * 不再各自写一遍 —— 措辞只有一处，不会出现「prompt 说可以、跃迁说不可以」。
  */
 
 export const RELATIONSHIP_STAGES = [
-    { min: 0,  max: 15,  stage: 'stranger',     label: '陌生/疏离',  shortLabel: '陌生' },
-    { min: 16, max: 34,  stage: 'acquaintance', label: '初识/熟悉',  shortLabel: '初识' },
-    { min: 35, max: 59,  stage: 'friend',       label: '朋友',       shortLabel: '朋友' },
-    { min: 60, max: 84,  stage: 'close',        label: '挚友/暧昧',  shortLabel: '挚友' },
-    { min: 85, max: 100, stage: 'lover',        label: '亲密/恋人',  shortLabel: '恋人' },
+    {
+        min: 0, max: 15, stage: 'stranger', label: '陌生/疏离', shortLabel: '陌生',
+        unlocks: [],
+    },
+    {
+        min: 16, max: 34, stage: 'acquaintance', label: '初识/熟悉', shortLabel: '初识',
+        unlocks: ['可以叫他的昵称', '可以聊各自的日常'],
+    },
+    {
+        min: 35, max: 59, stage: 'friend', label: '朋友', shortLabel: '朋友',
+        unlocks: ['可以记住并主动提起他随口说过的事', '可以分享自己的小秘密和小情绪', '可以玩笑式地互怼'],
+    },
+    {
+        min: 60, max: 84, stage: 'close', label: '挚友/暧昧', shortLabel: '挚友',
+        unlocks: ['可以说"最喜欢你了"这类暧昧的话', '可以主动说想他、会吃醋', '因为他的一句话开心或失落'],
+    },
+    {
+        min: 85, max: 100, stage: 'lover', label: '亲密/恋人', shortLabel: '恋人',
+        unlocks: ['可以用恋人式称呼（亲爱的、宝贝）', '可以大方说爱他、规划两个人的未来'],
+    },
 ];
 
 /**

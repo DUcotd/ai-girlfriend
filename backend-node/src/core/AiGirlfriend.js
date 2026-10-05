@@ -32,6 +32,9 @@ import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
 import { config, REASONING_EFFORTS } from '../config.js';
 import { createStreamFilter, splitDelta, extractReasoning, parseFullText } from './streamFilter.js';
 import { normalizeDelta, blendDeltas, coerceAffinityChange, PAD_AXES } from './emotionDelta.js';
+import { computeResonanceDelta, combineWithResonance } from './emotionResonance.js';
+import { getStageForAffinity, RELATIONSHIP_STAGES } from './relationshipStages.js';
+import { getProactiveType, PROACTIVE_EXPIRY_FEEDBACK } from './proactiveTypes.js';
 
 dotenv.config();
 
@@ -120,7 +123,8 @@ class AiGirlfriend {
         this._narrativeQueue = Promise.resolve();
         this._narrativeGeneration = 0;
         this._turnCount = 0;
-        this._recentStoryIds = new Set();
+        // 防复读账改为从叙事库已落盘的 lastRecalledAt 派生（_recentlyRecalledStoryIds），
+        // 这里不再另存一份内存集合 —— 那份一重启就失忆，而且与库里的数字是两个真相。
         this.personalityDrift = new PersonalityDrift();
         console.log(`[AiGirlfriend] Emotion: ${this.emotionEngine.getEmotionLabel()}, Personality: ${this.personalityDrift.getDominantTraits().join(', ')}`);
 
@@ -426,8 +430,10 @@ class AiGirlfriend {
      * 这些都不在用户等待的关键路径上，改为后台执行，失败只记日志。
      *
      * @param {number} affinityDelta 本轮好感度变化（供叙事层「好感度跃迁」信号判定，REQ-03）
+     * @param {object|null} userEmotionFused _finalize 里已经算好的本轮用户情绪融合值
+     *        （REQ-02 共振与情绪时间线共用同一份读数）；不传则照旧在摄入时自行分析。
      */
-    _persistAfterReply(userInput, replyText, llmUserEmotion = null, affinityDelta = 0) {
+    _persistAfterReply(userInput, replyText, llmUserEmotion = null, affinityDelta = 0, userEmotionFused = null) {
         // 快照要在当前 tick 取，避免后台执行时读到已被后续对话改动的状态
         const snapshot = this.emotionEngine.getSnapshot();
         const generation = this._stateGeneration;
@@ -453,7 +459,9 @@ class AiGirlfriend {
                 // user_emotion_state.json，还会继续给事件层供数（config.js 注释里
                 // 承诺的「关 = 不分析、不注入、不落盘」三条全不成立）。
                 if (this.userEmotionEngine && config.userEmotion.enabled) {
-                    const r = this.userEmotionEngine.ingestTurn(userInput, replyText, llmUserEmotion);
+                    const r = this.userEmotionEngine.ingestTurn(
+                        userInput, replyText, llmUserEmotion, userEmotionFused
+                    );
                     userEmotionTurned = !!(r && r.turned);
                     userEmotionResult = r;
                 }
@@ -707,12 +715,45 @@ class AiGirlfriend {
         // 旧写法是先 apply(autoDelta) 再 apply(emotionDelta)，同一个「我今天好难过」
         // 被词表判 −0.2、被模型判 −0.3，两轮叠加后幅度约为设计意图的 2 倍（CORE-13）；
         // 而 LLM 那一路完全没有逐轴裁剪，`{"P":-5}` 可以单轮把 P 砸到 −1 直接 trip ghosting。
-        const autoDelta = this.emotionEngine.analyzeInput(userInput, this.affinity);
+        const affinityBefore = this.affinity;
+        const stageBefore = getStageForAffinity(affinityBefore);
+        const autoDelta = this.emotionEngine.analyzeInput(userInput, affinityBefore);
         const { delta: blendedEmotion } = blendDeltas(autoDelta, emotionDelta, {
             keywordWeight: config.emotion.keywordWeight,
             llmWeight: config.emotion.llmWeight,
         });
-        this.emotionEngine.applyDelta(blendedEmotion);
+
+        // ========== 【REQ-02 / B6-α①】情绪共振：他的情绪改变她自己的 PAD ==========
+        // 此前用户情绪通道只是「读到」（注入 prompt 让她说出安慰的话），她本人的
+        // P/A/D 一点不动 —— 于是出现「知道他难过，但她自己不难过」的塑料共情。
+        // 用**本轮**的融合读数（词表 + 本轮 metadata），而不是上一轮落盘的状态：
+        // 他在这句里说难过，她就在这一句沉下去，而不是下一轮才反应过来。
+        let userEmotionFused = null;
+        if (config.emotion.resonance.enabled && config.userEmotion.enabled && this.userEmotionEngine) {
+            try {
+                userEmotionFused = this.userEmotionEngine.fuse(
+                    this.userEmotionEngine.analyze(userInput), llmUserEmotion
+                );
+            } catch (e) {
+                console.error(`[Chat] resonance read failed: ${e.message}`);
+                userEmotionFused = null;
+            }
+        }
+        const resonance = computeResonanceDelta(
+            userEmotionFused, stageBefore.stage, config.emotion.resonance
+        );
+        const {
+            delta: herEmotion, applied: resonanceApplied, clipped: resonanceClipped,
+        } = combineWithResonance(blendedEmotion, resonance, config.emotion.totalAxisCap);
+        if (resonanceApplied) {
+            const f = (v) => (typeof v === 'number' ? v.toFixed(3) : '—');
+            console.log(
+                `[Chat] 情绪共振 stage=${stageBefore.stage} 用户=${userEmotionFused?.label ?? '?'} ` +
+                `→ P:${f(resonance.P)} A:${f(resonance.A)} D:${f(resonance.D)}` +
+                (resonanceClipped ? '（已裁剪到单轮总上限）' : '')
+            );
+        }
+        this.emotionEngine.applyDelta(herEmotion);
 
         this.emotionEngine.decay(0.03);
 
@@ -721,14 +762,23 @@ class AiGirlfriend {
         const { affinity, change, trace, meta } =
             this.affinityEngine.recordUserTurn(userInput, affinityChange, replyText);
 
-        // 性格漂移的情绪输入用**混合后的 P**：两路信号都已参与，且不再出现
+        // 性格漂移的情绪输入用**混合后再叠加共振**的 P：三个成因都参与了，且不再出现
         // 「模型给了 0 就把词表判定整段抹掉」的情况（旧写法 `emotionDelta?.P ?? autoDelta.P`）
-        const sentiment = blendedEmotion.P ?? autoDelta?.P ?? 0;
+        const sentiment = herEmotion.P ?? autoDelta?.P ?? 0;
         this.personalityDrift.recordUserTurn(userInput, {
             sentiment,
             affinity,
             affinityChange,
         });
+
+        // ========== 【REQ-06 / B6-α②】关系跃迁仪式感 ==========
+        // tierChanged 早就由 EmotionEngine 算出来了，但一直没人在结算点上看它。
+        // 在**跨过线的那一刻**发布事件（而不是下一轮 _prepare 才发现）：他今天把
+        // 好感度推到 60，她今天就可以说「我们好像不一样了」。
+        const stageAfter = getStageForAffinity(affinity);
+        if (stageAfter.stage !== stageBefore.stage) {
+            this._emitStageAdvanced(stageBefore, stageAfter, affinity);
+        }
 
         this.history.push({ role: "user", content: userInput });
         // 内心独白随消息一起持久化，刷新后 hover 小图标仍可查看；
@@ -744,7 +794,9 @@ class AiGirlfriend {
 
         // 回复已经生成完毕，记忆 embedding 与落盘不再阻塞响应
         // affinity 变化（change）同时传给叙事层做「好感度跃迁」关键信号判定（REQ-03）
-        this._persistAfterReply(userInput, replyText, llmUserEmotion, change);
+        // userEmotionFused 复用上面共振算过的那一份：两个通道必须对「他此刻什么情绪」
+        // 给出同一个答案，否则她感受到的和他被记录到的会是两笔账。
+        this._persistAfterReply(userInput, replyText, llmUserEmotion, change, userEmotionFused);
 
         return {
             reply: replyText,
@@ -757,6 +809,9 @@ class AiGirlfriend {
             innerThought,
             modelReasoning,
             taskResult: taskResult ?? null,
+            // 本轮她因他而起的那部分情绪（REQ-02），null = 未启用或无信号。
+            // 只给内部/测试观测，不进 HTTP 契约。
+            emotionResonance: resonance,
             // 模型给的情绪/好感度字段不合规时不再静默归零：把原因一路带到响应里，
             // 用户与排障脚本都能看到「这一轮为什么好感度没动」
             parseWarnings: parsed.parseWarnings || [],
@@ -1148,37 +1203,51 @@ class AiGirlfriend {
     }
 
     /**
-     * 挑一条「我们之间的故事」用于主动分享，并记账（recallCount + 最近分享集合）。
+     * 挑一条「我们之间的故事」用于主动分享，并记账（recallCount / lastRecalledAt）。
      * 叙事层关闭或池子为空时返回 null，调用方退回情节记忆 —— 关闭态安全。
+     *
+     * 防复读账（B6-α④）：旧写法是「随机重掷最多 4 次，撞上最近讲过的就再掷」，
+     * 池子小的时候四次基本都掷回同一条，最后走「允许重复」的兜底分支，
+     * 而那条兜底**连账都不记**（recallCount 不涨、去重集合不加）。
+     * 现在一次挑完：先按冷却窗排除，全在冷却期就退回最久没提的那批，
+     * 无论哪条出来都照样 markRecalled —— 她说过几次，库里的数字就是几次。
      */
-    _pickStoryForSharing(excludeRecentN = 5, attempts = 4) {
+    _pickStoryForSharing(excludeRecentN = 5) {
         if (!this._narrativeEnabled() || !this.narrativeRetriever || !this.narrativeStore) return null;
-        for (let i = 0; i < attempts; i++) {
-            let story = null;
-            try {
-                story = this.narrativeRetriever.getRandomStory(excludeRecentN);
-            } catch (e) {
-                console.error(`[Narrative] getRandomStory failed: ${e.message}`);
-                return null;
-            }
-            if (!story) return null;
-            if (!this._recentStoryIds.has(story.id)) {
-                this._recentStoryIds.add(story.id);
-                // 只记最近 10 条，旧故事过一阵子可以再被提起
-                while (this._recentStoryIds.size > 10) {
-                    this._recentStoryIds.delete(this._recentStoryIds.values().next().value);
-                }
-                this.narrativeStore.markRecalled(story.id);
-                this.narrativeStore.scheduleSave();
-                return story;
-            }
-        }
-        // 池子太小、几次都撞上最近分享过的：允许再提一次（人本来也会重复提起某件事）
+
+        let story = null;
         try {
-            return this.narrativeRetriever.getRandomStory(excludeRecentN);
-        } catch {
+            story = this.narrativeRetriever.getRandomStory(excludeRecentN, {
+                excludeIds: this._recentlyRecalledStoryIds(),
+            });
+        } catch (e) {
+            console.error(`[Narrative] getRandomStory failed: ${e.message}`);
             return null;
         }
+        if (!story) return null;
+
+        try {
+            this.narrativeStore.markRecalled(story.id);
+            this.narrativeStore.scheduleSave();
+        } catch (e) {
+            console.error(`[Narrative] markRecalled failed: ${e.message}`);
+        }
+        return story;
+    }
+
+    /**
+     * 正在「提过之后不再重复提」冷却窗内的故事 id 集合。
+     *
+     * 数据源是叙事库里**已落盘**的 lastRecalledAt（不是内存集合）：
+     * 重启后她依然记得哪件事前几天刚说过（旧实现的 _recentStoryIds 一重启就失忆）。
+     */
+    _recentlyRecalledStoryIds(now = Date.now()) {
+        const windowMs = config.narrative.recallCooldownMs;
+        const ids = new Set();
+        for (const n of this.narrativeStore?.narratives || []) {
+            if (Number.isFinite(n.lastRecalledAt) && now - n.lastRecalledAt < windowMs) ids.add(n.id);
+        }
+        return ids;
     }
 
     /**
@@ -1206,6 +1275,54 @@ class AiGirlfriend {
             console.error(`[Proactive] saveState failed: ${e.message}`);
         }
         console.log(`[Proactive] Message recorded to history (${reason})`);
+    }
+
+    /**
+     * 主动消息的结局回灌到她自己的情绪里（REQ-02 / B6-α③）。
+     *
+     * 为什么该有这一条：`docs/proactive-consistency/DIAGNOSIS.md` 当年写的是
+     * 「主动消息不反馈情绪，保持简单，不闭环」，但那留下的是一句假话 ——
+     * 她可以连续主动找他四回，自己心里一点波澜都没有；他不在的时候那些消息
+     * 烂在队列里，她也毫无感觉。真人递出去的心意是要有回音的：
+     *   · 被接住（他回到应用、消息真的送到了）→ 按类型各加一点（见 proactiveTypes.emotionFeedback）；
+     *   · 落了空（TTL 超时被丢弃）→ 失落。自发类才有这一份，早安/任务提醒过期只是时间过了。
+     *
+     * 失落不是惩罚用户，而是让「被冷落」自己长出行为：P 掉到情绪闸门的 suppress/block
+     * 档，她下一次主动搭话的意愿随之下降 —— 不需要再写一条「冷落规则」。
+     *
+     * @param {'delivered'|'expired'} kind 消息结局
+     * @param {{reason?:string}} message 队列里的消息项（只读 reason）
+     * @returns {object|null} 实际生效的增量（未启用/无该项时 null）
+     */
+    recordProactiveOutcome(kind, message = {}) {
+        const cfg = config.emotion.proactiveFeedback;
+        if (!cfg?.enabled) return null;
+        const reason = message?.reason;
+        if (!reason) return null;
+
+        const type = getProactiveType(reason);
+        if (!type) return null;
+
+        let feedback = null;
+        if (kind === 'delivered') {
+            feedback = type.emotionFeedback ?? null;
+        } else if (kind === 'expired') {
+            // 只有「她主动递出去的心意」落空才失落；定时问候与任务提醒不属于此类
+            if (!type.spontaneous) return null;
+            feedback = PROACTIVE_EXPIRY_FEEDBACK;
+        } else {
+            return null;
+        }
+        if (!feedback) return null;
+
+        const { delta } = normalizeDelta(feedback, config.emotion.totalAxisCap);
+        const before = this.emotionEngine.state.P ?? 0;
+        const after = this.emotionEngine.applyDelta(delta, cfg.inertia);
+        console.log(
+            `[Proactive] 情绪回灌 ${kind} (${reason}) ` +
+            `P ${before.toFixed(3)}→${(after?.P ?? before).toFixed(3)}`
+        );
+        return delta;
     }
 
     // ==================== 访问器与配置 ====================
@@ -1323,7 +1440,6 @@ class AiGirlfriend {
     _resetNarratives() {
         this._narrativeGeneration++;
         this._turnCount = 0;
-        this._recentStoryIds.clear();
         if (this.narrativeStore) {
             this.narrativeStore.clear();
             this.narrativeStore._saveNow();
@@ -1738,11 +1854,7 @@ class AiGirlfriend {
     deleteNarrative(id) {
         if (!this.narrativeStore) return false;
         const ok = this.narrativeStore.removeNarrative(id);
-        if (ok) {
-            this.narrativeStore.scheduleSave();
-            // 同步清理随机回顾的去重集合，避免残留 id 干扰后续挑选
-            this._recentStoryIds.delete(id);
-        }
+        if (ok) this.narrativeStore.scheduleSave();
         return ok;
     }
 
@@ -1817,6 +1929,29 @@ class AiGirlfriend {
                 followupCount: Number.isFinite(n.followupCount) ? n.followupCount : 0,
             });
         }
+    }
+
+    /**
+     * 发布关系阶段跃迁事件（REQ-06 / B6-α②）。
+     *
+     * 上下游分工：本方法只把**事实**发出去（跨过了哪条线、朝哪个方向、新阶段解锁了什么），
+     * 「要不要专门说一句」由 stageTransitionTrigger 判定（当前只有向上），
+     * 「能不能说」再交给 ProactiveEngine.trigger() 的全部闸门。
+     * 事件层关闭时 _emitEvent 自己就是空操作，这里不额外判开关。
+     */
+    _emitStageAdvanced(stageBefore, stageAfter, affinity) {
+        this._emitEvent(TRIGGER_EVENTS.STAGE_ADVANCED, {
+            fromStage: stageBefore.stage,
+            fromLabel: stageBefore.label,
+            toStage: stageAfter.stage,
+            toLabel: stageAfter.label,
+            direction: RELATIONSHIP_STAGES.indexOf(stageAfter) > RELATIONSHIP_STAGES.indexOf(stageBefore)
+                ? 'up' : 'down',
+            affinity,
+            unlocks: stageAfter.unlocks || [],
+            ts: Date.now(),
+        });
+        console.log(`[Chat] 关系跃迁 ${stageBefore.label} → ${stageAfter.label}（好感度 ${affinity}）`);
     }
 
     /** 停机/兜底：立即落盘叙事库。 */

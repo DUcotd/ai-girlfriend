@@ -183,6 +183,32 @@ class ProactiveEngine {
 
         if (data.config) this._applyConfig(data.config, { silent: true });
 
+        /**
+         * 新增的默认开启类型必须能到达「早就存过配置」的用户（B6-α② 顺带修的历史坑）。
+         *
+         * _applyConfig 只做「过滤掉未知 id」，于是老用户磁盘上的 8 条会一直只有 8 条：
+         * REQ-04 后来加的 emotion_resonance / anniversary_recall / promise_followup
+         * 以及本次的 stage_transition 永远进不了他们的 enabledTypes ——
+         * 事件层辛苦触发，最后被 canTrigger() 一句「该类型未启用」静默拦死。
+         *
+         * 记账方式：每次存盘都写下「这份配置是对着哪一版类型目录表达的」(knownTypeIds)。
+         * 加载时把「目录里新增且默认开启」的类型补进去；用户显式关掉的旧类型
+         * 一定在 knownTypeIds 里，因此不会被补回来。
+         * 老文件没有 knownTypeIds 字段时，只补事件驱动类（它们正是这批新增项），
+         * 定时问候/任务提醒一类绝不动，把「误恢复用户选择」的面压到最小。
+         */
+        const known = Array.isArray(data.knownTypeIds) ? data.knownTypeIds : null;
+        const missing = DEFAULT_ENABLED_TYPES.filter(id => !this.config.enabledTypes.includes(id));
+        if (missing.length > 0) {
+            const toAdd = known
+                ? missing.filter(id => !known.includes(id))
+                : missing.filter(id => getProactiveType(id)?.eventDriven === true);
+            if (toAdd.length > 0) {
+                this.config.enabledTypes = [...this.config.enabledTypes, ...toAdd];
+                console.log(`[ProactiveEngine] 新增默认开启的主动消息类型已补全: ${toAdd.join(', ')}`);
+            }
+        }
+
         if (typeof data.dailyMessageCount === 'number' && data.dailyMessageCount >= 0) {
             this.dailyMessageCount = data.dailyMessageCount;
         }
@@ -223,6 +249,8 @@ class ProactiveEngine {
     _saveState() {
         return writeJson(STATE_FILE, {
             config: this.config,
+            // 这份 enabledTypes 是对着哪一版类型目录表达的（供 _loadState 判断哪些类型是新增的）
+            knownTypeIds: [...PROACTIVE_TYPE_IDS],
             dailyMessageCount: this.dailyMessageCount,
             lastDayKey: this.lastDayKey,
             lastTriggerByType: this.lastTriggerByType,
@@ -468,6 +496,13 @@ class ProactiveEngine {
                     this.dailyMessageCount = Math.max(0, this.dailyMessageCount - 1);
                 }
                 console.log(`[ProactiveEngine] Dropped expired message: ${m.reason} (ttl exceeded)`);
+                // 【B6-α③】她主动递出去的话落了空 —— 这份失落要落到她自己的情绪上，
+                // 之后情绪闸门会自然减少下一次主动（不需要另写「冷落规则」）。
+                try {
+                    this.aiGirlfriend.recordProactiveOutcome?.('expired', m);
+                } catch (e) {
+                    console.error(`[ProactiveEngine] expiry feedback failed: ${e.message || e}`);
+                }
             } else {
                 kept.push(m);
             }
@@ -728,6 +763,12 @@ class ProactiveEngine {
         if (this.messageQueue.length === 0) return null;
         const message = this.messageQueue.shift();
         this._saveState();
+        // 【B6-α③】消息真的到了他眼前 —— 回灌她自己的情绪（增量表在 proactiveTypes.js）
+        try {
+            this.aiGirlfriend.recordProactiveOutcome?.('delivered', message);
+        } catch (e) {
+            console.error(`[ProactiveEngine] delivered feedback failed: ${e.message || e}`);
+        }
         return message;
     }
 

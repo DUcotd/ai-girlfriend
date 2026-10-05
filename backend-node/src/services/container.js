@@ -14,6 +14,7 @@ import TriggerRegistry from '../core/TriggerRegistry.js';
 import { emotionTurnTrigger } from '../core/triggers/emotionTurnTrigger.js';
 import { anniversaryTrigger } from '../core/triggers/anniversaryTrigger.js';
 import { promiseFollowupTrigger } from '../core/triggers/promiseFollowupTrigger.js';
+import { stageTransitionTrigger } from '../core/triggers/stageTransitionTrigger.js';
 import { migrateLegacyData } from '../utils/jsonStore.js';
 
 // 先迁移旧版散落数据（<repo>/memory_db → backend-node/data），再初始化各服务
@@ -34,12 +35,14 @@ export const eventBus = new EventBus();
 // ② 触发源注册表（触发源元数据唯一事实源为 triggerEvents.js 的 TRIGGER_DEFS）
 export const triggerRegistry = new TriggerRegistry({ bus: eventBus });
 
-// ③ 【D-1 修复点】注册 3 个事件触发源：emotion_turn / anniversary / promise_followup。
+// ③ 【D-1 修复点】注册 4 个事件触发源：emotion_turn / anniversary / promise_followup /
+//    stage_advanced（REQ-06 关系跃迁仪式感）。
 //    没有这一步，registry 的 subscribers 为空 → 事件层在生产装配下空转。
 //    evaluate 由各触发源模块导出（纯函数），元数据取自 triggerEvents.js。
 triggerRegistry.register(emotionTurnTrigger);
 triggerRegistry.register(anniversaryTrigger);
 triggerRegistry.register(promiseFollowupTrigger);
+triggerRegistry.register(stageTransitionTrigger);
 
 // ④ 订阅总线：把注册好的触发源挂到 eventBus 上（emit 时才会真正派发到触发源）
 triggerRegistry.attach(eventBus);

@@ -36,6 +36,7 @@ const SUITES = [
     'test-audit-b2.mjs',
     'test-audit-b9.mjs',
     'test-audit-b4.mjs',
+    'test-audit-b6.mjs',
 ];
 
 const filter = process.argv[2];

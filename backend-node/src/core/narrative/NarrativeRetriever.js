@@ -201,20 +201,36 @@ export class NarrativeRetriever {
     // ==================== 随机故事（主动回顾） ====================
 
     /**
-     * 从较早的叙事里随机挑一条（避开最近 excludeRecentN 条与最近已回顾的），供主动消息使用。
-     * 与 Memory.getRandomMemory 同思路，但作用于叙事池；优先挑 recallCount 低的。
+     * 从较早的叙事里随机挑一条（避开最近 excludeRecentN 条与正在冷却的），供主动消息使用。
+     *
+     * 防复读账（B6-α④）：excludeIds 是「刚提过、还在冷却窗内」的故事 id 集合，
+     * 由调用方从**已落盘的 lastRecalledAt** 派生。旧写法完全不接收这个集合，
+     * 靠调用方「随机重掷 4 次碰运气」来避重 —— 池子只有几条时每次掷中的都是同一条，
+     * 于是账记了、复读没拦住，而且重启后内存里的去重集合清空，复读更凶。
+     * 全在冷却期时退回「最久没提起」的那批：人本来也会重复讲同一件事，但要隔够久。
      *
      * @param {number} [excludeRecentN]
+     * @param {{excludeIds?: Set<string>|null}} [opts]
      * @returns {object|null}
      */
-    getRandomStory(excludeRecentN = 5) {
+    getRandomStory(excludeRecentN = 5, { excludeIds = null } = {}) {
         const pool = [...(this.store?.narratives || [])]
             .sort((a, b) => a.occurredAt - b.occurredAt);
         if (pool.length === 0) return null;
 
         const cutoff = Math.max(1, pool.length - excludeRecentN);
-        const older = pool.slice(0, cutoff);
-        const candidates = older.length > 0 ? older : pool;
+        let candidates = pool.slice(0, cutoff);
+        if (candidates.length === 0) candidates = pool;
+
+        if (excludeIds && typeof excludeIds.has === 'function' && excludeIds.size > 0) {
+            const fresh = candidates.filter((n) => !excludeIds.has(n.id));
+            if (fresh.length > 0) {
+                candidates = fresh;
+            } else {
+                const oldest = Math.min(...candidates.map((n) => n.lastRecalledAt || 0));
+                candidates = candidates.filter((n) => (n.lastRecalledAt || 0) === oldest);
+            }
+        }
 
         // 优先 recallCount 最少的一批，避免反复复读同一件事
         const minRecall = Math.min(...candidates.map((n) => n.recallCount || 0));

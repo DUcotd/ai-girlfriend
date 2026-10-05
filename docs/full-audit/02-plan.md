@@ -204,7 +204,7 @@
 
 **结论**：陪伴感下一轮的地基不是「再加子系统」，而是 **B0（不丢数据）+ B2（模型给的数不骗人）+ B9（关得掉）+ B4（prompt 说得上话）**。REQ-02 是这批做完后性价比最高的一件，因为它 90% 已经写好，只是没接线。
 
-## 剩余清单（2026-10-05 核对代码后的实况，共约 41 项）
+## 剩余清单（2026-10-05 B6-α 完成后核对，共约 37 项）
 
 | 批次 | 剩余 | 重点项 |
 |---|---|---|
@@ -215,10 +215,10 @@
 | B5 | 11 | CI 补后端 eslint/`next build`/boot smoke、`/health` + logger、`.env.example`、路由层测试、全量档案导出导入、依赖升级与 `.gitattributes`、`start_services.py` 去硬编码 |
 | B7 | 17 | 主动消息 FIFO 与串气泡、后端离线态与重试、乐观更新回滚、401 可操作提示 + token 输入框、向导提前置完成、a11y 基线、触屏 hover-only、类型收口、移动端视口与 safe-area、IME 回车误发 |
 | B8 | 6 | `memory.json` 15 MB 反复重写、总 prompt 预算裁剪（回忆/事实单条上限已随 B4 做掉）、tasks/dedupeSeen/正文长度无界、每轮 9-13 次同步写盘、system 消息位置 |
-| B9 | 4 | 三个开关关不干净（emit/ingest/milestone 仍跑）、开关不持久化、前端无 UI、关闭后队列倒灌 |
-| B6 | α/β | α（REQ-02 共情 + 跃迁仪式感 + 主动消息情绪回灌）依赖 B2/B4/B9；β（REQ-05/07/09）需 PRD §5 的 Q1~Q3 拍板 |
+| B9 | 0 | （已随 B9 批次全部完成，见下方「已完成」） |
+| B6 | β | α 已完成（见会话日志）；β = REQ-05 话题闭环 / REQ-07 自适应节奏 / REQ-09 冷落分层，需 PRD §5 的 Q1~Q3 拍板 |
 
-**已完成**：B0（除 B0-6 后半）、B2（除 2 个尾巴）、**B9 全部**、**B4 全部（除 B4-8 后半）**、B1-3、B3-1、B3-10、B5 的 6 项前置。
+**已完成**：B0（除 B0-6 后半）、B2（除 2 个尾巴）、**B9 全部**、**B4 全部（除 B4-8 后半）**、**B6-α 全部**、B1-3、B3-1、B3-10、B5 的 6 项前置。
 **已取消**：B1-1（事实提取节流 / 省钱模式）—— 成本不作为削减理由。
 
 ## 会话日志（便于下次接续）
@@ -229,15 +229,44 @@
 | 2026-10-04 | **B0**（数据/并发/重置/鉴权/流式）+ **B2**（解析边界/情绪/检索 BM25/账本/叙事接线）+ B1-3 + B5 前置（`run-tests.mjs` 聚合器与沙盒数据目录） | `80e8729` |
 | 2026-10-05 | **B9**（三个子系统真关得掉 + 开关持久化 + 设置页开关） | `98eb821` |
 | 2026-10-05 | **B4**（prompt 层九项：策略接线、好感度单一真源、表达优先级、metadata 统一、中文化、引述围栏、体积压缩、主动消息链去重、身份外观对齐） | `966820e` |
+| 2026-10-05 | **B6-α**（REQ-02 情绪共振、REQ-06 跃迁仪式感、主动消息情绪回灌、防复读账；顺带修好「新增默认开启类型永远进不了老用户 enabledTypes」这个从 REQ-04 就存在的拦死点） | 本次提交 |
 
-**下次开工的断点**：B6-α（依赖已全部满足）——
-① REQ-02 情绪共振：`_finalize` 里让她的 PAD 增量受 `userEmotionEngine` 结果调制（现在只是"读到了但不影响她自己"）；
-② 跃迁仪式感：`updateBaselineForAffinity` 返回的 `tierChanged` 目前在 `AiGirlfriend.js:445` 被丢弃，接上 `TRIGGER_EVENTS` 新事件即可复用事件层；
-③ 主动消息情绪回灌：`recordProactiveMessage` 之后调 `applyDelta`（`docs/proactive-consistency/DIAGNOSIS.md:161-163` 三条遗留里的两条）；
-④ `_recentStoryIds` 与 `getRandomStory` 的防复读账已在 B4/B2 接好，可顺带验证。
+**B6-α 落地的四件事（2026-10-05）**：
 
-**开工前必做的健康检查**：`cd backend-node && npm run check && npm test`（16 套）与
-`cd frontend && npx tsc --noEmit && npx eslint src && npx vitest run`（85 例）。
+| 项 | 做法 | 关键文件 | 开关（关闭态安全） |
+|---|---|---|---|
+| ① 情绪共振 | 本轮用户情绪融合值 → 她的 PAD 第三通道（**叠加**在两路混合结果之上，不是再平均一次），阶段系数调制（陌生 0 / 恋人 1），叠加后统一裁剪到单轮每轴总上限 | `core/emotionResonance.js`（纯函数）、`AiGirlfriend._finalize`、`config.emotion.resonance/totalAxisCap` | `EMOTION_RESONANCE_ENABLED=false` → `applyDelta` 收到的值与改造前逐轴一致（回归测试钉死） |
+| ② 跃迁仪式感 | `_finalize` 结算点上比较前后阶段 → 发布 `stage_advanced` 事件 → `stageTransitionTrigger`（只放行向上）→ 新主动消息类型 `stage_transition`；「解锁项」措辞收敛到 `RELATIONSHIP_STAGES.unlocks`，每轮说明书与跃迁消息同源 | `triggerEvents.js`、`core/triggers/stageTransitionTrigger.js`、`proactiveTypes.js`、`relationshipStages.js`、`prompts/{relationshipContext,proactivePrompts}.js` | 事件层总开关 `TRIGGER_REGISTRY_ENABLED=false`（关掉后照旧结算、只是不发事件）；类型可在设置页单独关 |
+| ③ 主动消息情绪回灌 | 两个结局点：`consumeMessage()`=被接住（按类型表 `emotionFeedback`）、`_pruneQueue()` 过期=落了空（只有 `spontaneous` 类失落）。失落会自然抬高情绪闸门，减少下一次主动 | `AiGirlfriend.recordProactiveOutcome`、`ProactiveEngine.{consumeMessage,_pruneQueue}`、`proactiveTypes.js` | `PROACTIVE_EMOTION_ENABLED=false` → 两条路径零副作用 |
+| ④ 防复读账 | 删掉内存 `_recentStoryIds`（重启即失忆 + 与库里数字两个真相），改由已落盘的 `lastRecalledAt` + `recallCooldownMs` 派生；`getRandomStory` 真正接收排除集合（旧写法靠随机重掷 4 次碰运气，兜底分支连账都不记） | `narrative/NarrativeRetriever.js`、`AiGirlfriend.{_pickStoryForSharing,_recentlyRecalledStoryIds}` | `NARRATIVE_ENABLED=false` 照旧退回情节记忆路径 |
+
+**顺带修的两个历史坑**（都在 REQ-04 就埋下，本次接线才暴露）：
+1. `ProactiveEngine._applyConfig` 只会「过滤未知 id」，老用户磁盘上的 8 类永远只有 8 类 →
+   事件驱动的新类型（emotion_resonance / anniversary_recall / promise_followup）从来没能发出过一条，
+   被 `canTrigger()` 静默拦死。现在存盘记录 `knownTypeIds`（这份配置是对着哪一版目录表达的），
+   加载时只补「目录里新增且默认开启」的类型，用户显式关掉的绝不补回来。
+   本机实测：`data/proactive_state.json` 的 8 类 → 12 类。
+2. 前端 `SettingsDialog` 离线兜底清单也抄了旧的 8 类 —— 改为 `storage.ts` 里单一导出的
+   `DEFAULT_ENABLED_PROACTIVE_TYPES`，并由跨端测试（读后端源码）钉住两份不再漂移。
+3. `buildProactivePrompt('memory_share')` 的场景文案原本以「语气要」结尾（半句话，被截断）。
+
+**测试**：新增 `backend-node/scripts/test-audit-b6.mjs` 94 项断言（纯函数网格 + `_finalize` 集成 +
+事件层端到端 + 两个结局点 + 防复读账 + 类型迁移），`npm test` 17 套全绿；
+前端新增 `proactiveDefaults.test.ts`（4 项）→ vitest 89 例、`tsc --noEmit` 与 `eslint src` 全清。
+
+**B6-β 的下次开工断点**（需要 PRD §5 的 Q1~Q3 拍板才能定优先级）：
+① REQ-07 自适应节奏 —— 本次已经埋好结局点（`recordProactiveOutcome` 是天然的记账入口），
+   下一步给 `recordProactiveMessage` 打 `proactive:{reason,deliveredAt}` 标记并按近 7 日响应率浮动频率；
+② 向下跃迁要不要让她点破（`stageTransitionTrigger.evaluate` 现在对 `direction==='down'` 一律返回 null，
+   事实已经发成事件，只差一个决定）；
+③ REQ-05 话题闭环（`sourceEpisodeId` 写路径）/ REQ-09 冷落分层（`EmotionEngine` 的离线惰性结算）。
+
+**下次开工的断点**：B6-α 已完成，按依赖顺序接着做 **B3（9 项，安全与输入边界）**，
+然后是 **B5（11 项，CI/可观测性/导出）**、**B7（17 项，前端）**、**B8（6 项，性能与容量）**；
+B6-β 与 PRD §5 的 Q1~Q5 一起等拍板。零碎尾巴：B0-6 后半、B2-10 两个尾巴、B4-8 后半。
+
+**开工前必做的健康检查**：`cd backend-node && npm run check && npm test`（17 套）与
+`cd frontend && npx tsc --noEmit && npx eslint src && npx vitest run`（89 例）。
 测试全程写沙盒目录，不会碰 `backend-node/data/`。
 
 ## 执行顺序与里程碑（按「拟人化优先」重排）

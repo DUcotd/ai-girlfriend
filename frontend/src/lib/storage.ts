@@ -66,6 +66,29 @@ const KEYS = {
 
 export const StorageKeys = KEYS;
 
+/**
+ * 主动消息「首次运行的默认勾选」兜底清单。
+ *
+ * 只在后端不可达时用于渲染设置弹窗；挂载后会被 /proactive 下发的真实列表覆盖。
+ * ⚠️ 必须与 backend-node/src/core/proactiveTypes.js 里 defaultEnabled 的类型集合一致 ——
+ * 后端新增默认开启类型而这里漏改时，用户在离线状态下保存一次就会把新类型关掉。
+ * 这条不变量由 src/lib/__tests__/proactiveDefaults.test.ts 跨端钉住。
+ */
+export const DEFAULT_ENABLED_PROACTIVE_TYPES = [
+  "morning_greeting",
+  "night_greeting",
+  "task_reminder",
+  "miss_you",
+  "mood_check",
+  "memory_share",
+  "random_chat",
+  "life_update",
+  "emotion_resonance",
+  "anniversary_recall",
+  "promise_followup",
+  "stage_transition",
+];
+
 /** 首次运行是否已完成引导 */
 export function isSetupComplete(): boolean {
   return Boolean(read(KEYS.apiKey) && read(KEYS.hasCompletedSetup));

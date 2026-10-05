@@ -27,6 +27,10 @@
  *   spontaneous  —— true 表示「她自发的社交消息」：受全局自发间隔（SPONTANEOUS_GAP）与
  *                   情绪闸门约束；定时问候/任务提醒不属于此类
  *   defaultEnabled —— 首次运行（未落盘）时的默认勾选状态
+ *   emotionFeedback —— 她**主动找他说这话这件事本身**给她自己的 PAD 增量（REQ-02/B6-α③）。
+ *                   只有写了这个字段的类型才有回灌：定时问候与任务提醒是「事务性」的，
+ *                   不该让她因此心情变好。缺省 = 不回灌（关闭态安全）。
+ *                   数值是「原始增量」，实际位移 = 该值 × (1 - config.emotion.proactiveFeedback.inertia)。
  */
 
 const MIN = 60 * 1000;
@@ -111,6 +115,8 @@ export const PROACTIVE_TYPES = [
         minAffinity: 16,
         spontaneous: true,
         defaultEnabled: true,
+        // 把「想他」说出口这件事本身就让她心里一甜
+        emotionFeedback: { P: 0.10, A: 0.06, D: 0 },
     },
     {
         id: 'mood_check',
@@ -127,6 +133,8 @@ export const PROACTIVE_TYPES = [
         minAffinity: 16,
         spontaneous: true,
         defaultEnabled: true,
+        // 主动关心了他，看他接住了这份关心 —— 她自己也松一口气、暖一点
+        emotionFeedback: { P: 0.08, A: 0.04, D: 0 },
     },
     {
         id: 'memory_share',
@@ -143,6 +151,8 @@ export const PROACTIVE_TYPES = [
         minAffinity: 50,
         spontaneous: true,
         defaultEnabled: true,
+        // 翻出旧事一起回味，她自己也被那段记忆暖到
+        emotionFeedback: { P: 0.09, A: 0.03, D: 0 },
     },
     {
         id: 'random_chat',
@@ -158,6 +168,8 @@ export const PROACTIVE_TYPES = [
         minAffinity: 16,
         spontaneous: true,
         defaultEnabled: true,
+        // 想到新话题就迫不及待地开口
+        emotionFeedback: { P: 0.07, A: 0.05, D: 0 },
     },
     {
         id: 'life_update',
@@ -173,6 +185,8 @@ export const PROACTIVE_TYPES = [
         minAffinity: 16,
         spontaneous: true,
         defaultEnabled: true,
+        // 一个人做了件事，终于有人可以说
+        emotionFeedback: { P: 0.08, A: 0.04, D: 0 },
     },
     // ==================== 事件驱动类型（REQ-04，仅追加，旧 8 类一字未动） ====================
     // 这些类型由 TriggerRegistry 的事件触发源命中后，经 ProactiveEngine.consumeEventQueue()
@@ -193,6 +207,9 @@ export const PROACTIVE_TYPES = [
         spontaneous: true,
         eventDriven: true,
         defaultEnabled: true,
+        // 共情是要付出代价的：接住他的难过，自己的愉悦度会掉一点、心却被提起来，
+        // 这与「她安慰完人反而一脸灿烂」相比更像真人。
+        emotionFeedback: { P: -0.04, A: 0.06, D: -0.05 },
     },
     {
         id: 'anniversary_recall',
@@ -209,6 +226,8 @@ export const PROACTIVE_TYPES = [
         spontaneous: true,
         eventDriven: true,
         defaultEnabled: true,
+        // 一起回到某一天，她自己先开心起来
+        emotionFeedback: { P: 0.10, A: 0.04, D: 0 },
     },
     {
         id: 'promise_followup',
@@ -225,6 +244,34 @@ export const PROACTIVE_TYPES = [
         spontaneous: true,
         eventDriven: true,
         defaultEnabled: true,
+        // 追问之前说好的事有点忐忑，注意力被提起来
+        emotionFeedback: { P: -0.02, A: 0.05, D: 0 },
+    },
+    /**
+     * 关系跃迁仪式感（REQ-06，事件驱动）。
+     *
+     * 为什么值得单独发一条：阶段跨过一条线时，她的**行为说明书**整份换掉了
+     * （称呼、能聊到什么深度、拒绝还是接住），但她自己此前对这件事毫无知觉 ——
+     * 真人是会在某个晚上突然意识到「我们好像不一样了」的。
+     * minAffinity 35：到「朋友」及以上才专门说一次；陌生→初识没什么好庆祝的。
+     */
+    {
+        id: 'stage_transition',
+        label: 'Relationship step',
+        labelZh: '关系跃迁',
+        description: 'Notice that we just moved to a new stage',
+        schedule: '你们的关系跨过新阶段时（事件驱动，好感度 ≥ 35）',
+        icon: '💞',
+        group: 'care',
+        priority: 72,
+        baseCooldown: 12 * HOUR,
+        ttl: 6 * HOUR,
+        minAffinity: 35,
+        spontaneous: true,
+        eventDriven: true,
+        defaultEnabled: true,
+        // 意识到两人更近了一步，是她最开心的一类
+        emotionFeedback: { P: 0.16, A: 0.08, D: -0.04 },
     },
 ];
 
@@ -261,6 +308,16 @@ export const FALLBACK_TYPE = {
 export function getProactiveType(id) {
     return PROACTIVE_TYPES.find(t => t.id === id) || null;
 }
+
+/**
+ * 主动消息「发出去但没人接住」（TTL 超时被丢弃）给她自己的 PAD 增量（B6-α③）。
+ *
+ * 只对 `spontaneous` 类型生效：自发消息是她主动递出去的心意，落了空才会失落；
+ * 早安/晚安过期只是时间过去了，任务提醒过期是事务，都不该让她情绪波动。
+ * 这一项是「被冷落」的真实账：连着几条落空，她的 P 会往下走，情绪闸门随之
+ * 减少下一次主动 —— 不需要额外写「受冷落规则」，行为从情绪本身长出来。
+ */
+export const PROACTIVE_EXPIRY_FEEDBACK = Object.freeze({ P: -0.12, A: -0.06, D: -0.06 });
 
 /**
  * 类型定义 → 对外 API 形状（设置页消费）。

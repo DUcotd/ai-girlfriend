@@ -169,12 +169,21 @@ class UserEmotionEngine {
      * @param {string} userInput   用户输入原文
      * @param {string} replyText   AI 回复原文（保留参数，便于后续扩展；本期不参与分析）
      * @param {object|null} llmUserEmotion 主对话 metadata 里的 user_emotion（可缺省）
+     * @param {object|null} precomputedFused 调用方本轮已算好的融合值（缺省时自行 analyze+fuse）
      * @returns {{ current:object, turned:boolean, trend:object }}
      *          turned=true 表示本轮发生显著情绪转折（|Δvalence| ≥ turnThreshold）
      */
-    ingestTurn(userInput, replyText = '', llmUserEmotion = null) {
-        const lex = this.analyze(userInput);
-        const fused = this.fuse(lex, llmUserEmotion);
+    ingestTurn(userInput, replyText = '', llmUserEmotion = null, precomputedFused = null) {
+        // 复用调用方（_finalize 的情绪共振，REQ-02）已经算好的融合值：
+        // 「她因他而起的那部分感受」与「时间线上记下来的读数」必须是同一个答案，
+        // 否则两条链路各判一次，账目会从这一轮开始分叉。不传则照旧自行分析。
+        const reusable = precomputedFused && typeof precomputedFused === 'object'
+            && Number.isFinite(precomputedFused.valence)
+            && Number.isFinite(precomputedFused.arousal)
+            && Number.isFinite(precomputedFused.intensity);
+        const fused = reusable
+            ? precomputedFused
+            : this.fuse(this.analyze(userInput), llmUserEmotion);
 
         const prevValence = Number.isFinite(this.state.valence) ? this.state.valence : 0;
         const delta = Math.abs(fused.valence - prevValence);

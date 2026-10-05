@@ -80,12 +80,14 @@ export function buildProactivePrompt(reason, data = {}, affinity = 35) {
         random_chat: buildRandomChatPrompt(affinityLevel, hour),
         miss_you: pickByLevel(missYouPrompts(inactiveDesc(data.inactiveMinutes || 0)), affinityLevel),
         mood_check: pickByLevel(moodCheckPrompts(hour < 18 ? "今天" : "这几天"), affinityLevel),
-        memory_share: `你想起了和用户之前聊过的某件事，想和他们分享这个回忆。可以说"突然想起来..."或"之前你说过..."开头，然后表达你对这段回忆的感受。语气要`,
+        memory_share: `你想起和用户之前聊过的某件事，想跟他分享这段回忆。可以用「突然想起来…」或「之前你说过…」开头，然后说说这件事给你的感受，语气按【关系阶段】来。`,
         life_update: buildLifeUpdatePrompt(affinityLevel, data),
         // 事件驱动类型（REQ-04，仅追加分支，旧分支不动）
         emotion_resonance: buildEmotionResonancePrompt(affinityLevel, data),
         anniversary_recall: buildAnniversaryRecallPrompt(affinityLevel, data),
         promise_followup: buildPromiseFollowupPrompt(affinityLevel, data),
+        // REQ-06 关系跃迁仪式感
+        stage_transition: buildStageTransitionPrompt(affinityLevel, data),
     };
 
     return prompts[reason] || "请主动找用户说一句话，可以是问候、分享心情或简单的闲聊。";
@@ -207,6 +209,24 @@ function buildPromiseFollowupPrompt(affinityLevel, data = {}) {
     const title = data.title || '之前说好的事';
     const summary = data.summary ? `（${data.summary}）` : '';
     return `你想起和用户之前有个约定「${title}」${summary}。用撒娇或关心的语气轻轻问一句进展，表达你还记得、也尊重他的节奏，绝不催促、不绝不施压。`;
+}
+
+/**
+ * 关系跃迁仪式感（REQ-06）：她意识到两人之间跨过了一条线。
+ *
+ * 措辞要**具体**：解锁项来自 relationshipStages.js 的那张表（与每轮的【关系阶段】同源），
+ * 于是她说得出「我现在可以叫你昵称了」，而不是空泛的「我们好像更近了」。
+ * 分寸由【关系阶段】块自己守着 —— 跃迁不绕过任何边界。
+ */
+function buildStageTransitionPrompt(affinityLevel, data = {}) {
+    const fromLabel = data.fromLabel || '上一个阶段';
+    const toLabel = data.toLabel || '新的阶段';
+    const unlocks = Array.isArray(data.unlocks) ? data.unlocks.filter(Boolean).slice(0, 3) : [];
+    const unlockText = unlocks.length
+        ? `\n- 你意识到从今天起有些不一样了：${unlocks.join('；')}`
+        : '';
+    return `你们的关系刚刚往前走了一步：从「${fromLabel}」变成了「${toLabel}」。${unlockText}
+- 找一个自然的由头把这份察觉说出来（可以是「我刚才忽然觉得…」），带着害羞或开心，不要像宣布规则，也不要报阶段名和数字。`;
 }
 
 /**

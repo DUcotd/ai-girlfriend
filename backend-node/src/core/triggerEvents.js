@@ -27,6 +27,11 @@ export const TRIGGER_EVENTS = Object.freeze({
     USER_EMOTION_TURN: 'user_emotion_turn',
     /** 叙事里程碑（纪念日 / 约定到期），由 Narrative 层产出（REQ-03 / REQ-05 地基） */
     NARRATIVE_MILESTONE: 'narrative_milestone',
+    /**
+     * 关系阶段跃迁（REQ-06）：好感度跨过了一条阶段线，由 AiGirlfriend._finalize 发布。
+     * 与 NARRATIVE_MILESTONE 的区别是成因 —— 那条是「事情发生了」，这条是「我们变了」。
+     */
+    STAGE_ADVANCED: 'stage_advanced',
     /** 话题开启（预留，P1 扩展点） */
     TOPIC_OPEN: 'topic_open',
     /** 话题关闭（预留，P1 扩展点） */
@@ -64,6 +69,16 @@ export const TRIGGER_EVENT_SCHEMAS = Object.freeze({
     // topic_open / topic_close 为预留事件，payload 暂不定形（P1 扩展）
     [TRIGGER_EVENTS.TOPIC_OPEN]: Object.freeze({}),
     [TRIGGER_EVENTS.TOPIC_CLOSE]: Object.freeze({}),
+    [TRIGGER_EVENTS.STAGE_ADVANCED]: Object.freeze({
+        fromStage: 'string',   // 跨过之前的阶段名
+        fromLabel: 'string',   // 中文标签（陌生/初识/朋友/挚友/恋人）
+        toStage: 'string',     // 跨过之后的阶段名
+        toLabel: 'string',
+        direction: 'string',   // 'up' | 'down'（好感度下降也会跨阶段）
+        affinity: 'number',    // 结算后的好感度 0-100
+        unlocks: 'array',      // 新阶段解锁的行为（relationshipStages.js 唯一事实源）
+        ts: 'number',
+    }),
 });
 
 /**
@@ -112,6 +127,23 @@ export const TRIGGER_DEFS = Object.freeze({
         cooldownMs: 60 * MIN,
         ttlMs: 60 * MIN,
         description: '约定类事件到期 → 追问闭环',
+    }),
+    /**
+     * 关系阶段向上跃迁 → 仪式感确认（REQ-06）。
+     *
+     * 为什么 TTL 给到 12 h（其余事件类都是 20~60 min）：跃迁是**低频且不过时**的消息，
+     * 他半夜睡了，第二天回来她再说「我想了很久，我们好像不一样了」依然成立；
+     * 而情绪关怀拖两小时就已经不合时宜了。冷却同量级，防止好感度在阶段线上
+     * 来回抖动时她把同一句话反复说。
+     */
+    STAGE_ADVANCED: Object.freeze({
+        id: 'stage_advanced',
+        events: [TRIGGER_EVENTS.STAGE_ADVANCED],
+        targetType: 'stage_transition',
+        priority: 72,
+        cooldownMs: 12 * 60 * MIN,
+        ttlMs: 12 * 60 * MIN,
+        description: '关系跨过新阶段 → 仪式感确认',
     }),
 });
 
