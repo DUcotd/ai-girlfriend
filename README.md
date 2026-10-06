@@ -5,18 +5,27 @@
 ## 启动
 
 ```bash
-# 终端 1 - 后端 (端口 8000)
-cd backend-node
-npm install
-npm run dev
+# 方式一（推荐，一条命令拉起两端，脱离会话存活）
+python scripts/start_services.py            # 已在跑就跳过；结束时打印每端状态
+python scripts/start_services.py --status   # 只查状态不启动
 
-# 终端 2 - 前端 (端口 3000)
-cd frontend
-npm install
-npm run dev
+# 方式二：手动开两个终端
+cd backend-node && npm install && npm run dev     # 后端 :8000
+cd frontend && npm install && npm run dev         # 前端 :3000
 ```
 
 打开 http://localhost:3000，首次运行会引导配置 API Key。
+
+**判断后端到底活没活**：`curl http://127.0.0.1:8000/health`（免鉴权）。
+端口通了不代表服务可用，所以 `/health` 会真去检查数据目录可写性，并回答这几个问题：
+
+| 字段 | 含义 |
+|------|------|
+| `ok` / `dataDirWritable` | 数据目录能不能写（不能写等于所有对话与记忆都会丢） |
+| `version` / `node` / `uptimeSeconds` | 现在跑的是哪个版本、起来多久了 |
+| `llmConfigured` | 后端**内存里**有没有 API Key。`false` 不是故障，见下面那段说明 |
+| `model` / `baseUrlHost` | 当前模型与上游主机名（只给主机名，不给完整地址） |
+| `chatQueueDepth` / `proactiveQueueSize` | 对话队列与主动消息队列的长度（超过上限的新请求会被 429） |
 
 > API Key 只保存在浏览器 localStorage，后端进程内存持有、**从不落盘**：
 > 单独重启后端后，需要先用浏览器打开一次页面（前端启动时会自动把配置回灌给后端），
@@ -25,7 +34,9 @@ npm run dev
 
 ## 环境变量
 
-后端全部运行时数值集中在 `src/config.js`（模块里不允许出现裸数字，一律走 `envNumber` 并带范围裁剪），这里只列常用的：
+后端全部运行时数值集中在 `src/config.js`（模块里不允许出现裸数字，一律走 `envNumber` 并带范围裁剪），
+**完整清单见 `backend-node/.env.example`**（80 多个旋钮，按 10 组带说明注释；复制成 `.env` 就能改，
+一个都不填也能跑）。这里只列常用的：
 
 | 变量 | 默认 | 作用 |
 |------|------|------|
@@ -78,7 +89,7 @@ npm run dev
 ## 技术栈
 
 - **前端**: Next.js 16 (App Router) + React 19 + TypeScript + TailwindCSS + Framer Motion + zustand
-- **后端**: Node.js (ESM) + Express
+- **后端**: Node.js **>= 20.9**（ESM）+ Express — 版本要求写在两个 `package.json` 的 `engines` 里，CI 也跑 20
 - **AI**: 兼容 OpenAI API（OpenAI / DeepSeek / Claude 等）
 
 ## 目录结构
@@ -252,18 +263,32 @@ node scripts/verify-thinking-split.mjs    # 终端 2
 
 ## 开发
 
+本地门禁与 CI 完全等价，四条命令跑完就能判断这次改动是否可提交：
+
 ```bash
-# 后端语法检查（不依赖子进程，纯解析）
-cd backend-node && npm run check
+# 后端
+cd backend-node
+npm run check      # 语法解析（src + scripts）+ 真导入冒烟（scripts/smoke-import.mjs）
+npm run lint       # 零依赖静态检查 R1~R5（全局遮蔽 / 重复 export default / 空 catch / 调试残留 / 未用 import）
+npm test           # 20 套测试：跑完全部再汇总，全程写沙盒数据目录
 
-# 流式过滤器单元测试
-cd backend-node && npm test
-
-# 前端类型检查与 Lint / 构建
-cd frontend && npx tsc --noEmit
-cd frontend && npx eslint src
-cd frontend && npm run build      # 注意：与 dev server 不要同时跑（会冲突 .next）
+# 前端
+cd frontend
+npm run typecheck  # tsc --noEmit
+npm run lint       # eslint src
+npm run test       # vitest run
+npm run build      # 生产构建（不要与 dev server 同时跑，会抢 .next）
 ```
+
+几点约定，改动时请一起守住：
+
+- **测试一律写沙盒**：`scripts/run-tests.mjs` 会给每个子进程注入 `AI_GIRLFRIEND_DATA_DIR`，
+  所以跑完 `backend-node/data/` 的 mtime 应该零变化。自己新加 HTTP 测试套件时，
+  结尾必须 `proactiveEngine.stop()` 再 `process.exit(code)` —— 容器起的定时器会让进程挂着不退出。
+- **测试必须能失败**：新套件请走 `scripts/lib/testKit.mjs`，并把 `expect` 写成实际断言条数；
+  「某一节被注释掉」或「中途 return」都会因为条数不符而变红（这是审计 INFRA-01/02 的教训）。
+- 后端不上 eslint 是因为装它要几十 MB 而本机出网只有几十 KB/s；`scripts/lint-style.mjs`
+  用五条有针对性的规则替代，每条都对应一次真实事故（详见该文件头）。
 
 ## API 密钥
 

@@ -20,7 +20,7 @@
  *   - 队列上限：超出丢优先级最低（同级丢最新入队的，保留更早的候补）。
  */
 
-import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+import { readJson, writeJson } from '../utils/jsonStore.js';
 import {
     TRIGGER_EVENTS,
     TRIGGER_EVENT_NAMES,

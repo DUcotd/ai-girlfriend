@@ -2,7 +2,6 @@
  * 任务路由：/tasks CRUD + 摘要 + 到期查询
  */
 import { Router } from 'express';
-import { asyncHandler } from '../middleware/asyncHandler.js';
 import { fail } from '../middleware/validate.js';
 import TaskManager from '../core/TaskManager.js';
 import { parseDueTime } from '../core/taskTime.js';

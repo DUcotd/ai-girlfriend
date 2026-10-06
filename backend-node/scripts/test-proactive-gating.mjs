@@ -13,15 +13,14 @@
 import fs from 'node:fs';
 import { dataPath } from '../src/utils/jsonStore.js';
 
-let failed = 0;
-function check(name, cond, detail = '') {
-    if (cond) {
-        console.log(`  OK  ${name}`);
-    } else {
-        failed++;
-        console.error(`  FAIL ${name}${detail ? ' — ' + detail : ''}`);
-    }
-}
+import { createHarness } from './lib/testKit.mjs';
+
+// 断言外壳统一走 scripts/lib/testKit.mjs（B5-2）：expect 是「本套件应执行的断言条数」，
+// 少跑了（某节被注释、中途 return）就算失败 —— 旧写法只数失败数，跳过整节照样绿。
+const t = createHarness('proactive-gating', { expect: 40 });
+const check = t.check;
+// 默认按失败处理：只有 t.finish() 真的跑到才会被改写（异常穿透时也不会误报全绿）
+let exitCode = 1;
 
 // ---- 真实 proactive_state.json 备份（必须在动态 import 之前） ----
 const stateUrl = dataPath('proactive_state.json');
@@ -150,11 +149,7 @@ try {
         && status.spontaneousGapRemainingMs >= 0);
 
     console.log('');
-    if (failed > 0) {
-        console.error(`test-proactive-gating: ${failed} 项失败`);
-        process.exit(1);
-    }
-    console.log('test-proactive-gating: 全部通过');
+    exitCode = t.finish();
 } finally {
     if (hadStateFile) {
         fs.writeFileSync(stateUrl, stateBackup);
@@ -162,3 +157,6 @@ try {
         try { fs.unlinkSync(stateUrl); } catch { /* 本来就没有 */ }
     }
 }
+
+// 备份/还原完成后才退出：失败时立刻 exit 会跳过 finally，把用户数据留在污染状态
+process.exit(exitCode);

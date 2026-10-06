@@ -28,8 +28,12 @@ import crypto from 'crypto';
 /** 环境变量名：鉴权 token 的唯一来源。 */
 export const TOKEN_ENV = 'AI_GIRLFRIEND_TOKEN';
 
-/** 健康检查路径：豁免鉴权，供前端 / 探活工具判断后端是否活着。 */
-export const HEALTH_PATHS = new Set(['/']);
+/**
+ * 健康检查路径：豁免鉴权，供前端 / 探活工具 / CI 的 boot smoke 判断后端是否真的活着。
+ * `/` 只回一句「活着」；`/health` 回可判断的状态字段（数据目录可写、Key 是否已下发…），
+ * 两者都不含任何对话内容与凭证，因此免鉴权不构成信息泄漏（主机名除外，那是自己的配置）。
+ */
+export const HEALTH_PATHS = new Set(['/', '/health']);
 
 /** 静态资源前缀：TTS 音频等由 <audio> 标签直取，带不了 Authorization 头，
  *  故在「未配 token 的本机守卫模式」下免检；配了 token 则要求 ?token= 通过。 */

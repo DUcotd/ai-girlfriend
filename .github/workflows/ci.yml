@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   backend:
-    name: backend (check + test)
+    name: backend (check + lint + test + boot)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -22,25 +22,58 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Node 20：满足 backend engines（>=18），且是当前 LTS，兼容 Next.js 16 / React 19。
+      # Node 20：与 backend-node/package.json 的 engines(>=20.9) 与前端要求一致。
+      # 之前 CI 跑 20、engines 写 >=18，等于「CI 从没验证过声称支持的最低版本」。
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            backend-node/package-lock.json
+            frontend/package-lock.json
 
-      # lockfile 已入库（见 .gitignore 顶部说明），用 npm ci 严格按锁文件安装：
+      # lockfile 已入库，用 npm ci 严格按锁文件安装：
       # 版本可复现，且锁文件与 package.json 不一致时会直接失败（早暴露）。
       - name: Install dependencies
         run: npm ci
 
-      - name: Syntax check
+      # 语法解析 + **真导入冒烟**（容器与 app 能不能 import 起来）
+      - name: Syntax & import check
         run: npm run check
+
+      # 零依赖静态检查（R1 全局遮蔽 / R2 重复 export default / R3 空 catch /
+      # R4 调试残留 / R5 未使用 import）。每条规则都对应一次实际事故，
+      # 见 scripts/lint-style.mjs 的文件头说明。
+      - name: Static lint
+        run: npm run lint
 
       - name: Run tests
         run: npm test
 
+      # 起一次真实服务并探 /health：CI 里「测试全绿但服务起不来」是可能发生的
+      # （端口/装配/数据目录写入这类问题不在单测路径上）。
+      - name: Boot smoke
+        run: |
+          set -e
+          mkdir -p /tmp/aigf-boot
+          AI_GIRLFRIEND_DATA_DIR=/tmp/aigf-boot PORT=8123 HOST=127.0.0.1 \
+            node src/server.js > boot.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8123/health > health.json; then break; fi
+            if [ "$i" = "30" ]; then echo "启动失败"; cat boot.log; exit 1; fi
+            sleep 1
+          done
+          echo "/health →"; cat health.json
+          grep -q '"ok":true' health.json || { echo "health.ok 不是 true"; exit 1; }
+          grep -q '"dataDirWritable":true' health.json || { echo "数据目录不可写"; exit 1; }
+          # 未匹配路径必须是 JSON，不能让前端去 parse 一段 HTML
+          curl -sf http://127.0.0.1:8123/nope >/dev/null 2>&1 || true
+          kill $PID
+
   frontend:
-    name: frontend (tsc + eslint + vitest)
+    name: frontend (tsc + lint + test + build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -49,21 +82,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Node 20：满足 backend engines（>=18），且是当前 LTS，兼容 Next.js 16 / React 19。
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      # 同 backend：lockfile 已入库，npm ci 严格安装。
       - name: Install dependencies
         run: npm ci
 
+      # 与本地等价：一律走 package.json 的 scripts，不再在 workflow 里手写 npx 命令
+      # （以前 CI 跑 `npx tsc --noEmit`，本地跑的是别的，两边会悄悄不一致）
       - name: Type check
-        run: npx tsc --noEmit
+        run: npm run typecheck
 
       - name: Lint
-        run: npx eslint src
+        run: npm run lint
 
       - name: Unit tests
-        run: npx vitest run
+        run: npm run test
+
+      # 生产构建：类型与 lint 全过但 build 失败的情况真实存在
+      # （next 的代码分割、环境变量内联、ISR 配置错误只在 build 时才报）。
+      - name: Production build
+        run: npm run build

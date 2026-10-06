@@ -21,6 +21,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 顺序即依赖顺序：streamFilter 是最底层的纯函数，audit-b0 覆盖跨引擎的编排。
 const SUITES = [
     'test-stream-filter.mjs',
+    'test-boot-smoke.mjs',
+    'test-env-docs.mjs',
     'test-affinity.mjs',
     'test-personality.mjs',
     'test-memory.mjs',

@@ -8,13 +8,14 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "check": "node --experimental-vm-modules scripts/check-syntax.mjs",
+    "lint": "node scripts/lint-style.mjs",
     "test": "node scripts/run-tests.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": ">=20.9.0"
   },
   "dependencies": {
     "cors": "^2.8.5",

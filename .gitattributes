@@ -1,0 +1,52 @@
+# ============================================================================
+# 行尾与二进制文件的统一口径
+#
+# 为什么需要：本机 git 的 core.autocrlf=true，而 CI 跑在 Linux 上。
+# 没有这个文件时，「同一次提交在两边看到的字节数不同」，
+# 于是出现过：改了个 .json 里的一行、git 把整文件行尾都换了，diff 变成几百行噪声；
+# 也出现过 .png/.mp3 被当文本做 CRLF 转换而损坏。
+#
+# 取向：**只声明文本/二进制属性，不强推 eol**。
+# 已经提交的内容按现状（仓库里是 LF），不做一次全库 renormalize ——
+# 那会把每个文件都改成"已修改"，把真正的改动埋在噪声里。
+# 需要统一换行时，用 `git add --renormalize <path>` 按目录分批做。
+# ============================================================================
+
+* text=auto
+
+# --- 明确按文本处理（保证 diff 里不出现 ^M） ---
+*.js   text
+*.mjs  text
+*.cjs  text
+*.ts   text
+*.tsx  text
+*.json text
+*.md   text
+*.yml  text
+*.yaml text
+*.css  text
+*.html text
+*.svg  text
+.env.example text
+
+# --- 二进制：绝不做行尾转换 ---
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.mp3  binary
+*.wav  binary
+*.m4a  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+
+# --- 锁文件与生成物：diff 里不作为评审重点 ---
+package-lock.json text merge=binary
+frontend/package-lock.json text merge=binary
+
+# --- GitHub 语言统计/差异 ---
+*.md   linguist-documentation=false
+backend-node/data/** text=false

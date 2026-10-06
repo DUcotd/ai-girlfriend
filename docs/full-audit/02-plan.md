@@ -204,22 +204,23 @@
 
 **结论**：陪伴感下一轮的地基不是「再加子系统」，而是 **B0（不丢数据）+ B2（模型给的数不骗人）+ B9（关得掉）+ B4（prompt 说得上话）**。REQ-02 是这批做完后性价比最高的一件，因为它 90% 已经写好，只是没接线。
 
-## 剩余清单（2026-10-06 B3 完成后核对，共约 28 项）
+## 剩余清单（2026-10-07 B5 大部分完成后核对，共约 15 项）
 
 | 批次 | 剩余 | 重点项 |
 |---|---|---|
 | B0 | 0.5 | B0-6 后半：`MemoryStore`/`NarrativeStore`/`UserEmotionEngine` 的去抖 flush 仍不回传写盘结果 |
 | B1 | 3.5 | B1-2 调用计数可见、B1-4 嵌入熔断、B1-5 query 嵌入 memoize、B1-6 后台队列合并（不丢信息） |
 | B2 | 0.5 | B2-10 尾巴：`EmotionEngine.history` 无消费者（留给 REQ-10）、narrative 的 `tags/jokeTrigger/sourceEpisodeId` 无写路径（REQ-05 前置） |
-| B3 | 1 | 只剩**设置页把 baseUrl 的分级（ok/warn/block）显示出来**（后端 `/config/status` 已回显 baseUrl、`POST /config` 已回 warnings，差前端一处 UI）；以及 B7 里那条「前端消费 `error_code`」 |
-| B5 | 11 | CI 补后端 eslint/`next build`/boot smoke、`/health` + logger、`.env.example`、路由层测试、全量档案导出导入、依赖升级与 `.gitattributes`、`start_services.py` 去硬编码 |
+| B3 | 1 | 只剩**设置页把 baseUrl 的分级（ok/warn/block）显示出来**（后端 `/config/status` 已回显 baseUrl、`POST /config` 已回 warnings，差前端一处 UI）；配合 B7 的「消费 `error_code`」一起做最省 |
+| B5 | 2.5 | ① B5-12 全量档案导出/导入（`data/` 全部 JSON + 校验和 + 导入前备份，`POST /reset` 前自动快照）——唯一成体系没做的；② B5-13 依赖升级（`multer` 1.x→2.x、`openai` 4→5、`express` 4→5）：本机出网只有几十 KB/s，装包会拖很久，**留到有快网络时执行**，命令已写在下面；③ B5-3 的「全部迁到 node:test」被有意收窄成 `scripts/lib/testKit.mjs`（理由见下） |
 | B7 | 17 | 主动消息 FIFO 与串气泡、后端离线态与重试、乐观更新回滚、**401/稳定码可操作提示 + token 输入框**、向导提前置完成、a11y 基线、触屏 hover-only、类型收口、移动端视口与 safe-area、IME 回车误发 |
 | B8 | 6 | `memory.json` 15 MB 反复重写、总 prompt 预算裁剪、tasks/dedupeSeen/正文长度无界、每轮 9-13 次同步写盘、system 消息位置 |
-| B9 | 0 | （已随 B9 批次全部完成，见下方「已完成」） |
-| B6 | β | α 已完成（见会话日志）；β = REQ-05 话题闭环 / REQ-07 自适应节奏 / REQ-09 冷落分层，需 PRD §5 的 Q1~Q3 拍板 |
+| B9 | 0 | （已随 B9 批次全部完成） |
+| B6 | β | α 已完成；β = REQ-05 话题闭环 / REQ-07 自适应节奏 / REQ-09 冷落分层，需 PRD §5 的 Q1~Q3 拍板 |
 
-**已完成**：B0（除 B0-6 后半）、B2（除 2 个尾巴）、**B9 全部**、**B4 全部（除 B4-8 后半）**、**B6-α 全部**、**B3 除前端 baseUrl 高亮外全部**、B1-3、B5 的 6 项前置。
+**已完成**：B0（除 B0-6 后半）、B2（除 2 个尾巴）、**B9 全部**、**B4 全部（除 B4-8 后半）**、**B6-α 全部**、**B3 除前端 baseUrl 高亮外全部**、**B5 的 B5-1/2/4/5/6/7/8/9/10/11/13(部分)**、B1-3。
 **已取消**：B1-1（事实提取节流 / 省钱模式）—— 成本不作为削减理由。
+**有意收窄**：B5-3「把 10 个脚本整体迁到 `node:test`」。现有脚本各自带着「备份/还原真实 `data/*.json`、动态 import 顺序、沙盒目录」的装配逻辑，全量搬迁的风险大于收益；真正要解决的问题（INFRA-01/02：测试必须能失败）已经由 `scripts/lib/testKit.mjs` 的 `expect` 机制达成，并配了反向验证。
 
 ## 会话日志（便于下次接续）
 
@@ -231,6 +232,33 @@
 | 2026-10-05 | **B4**（prompt 层九项：策略接线、好感度单一真源、表达优先级、metadata 统一、中文化、引述围栏、体积压缩、主动消息链去重、身份外观对齐） | `966820e` |
 | 2026-10-05 | **B6-α**（REQ-02 情绪共振、REQ-06 跃迁仪式感、主动消息情绪回灌、防复读账；顺带修好「新增默认开启类型永远进不了老用户 enabledTypes」这个从 REQ-04 就存在的拦死点） | `56002f2` |
 | 2026-10-06 | **B3**（接口契约与安全）：`POST /config` 全字段校验、baseUrl 分级、消费型 GET 改 POST、上游错误稳定码、上传/TTS 收紧、自由文本上限、一致性小修打包、日志隐私与队列上限。新增 `test-audit-b3.mjs` 95 项 → 后端 18 套全绿、前端 89 例全绿 | `728cacb` |
+| 2026-10-07 | **B5**（工程基建，除档案导出与依赖升级）：`GET /health` + 零依赖 logger（时间戳/级别/堆栈）、启动脚本改探 `/health`、`npm run check` 补真导入冒烟、零依赖静态检查 `npm run lint`、`testKit` 让「用例没跑」也判失败、`.env.example`（86 个旋钮分 10 组）+ 文档一致性测试、CI 补 lint/build/boot smoke、`.gitattributes`、engines 对齐 20.9。后端 **20 套**全绿、前端 typecheck/lint/test/build 全绿 | 本次提交 |
+
+**B5 落地要点（2026-10-07）**：
+
+| 项 | 做法 | 关键文件 |
+|---|---|---|
+| B5-10 | `GET /health`（免鉴权，`ok/version/node/uptimeSeconds/llmConfigured/model/baseUrlHost/dataDirWritable/companion/chatQueueDepth/proactiveQueueSize`；只回主机名不回完整地址，绝不含 Key）；`utils/logger.js` 在服务进程给 console 包一层时间戳+级别（业务代码两百多处 `console.log` 一个字没动），`errorHandler` 的 500 现在带堆栈但堆栈只进日志；`start_services.py` 由「探 TCP 端口」改成「探 `/health` 看 `ok`」并去掉硬编码路径 | `app.js`、`utils/logger.js`、`middleware/errorHandler.js`、`middleware/auth.js`、`scripts/start_services.py` |
+| B5-9 | `npm run check` = 语法解析（src **+ scripts**）+ `smoke-import.mjs` 真导入一遍装配链并断言关键导出在位。反向验证过：故意写错一个 import 路径 → `npm run check` 变红 | `scripts/check-syntax.mjs`、`scripts/smoke-import.mjs` |
+| B5-8 | 后端 `npm run lint`：**零依赖**静态检查 R1~R5（顶层遮蔽全局 / 重复 `export default` / 空 catch 无注释 / 调试残留 / 未使用 import）。不用 eslint 的理由写进文件头：装它要几十 MB 而本机出网几十 KB/s，且真正咬过我们的都是这五条可枚举的结构性错误。首次运行就抓出 7 处（含我自己今晚造的 `const URL = 'url'` 和 4 个未使用 import），全部修掉。CI 同时补 `next build`、boot smoke，并把前端改成调 `npm run typecheck/lint/test`（本地与 CI 等价） | `scripts/lint-style.mjs`、`.github/workflows/ci.yml`、两个 `package.json` |
+| B5-1/2/5 | `scripts/lib/testKit.mjs`：`createHarness(name, {expect})` + `finish()` 返回退出码（**不在 finally 之前 exit**，否则备份还原被跳过会污染用户数据）。三个布尔式套件补上 40/45/42 条的 `expect`；反向验证：把 expect 改小 1 → 退出码 1。B5-5 的源码字符串断言早在 B2 就换成行为断言（只剩 TC-SRC-06「纯函数层零 I/O」这类架构守卫） | `scripts/lib/testKit.mjs`、`test-proactive-gating/trigger-registry/triggers.mjs` |
+| B5-11 | `backend-node/.env.example`：86 个旋钮按 10 组带中文说明，含「一个都不填也能跑」、Key 两条来源与重启后果、HOST 对外必须配 token、日志隐私、baseUrl 安全边界。新增 `test-env-docs.mjs`（12 项）双向核对：代码读的变量必须有文档、文档里不能有代码不认的幽灵变量、README 不许再写「37 个旋钮」这种会过期的数字 | `.env.example`、`scripts/test-env-docs.mjs`、`README.md` |
+| B5-13 | 加 `.gitattributes`（`* text=auto` + 二进制声明，**不强推 eol**，避免一次全库 renormalize 把真实改动埋进噪声）；两个 `package.json` 的 `engines` 从 `>=18` 提到 `>=20.9.0` 与 CI 对齐；README 补 Node 版本、`/health`、`start_services.py --status`、四条本地门禁 | `.gitattributes`、`package.json`、`README.md` |
+
+**B5-13 依赖升级：留到快网络再做**（本机实测出网只有几十 KB/s，`npm audit` 也要连 registry）。有快网络时按顺序跑，每步都有本地门禁兜底：
+
+```bash
+cd backend-node
+npm audit --audit-level=high
+npm install multer@^2               # 1.x 是历史 CVE 线；diskStorage/fileFilter API 基本兼容，limits 字段不变
+npm install openai@^5 && npm test   # 主要风险：流式 chunk 形状与错误类型；跑 npm test 20 套 + 手动发一条消息
+npm install express@^5 && npm test  # 变化最大：req.body 解析、路由通配符、res.status().json() 不变但错误处理签名要求四参数
+git add -A && git commit            # 任一步 npm test 红就回退这一步，别混在一个提交里
+```
+
+**B5 唯一成体系没做的是 B5-12（全量档案导出/导入）**，下次接着做时注意两点已有的坑：
+`POST /reset` 已有「部分失败回 200 + status:'partial'」的约定（HTTP-08），导入前自动快照要复用同一套
+`writeJson` 原子写；`AI_GIRLFRIEND_DATA_DIR` 已经让导入路径可以先在沙盒里验证再落到真实目录。
 
 **B3 落地要点（2026-10-06）**：
 
@@ -279,19 +307,18 @@
    事实已经发成事件，只差一个决定）；
 ③ REQ-05 话题闭环（`sourceEpisodeId` 写路径）/ REQ-09 冷落分层（`EmotionEngine` 的离线惰性结算）。
 
-**下次开工的断点**：B3 已完成（见上表），接着做 **B5（11 项，CI / 可观测性 / 导出）**：
-eslint 进 CI 与 `next build`、boot smoke、`/health` + logger、`.env.example`、路由层测试、
-全量档案导出导入、依赖升级与 `.gitattributes`、`start_services.py` 去硬编码路径。
-其中 `/health` 与 boot smoke 现在特别顺手：B3-9 刚加了 `utils/log.js` 的 debug 通道，
-`/health` 可以直接把 `config.logging.verbose`、队列深度、事件层开关一并暴露出来。
-B3 唯一剩下的尾巴在前端：设置页把 `/config` 返回的 `warnings`（baseUrl 指向本机/局域网）
-显示出来 —— 属于 B7 的一格，做 B7 时一并处理；同时 B7 要开始消费 `error_code`
-（`upstream_auth` → 「去设置页检查 Key」、`service_busy` → 「稍后再试」）。
-然后是 **B7（17）**、**B8（6）**；零碎尾巴：B0-6 后半、B2-10 两个尾巴、B4-8 后半、B6-β（等 Q1~Q5）。
+**下次开工的断点**：B5 只剩 **B5-12 全量档案导出/导入**（做完就把 B0-6 后半、B2-10 两个尾巴一起收掉），
+然后 **B7（17 项，前端）** —— B7 里有两格是下游依赖本批次刚做好的接口，优先做：
+① 设置页显示 `POST /config` 返回的 `warnings`（baseUrl 指向本机/局域网的告警）与当前 baseUrl 高亮；
+② 全站消费 `error_code`（`upstream_auth` → 「去设置页检查 Key」、`service_busy` → 「稍后再试」、
+`not_configured` → 引导配 Key），别再匹配中文文案。
+之后 **B8（6 项，性能与容量）**；B6-β（REQ-05/07/09）与 PRD §5 的 Q1~Q5 一起等拍板。
+依赖升级（B5-13 的 multer/openai/express）等有快网络时按上面那段命令做。
 
-**开工前必做的健康检查**：`cd backend-node && npm run check && npm test`（**18 套**）与
-`cd frontend && npx tsc --noEmit && npx eslint src && npx vitest run`（**89 例**）。
+**开工前必做的健康检查**：`cd backend-node && npm run check && npm run lint && npm test`（**20 套**）与
+`cd frontend && npm run typecheck && npm run lint && npm run test`（**89 例**）；发版前再加 `npm run build`。
 测试全程写沙盒目录，不会碰 `backend-node/data/`。
+判断服务活没活：`curl http://127.0.0.1:8000/health` 看 `ok` 与 `llmConfigured`。
 
 ## 执行顺序与里程碑（按「拟人化优先」重排）
 

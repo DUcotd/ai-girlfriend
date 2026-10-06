@@ -5,6 +5,11 @@ import { createApp } from './app.js';
 import { config } from './config.js';
 import { shutdownServices } from './services/container.js';
 import { warnIfTokenMissing, getConfiguredToken } from './middleware/auth.js';
+import { installConsoleTimestamps } from './utils/logger.js';
+
+// 只在**服务进程**装时间戳与级别前缀（B5-10）：业务代码里两百多处 console.log 不动，
+// 日志却终于能对上一时刻；测试进程不装，输出保持干净可比对。
+installConsoleTimestamps();
 
 const app = createApp();
 

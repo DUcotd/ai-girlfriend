@@ -13,7 +13,7 @@
  * 所有方法**不抛异常**：读写失败由 jsonStore 内部兜底（最坏退化为默认值），主链路不中断。
  */
 
-import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+import { readJson, writeJson } from '../utils/jsonStore.js';
 import { getStageForAffinity, buildStageMeta } from './relationshipStages.js';
 import { validateAffinityChange, AFFINITY_RULES } from './affinityRules.js';
 import { pruneGainEvents, recordGain } from './affinityFatigue.js';

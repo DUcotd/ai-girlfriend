@@ -26,7 +26,7 @@ function loadPlaywrightCore() {
 }
 const { chromium } = loadPlaywrightCore();
 
-const URL = 'http://127.0.0.1:3000';
+const APP_URL = 'http://127.0.0.1:3000';
 const CHANNELS = [
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
@@ -56,7 +56,7 @@ page.on('pageerror', (e) => errors.push(`[pageerror] ${e.message}`));
 page.on('requestfailed', (r) => errors.push(`[requestfailed] ${r.url()} ${r.failure()?.errorText}`));
 
 // ---- 场景 1：全新用户（localStorage 为空）----
-await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 const firstPaint = await page.evaluate(() => ({
   hasLoadingText: document.body.innerText.includes('加载中'),
   bodyText: document.body.innerText.slice(0, 40).replace(/\s+/g, ' '),

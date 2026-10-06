@@ -6,6 +6,8 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import { config } from './config.js';
+import { dataDir } from './utils/jsonStore.js';
+import { aiGirlfriend, proactiveEngine } from './services/container.js';
 import chatRoutes from './routes/chat.js';
 import configRoutes from './routes/configRoutes.js';
 import taskRoutes from './routes/tasks.js';
@@ -15,6 +17,19 @@ import lifeRoutes from './routes/life.js';
 import personalityRoutes from './routes/personalityRoutes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { createAuthMiddleware } from './middleware/auth.js';
+
+/**
+ * 版本号只在进程启动时读一次 package.json：/health 与排障都要能回答
+ * 「现在跑的是哪个版本」——今晚就出现过「代码已改，服务还跑着旧版本」的情况。
+ */
+const APP_VERSION = (() => {
+    try {
+        const raw = fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+        return JSON.parse(raw).version || null;
+    } catch {
+        return null;
+    }
+})();
 
 export function createApp() {
     const app = express();
@@ -46,6 +61,40 @@ export function createApp() {
 
     app.get('/', (req, res) => {
         res.json({ message: "AI Girlfriend Node Backend is Running" });
+    });
+
+    /**
+     * 健康检查（B5-10）。免鉴权（见 middleware/auth.js 的 HEALTH_PATHS），
+     * 只回**可判断状态**的信息，绝不回 Key、baseUrl 全串或任何对话内容。
+     *
+     * 为什么每个字段都值得存在：`start_services.py` 以前只探 TCP 端口 —— 端口通了
+     * 但服务其实起不来（数据目录不可写 / 容器装配抛错）它照样报 OK。现在改成探 /health
+     * 并看 `ok`；`llmConfigured` 则把「后端重启后 Key 还没被浏览器下发」这件最容易
+     * 让人以为坏了的事，变成一眼可读的状态。
+     */
+    app.get('/health', (req, res) => {
+        let dataDirWritable = false;
+        try {
+            fs.accessSync(dataDir(), fs.constants.W_OK);
+            dataDirWritable = true;
+        } catch { /* 不可写或目录不存在，保持 false */ }
+        const host = (() => {
+            try { return new URL(aiGirlfriend.baseUrl).host; } catch { return null; }
+        })();
+        res.json({
+            ok: dataDirWritable,
+            version: APP_VERSION,
+            node: process.version,
+            uptimeSeconds: Math.round(process.uptime()),
+            // 只报「有没有」与主机名，绝不外泄 Key 或完整地址
+            llmConfigured: !!aiGirlfriend.apiKey && !!aiGirlfriend.openai,
+            model: aiGirlfriend.modelName || null,
+            baseUrlHost: host,
+            dataDirWritable,
+            companion: aiGirlfriend.getCompanionStatus(),
+            chatQueueDepth: aiGirlfriend._queueDepth ?? 0,
+            proactiveQueueSize: proactiveEngine?.messageQueue?.length ?? 0,
+        });
     });
 
     app.use('/', chatRoutes);

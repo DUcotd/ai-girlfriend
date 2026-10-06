@@ -26,7 +26,7 @@
 
 import TaskManager, { REMINDER_KIND, OVERDUE_WINDOW } from './TaskManager.js';
 import LifeSimulator from './LifeSimulator.js';
-import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+import { readJson, writeJson } from '../utils/jsonStore.js';
 import { dayKey } from '../utils/dayKey.js';
 import { getStageForAffinity } from './relationshipStages.js';
 import {
