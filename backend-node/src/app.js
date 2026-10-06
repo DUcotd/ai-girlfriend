@@ -15,6 +15,7 @@ import audioRoutes from './routes/audio.js';
 import stateRoutes from './routes/state.js';
 import lifeRoutes from './routes/life.js';
 import personalityRoutes from './routes/personalityRoutes.js';
+import backupRoutes from './routes/backup.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 
@@ -42,6 +43,9 @@ export function createApp() {
         methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['*']
     }));
+    // 档案导入要接收「一整份档案」：重度用户的 memory.json 单文件就有十几 MB，
+    // 全局 1MB 的 JSON 限制会先把请求打成 413。所以这条路由**先于**全局解析器挂自己的。
+    app.use('/backup/import', express.json({ limit: `${config.backup.maxExportMb}mb` }));
     // 请求体上限 1MB：防止超大 JSON 体打爆内存（既有行为未限制，此处收紧）。
     // 音频上传走 multer 独立管道（见 routes/audio.js），不受此 limit 影响。
     app.use(express.json({ limit: '1mb' }));
@@ -104,6 +108,8 @@ export function createApp() {
     app.use('/', stateRoutes);
     app.use('/', lifeRoutes);
     app.use('/', personalityRoutes);
+    // 档案导出/导入/快照（B5-12）
+    app.use('/', backupRoutes);
 
     // 未匹配路径的 JSON 兜底：Express 默认回 HTML「Cannot GET /x」，前端 api.ts 会对
     // HTML 做 JSON.parse，用户看到的是一条语法类报错而不是「接口不存在」。

@@ -180,6 +180,49 @@ class ProactiveEngine {
 
     // ==================== 持久化 ====================
 
+    /**
+     * 从磁盘重新载入（档案导入后用，B5-12）。
+     *
+     * 保留 `this.config.enabledTypes` 等**用户配置**之外的一切运行态：
+     * 与 resetRuntimeState() 不同，这里是「整份换成档案里的那一套」，
+     * 所以 config 也一起回到导入时的状态（档案里的 config 才是那台机器的真相）。
+     * 生活日志交给它自己（挂在 lifeSimulator 上），避免两处写同一个文件。
+     */
+    reload() {
+        if (this._saveTimer) {
+            clearTimeout(this._saveTimer);
+            this._saveTimer = null;
+        }
+        this.config = {
+            enabled: true,
+            frequencyLevel: 'medium',
+            customDailyLimit: null,
+            enabledTypes: [...DEFAULT_ENABLED_TYPES],
+        };
+        this.messageQueue = [];
+        this.lastTriggerTime = Date.now();
+        this.lastUserActiveTime = Date.now();
+        // 与构造函数一致地取 0（= 「还没发过自发消息」），随后 _loadState 会用档案里的真实值覆盖。
+        // 这里若填 Date.now()，导入完的第一条自发消息会被全局间隔白挡 90 分钟。
+        this.lastSpontaneousAt = 0;
+        this.dailyMessageCount = 0;
+        this.lastDayKey = dayKey();
+        this.lastTriggerByType = {};
+        this.sentDays = {};
+        this.lastRandomSlotKey = null;
+        // 与构造初值一致：0 = 「还没有过自发消息」，自发间隔闸门直接放行。
+        // 写成 Date.now() 会让导入后的第一个 90 分钟内一条自发消息都发不出去。
+        this.lastSpontaneousAt = 0;
+        this.recentSentTexts = [];
+        this._loadState();
+        this.lifeSimulator?.reload?.();
+        return {
+            queue: this.messageQueue.length,
+            daily: this.dailyMessageCount,
+            types: this.config.enabledTypes.length,
+        };
+    }
+
     _loadState() {
         const data = readJson(STATE_FILE, null);
         if (!data) return;

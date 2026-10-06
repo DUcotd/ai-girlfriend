@@ -9,6 +9,7 @@
 import AiGirlfriend from '../core/AiGirlfriend.js';
 import VoiceEngine from '../core/Voice.js';
 import ProactiveEngine from '../core/ProactiveEngine.js';
+import TaskManager from '../core/TaskManager.js';
 import { EventBus } from '../core/EventBus.js';
 import TriggerRegistry from '../core/TriggerRegistry.js';
 import { emotionTurnTrigger } from '../core/triggers/emotionTurnTrigger.js';
@@ -21,6 +22,11 @@ import { migrateLegacyData } from '../utils/jsonStore.js';
 migrateLegacyData();
 
 export const aiGirlfriend = new AiGirlfriend();
+/**
+ * 任务清单单例也在这里导出（B5-12）：档案模块要按「文件 → 属主」逐个热加载，
+ * 只有 TaskManager 是全局单例而非挂在 aiGirlfriend 上，以前没有统一的取用处。
+ */
+export const taskManager = TaskManager;
 export const voiceEngine = { current: new VoiceEngine({}) };
 
 export function updateVoiceEngine({ apiKey }) {
@@ -70,6 +76,13 @@ export const proactiveEngine = new ProactiveEngine(aiGirlfriend, triggerRegistry
 if (typeof aiGirlfriend.attachProactiveEngine === 'function') {
     aiGirlfriend.attachProactiveEngine(proactiveEngine);
 }
+
+/**
+ * 档案模块用的「全部单例」集合（B5-12）。
+ * 必须放在文件末尾：const 有 TDZ，写在 proactiveEngine / triggerRegistry 声明之前
+ * 会让这个对象拿到 undefined，热加载时才发现全炸。
+ */
+export const backupServices = { aiGirlfriend, proactiveEngine, triggerRegistry, taskManager };
 
 /** 优雅停机：清理所有后台定时器，并把记忆/用户情绪/叙事/事件队列去抖中的待写数据立即落盘 */
 export function shutdownServices() {

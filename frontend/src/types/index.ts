@@ -372,3 +372,43 @@ export interface PersonalityUpdatePayload {
   driftEnabled?: boolean;
   baselineAdaptEnabled?: boolean;
 }
+
+// ---------- 全量档案：导出 / 导入 / 快照（B5-12）----------
+
+/** 一份快照在服务器本地的目录信息 */
+export interface BackupSnapshotInfo {
+  /** 目录名，恢复时要用它作为 id */
+  id: string;
+  dir: string;
+  /** 为什么留这份快照：pre-reset / pre-import / manual… */
+  reason: string | null;
+  createdAt: string | null;
+  /** 快照里有哪些数据文件；手工建的目录可能没有这份清单 */
+  files: string[] | null;
+}
+
+/** GET /backup/status */
+export interface BackupStatus {
+  dataDir: string;
+  backupDir: string;
+  files: string[];
+  keep: number;
+  snapshots: BackupSnapshotInfo[];
+}
+
+/**
+ * POST /backup/import 与 /backup/restore 的报告。
+ * 后端刻意把「写了哪些 / 哪些没写 / 哪些热加载失败」全列出来：
+ * 半成功必须看得见，restartRecommended=true 时界面要提示重启后端。
+ */
+export interface BackupReport {
+  status: "imported" | "restored" | "partial";
+  snapshot: string;
+  written: string[];
+  writeFailed: string[];
+  reloaded: string[];
+  reloadFailed: string[];
+  restartRecommended?: boolean;
+  warnings?: string[];
+  restoredFrom?: string;
+}

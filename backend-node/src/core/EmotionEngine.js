@@ -69,6 +69,21 @@ class EmotionEngine {
         this._loadState();
     }
 
+    /**
+     * 从磁盘重新载入（档案导入后用，B5-12）。
+     * 基线也要回到构造初值：_loadState 只覆盖它读得到的字段，
+     * 不清的话「导入一份还没有关系阶段的历史档案」会留着当前会话算出来的基线。
+     */
+    reload() {
+        this.baseline = { P: 0.3, A: 0.1, D: -0.1 };
+        this.state = { P: 0.3, A: 0.1, D: -0.1 };
+        this.history = [];
+        this.relationshipStage = null;
+        this.relationshipLabel = '未知';
+        this._loadState();
+        return { emotion: this.getEmotionLabel(), history: this.history.length };
+    }
+
     // ==================== 好感度驱动基准 ====================
 
     /**

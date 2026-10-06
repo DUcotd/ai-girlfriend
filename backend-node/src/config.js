@@ -63,6 +63,20 @@ export const config = {
     },
     staticDir: path.join(BACKEND_ROOT, 'static'),
     /**
+     * 档案导出/导入与自动快照（B5-12）。
+     * `dir` 默认**留空**：由 core/backup.js 在首次使用时按「当前数据目录的旁边」推导。
+     * 为什么不在这里算：DATA_DIR 属于 jsonStore（它 import 本文件，反向 import 会成环）；
+     * 更重要的是——测试与多实例都用 AI_GIRLFRIEND_DATA_DIR 隔离，跟着数据目录走
+     * 才能让自动快照也落进沙盒，而不是每次跑测试都在 backend-node/backups 里堆真快照。
+     */
+    backup: {
+        dir: process.env.AI_GIRLFRIEND_BACKUP_DIR ? path.resolve(process.env.AI_GIRLFRIEND_BACKUP_DIR) : null,
+        // 自动快照保留份数（按目录名时间序，手动导出的档案文件不计数）
+        keep: envNumber(process.env.BACKUP_KEEP, 10, 1, 100),
+        // 单个档案文件大小上限（MB）：这是「一个人的全部对话」，几 MB 已很多
+        maxExportMb: envNumber(process.env.BACKUP_MAX_EXPORT_MB, 64, 1, 512),
+    },
+    /**
      * 日志策略（审计 HTTP-19）。
      * 内心独白 / 模型 CoT / metadata 原文默认**不进日志**：那是这个应用里最私密的文本，
      * 却会长期躺在 dev.log 里。要排障请显式设 `AI_GIRLFRIEND_DEBUG=true`。

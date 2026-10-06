@@ -29,6 +29,8 @@ build/
 memory_db/
 backend-node/data/
 backend-node/temp_uploads/
+# 自动快照与手动快照（B5-12）：里面是用户的整份对话与记忆，绝不进版本库
+backend-node/backups/
 
 # Generated Media
 backend-node/static/audio/*.mp3

@@ -204,21 +204,21 @@
 
 **结论**：陪伴感下一轮的地基不是「再加子系统」，而是 **B0（不丢数据）+ B2（模型给的数不骗人）+ B9（关得掉）+ B4（prompt 说得上话）**。REQ-02 是这批做完后性价比最高的一件，因为它 90% 已经写好，只是没接线。
 
-## 剩余清单（2026-10-07 B5 大部分完成后核对，共约 15 项）
+## 剩余清单（2026-10-07 B5-12 完成后核对，共约 12 项）
 
 | 批次 | 剩余 | 重点项 |
 |---|---|---|
-| B0 | 0.5 | B0-6 后半：`MemoryStore`/`NarrativeStore`/`UserEmotionEngine` 的去抖 flush 仍不回传写盘结果 |
+| B0 | 0 | （B0-6 后半已随 B5-12 做掉：四个去抖 flush 现在都回传写盘结果，失败保持脏标记等下次重试） |
 | B1 | 3.5 | B1-2 调用计数可见、B1-4 嵌入熔断、B1-5 query 嵌入 memoize、B1-6 后台队列合并（不丢信息） |
 | B2 | 0.5 | B2-10 尾巴：`EmotionEngine.history` 无消费者（留给 REQ-10）、narrative 的 `tags/jokeTrigger/sourceEpisodeId` 无写路径（REQ-05 前置） |
 | B3 | 1 | 只剩**设置页把 baseUrl 的分级（ok/warn/block）显示出来**（后端 `/config/status` 已回显 baseUrl、`POST /config` 已回 warnings，差前端一处 UI）；配合 B7 的「消费 `error_code`」一起做最省 |
-| B5 | 2.5 | ① B5-12 全量档案导出/导入（`data/` 全部 JSON + 校验和 + 导入前备份，`POST /reset` 前自动快照）——唯一成体系没做的；② B5-13 依赖升级（`multer` 1.x→2.x、`openai` 4→5、`express` 4→5）：本机出网只有几十 KB/s，装包会拖很久，**留到有快网络时执行**，命令已写在下面；③ B5-3 的「全部迁到 node:test」被有意收窄成 `scripts/lib/testKit.mjs`（理由见下） |
-| B7 | 17 | 主动消息 FIFO 与串气泡、后端离线态与重试、乐观更新回滚、**401/稳定码可操作提示 + token 输入框**、向导提前置完成、a11y 基线、触屏 hover-only、类型收口、移动端视口与 safe-area、IME 回车误发 |
+| B5 | 1.5 | 只剩依赖升级（`multer` 1.x→2.x、`openai` 4→5、`express` 4→5）：本机出网只有几十 KB/s，**留到有快网络时按下面的命令做**。B5-3「全迁 node:test」有意收窄为 `scripts/lib/testKit.mjs` |
+| B7 | 17 | 主动消息 FIFO 与串气泡、后端离线态与重试、乐观更新回滚、**401/稳定码可操作提示 + token 输入框**、**baseUrl 告警显示**、向导提前置完成、a11y 基线、触屏 hover-only、类型收口、移动端视口与 safe-area、IME 回车误发 |
 | B8 | 6 | `memory.json` 15 MB 反复重写、总 prompt 预算裁剪、tasks/dedupeSeen/正文长度无界、每轮 9-13 次同步写盘、system 消息位置 |
 | B9 | 0 | （已随 B9 批次全部完成） |
 | B6 | β | α 已完成；β = REQ-05 话题闭环 / REQ-07 自适应节奏 / REQ-09 冷落分层，需 PRD §5 的 Q1~Q3 拍板 |
 
-**已完成**：B0（除 B0-6 后半）、B2（除 2 个尾巴）、**B9 全部**、**B4 全部（除 B4-8 后半）**、**B6-α 全部**、**B3 除前端 baseUrl 高亮外全部**、**B5 的 B5-1/2/4/5/6/7/8/9/10/11/13(部分)**、B1-3。
+**已完成**：B0 **全部**、B2（除 2 个尾巴）、**B9 全部**、**B4 全部（除 B4-8 后半）**、**B6-α 全部**、**B3 除前端 baseUrl 高亮外全部**、**B5 除依赖升级全部（含 B5-12 档案导出/导入/快照）**、B1-3。
 **已取消**：B1-1（事实提取节流 / 省钱模式）—— 成本不作为削减理由。
 **有意收窄**：B5-3「把 10 个脚本整体迁到 `node:test`」。现有脚本各自带着「备份/还原真实 `data/*.json`、动态 import 顺序、沙盒目录」的装配逻辑，全量搬迁的风险大于收益；真正要解决的问题（INFRA-01/02：测试必须能失败）已经由 `scripts/lib/testKit.mjs` 的 `expect` 机制达成，并配了反向验证。
 
@@ -232,7 +232,27 @@
 | 2026-10-05 | **B4**（prompt 层九项：策略接线、好感度单一真源、表达优先级、metadata 统一、中文化、引述围栏、体积压缩、主动消息链去重、身份外观对齐） | `966820e` |
 | 2026-10-05 | **B6-α**（REQ-02 情绪共振、REQ-06 跃迁仪式感、主动消息情绪回灌、防复读账；顺带修好「新增默认开启类型永远进不了老用户 enabledTypes」这个从 REQ-04 就存在的拦死点） | `56002f2` |
 | 2026-10-06 | **B3**（接口契约与安全）：`POST /config` 全字段校验、baseUrl 分级、消费型 GET 改 POST、上游错误稳定码、上传/TTS 收紧、自由文本上限、一致性小修打包、日志隐私与队列上限。新增 `test-audit-b3.mjs` 95 项 → 后端 18 套全绿、前端 89 例全绿 | `728cacb` |
-| 2026-10-07 | **B5**（工程基建，除档案导出与依赖升级）：`GET /health` + 零依赖 logger（时间戳/级别/堆栈）、启动脚本改探 `/health`、`npm run check` 补真导入冒烟、零依赖静态检查 `npm run lint`、`testKit` 让「用例没跑」也判失败、`.env.example`（86 个旋钮分 10 组）+ 文档一致性测试、CI 补 lint/build/boot smoke、`.gitattributes`、engines 对齐 20.9。后端 **20 套**全绿、前端 typecheck/lint/test/build 全绿 | 本次提交 |
+| 2026-10-07 | **B5**（工程基建，除档案导出与依赖升级）：`GET /health` + 零依赖 logger（时间戳/级别/堆栈）、启动脚本改探 `/health`、`npm run check` 补真导入冒烟、零依赖静态检查 `npm run lint`、`testKit` 让「用例没跑」也判失败、`.env.example`（86 个旋钮分 10 组）+ 文档一致性测试、CI 补 lint/build/boot smoke、`.gitattributes`、engines 对齐 20.9。后端 **20 套**全绿、前端 typecheck/lint/test/build 全绿 | `待提交` |
+| 2026-10-07 | **B5-12**（全量档案导出/导入/自动快照）+ **B0-6 后半**（四个去抖 flush 回传写盘结果）：`/backup/{status,export,import,snapshot,restore}`、11 个数据文件的唯一清单与逐个热加载、`POST /reset` 前自动快照、设置页「数据与备份」面板。新增 `test-audit-b5b.mjs` 65 项 → 后端 **21 套**全绿、前端 **94 例**全绿 | `待提交` |
+
+**B5-12 落地要点（2026-10-07）**：
+
+| 点 | 做法 |
+|---|---|
+| 唯一清单 | `core/backup.js` 的 `ARCHIVE_FILES`：11 个数据文件各自写明 `owner` / `reload()` / 中文 `label`。`test-audit-b5b` 会拿 `data/` 目录与这张表**对账**，新增数据文件不登记就红 —— 这正是 `jsonStore.LEGACY_FILES` 当年漏掉 5 个文件的同一类事故 |
+| 导出 | 先 flush 全部去抖（memory/narrative/userEmotion/trigger + 五个同步引擎），再读盘；`app` 段只记上游**主机名**；导出前自检含密钥就**拒绝出档案**（`scanForSecrets`）；响应是 `Content-Disposition: attachment` |
+| 导入 | `validateArchive` 纯函数先拒掉：不是本格式 / 版本不对 / 没有 files / 某项内容不是对象（否则等于「清空这份数据」）；校验和只作告警不作拒绝（对象重新序列化本就会差空白）。通过后 **先快照 → 写盘 → 逐个 reload**，报告如实列出 `written/writeFailed/reloaded/reloadFailed/restartRecommended` |
+| 不重启就生效 | 每个 owner 加 `reload()`，第一件事都是**取消去抖中的待写定时器**并清/保脏标记 —— 不取消的话内存里的旧状态会在两秒后把刚导入的文件盖回去（表现成「导入没生效」）。测试里真的等了 `flushDebounceMs + 800ms` 再回读磁盘确认没被覆盖 |
+| 重置可回滚 | `resetAll()` 开头 flush + `createSnapshot('pre-reset')`，快照目录随响应 `snapshot` 字段回给界面；快照失败**不阻断重置**但会如实打日志（用户已明确要求清空） |
+| 备份目录推导 | `config.backup.dir` 默认 `null`，由 `backupRoot()` 落在**当前数据目录的旁边** —— 这样测试与多实例用 `AI_GIRLFRIEND_DATA_DIR` 隔离时，自动快照也进沙盒，不会在仓库里堆真实对话；`backend-node/backups/` 已进 `.gitignore` |
+| B0-6 后半 | `MemoryStore/NarrativeStore/UserEmotionEngine/TriggerRegistry` 的 `flush()` 一律回传布尔，**失败时保持脏标记**（旧写法什么都不回，「磁盘满了」在整条去抖链路上完全不可观测） |
+
+**测试自己踩到的两个坑（值得记）**：
+1. 种子数据必须在 `import` 容器**之前**写好 —— 引擎在构造时就读盘，反过来会让内存全是默认值，
+   测出来的「导入没生效」其实是测试自己的顺序错。
+2. `createSnapshot` 内部的 `pruneSnapshots()` 会**把刚写的这份快照删掉**
+   （按目录名取最新 N 份，遇到用未来时间戳批量建的测试样本，本次这份排最旧）。
+   已加 `protect` 参数：本次新生成的那份永不参与清理。这是测试抓出来的真 bug，不是测试的错。
 
 **B5 落地要点（2026-10-07）**：
 
@@ -307,13 +327,14 @@ git add -A && git commit            # 任一步 npm test 红就回退这一步�
    事实已经发成事件，只差一个决定）；
 ③ REQ-05 话题闭环（`sourceEpisodeId` 写路径）/ REQ-09 冷落分层（`EmotionEngine` 的离线惰性结算）。
 
-**下次开工的断点**：B5 只剩 **B5-12 全量档案导出/导入**（做完就把 B0-6 后半、B2-10 两个尾巴一起收掉），
-然后 **B7（17 项，前端）** —— B7 里有两格是下游依赖本批次刚做好的接口，优先做：
-① 设置页显示 `POST /config` 返回的 `warnings`（baseUrl 指向本机/局域网的告警）与当前 baseUrl 高亮；
+**下次开工的断点**：B5 已收完（只剩依赖升级，等有快网络）。接着做 **B7（17 项，前端）**，
+头两格直接吃本批次的成果：
+① 设置页显示 `POST /config` 返回的 `warnings`（baseUrl 指向本机/局域网的告警）+ 当前 baseUrl 高亮；
 ② 全站消费 `error_code`（`upstream_auth` → 「去设置页检查 Key」、`service_busy` → 「稍后再试」、
 `not_configured` → 引导配 Key），别再匹配中文文案。
-之后 **B8（6 项，性能与容量）**；B6-β（REQ-05/07/09）与 PRD §5 的 Q1~Q5 一起等拍板。
-依赖升级（B5-13 的 multer/openai/express）等有快网络时按上面那段命令做。
+之后 **B8（6 项，性能与容量）**；零碎尾巴：B2-10 两个尾巴、B4-8 后半；
+B6-β（REQ-05/07/09）与 PRD §5 的 Q1~Q5 一起等拍板。
+依赖升级（`multer`/`openai`/`express`）按上面的命令在有快网络时做。
 
 **开工前必做的健康检查**：`cd backend-node && npm run check && npm run lint && npm test`（**20 套**）与
 `cd frontend && npm run typecheck && npm run lint && npm run test`（**89 例**）；发版前再加 `npm run build`。

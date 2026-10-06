@@ -37,6 +37,8 @@ import { getStageForAffinity, RELATIONSHIP_STAGES } from './relationshipStages.j
 import { getProactiveType, PROACTIVE_EXPIRY_FEEDBACK } from './proactiveTypes.js';
 import { classifyUpstreamError, upstreamLogLine, classifiedByCode, UPSTREAM_ERROR_CODES } from '../utils/upstreamError.js';
 import { debugText } from '../utils/log.js';
+// 只取快照这一个函数：backup.js 不 import 容器（服务集合由调用方注入），无循环依赖风险。
+import { createSnapshot } from './backup.js';
 
 dotenv.config();
 
@@ -59,6 +61,29 @@ const DIALOG_MENTION_DEBOUNCE_MS = 24 * 60 * 60 * 1000;
  */
 const DEFAULT_BASE_URL = "https://token.sensenova.cn/v1";
 const DEFAULT_MODEL_NAME = "sensenova-6.8-flash-lite";
+
+/**
+ * 「进程刚起来时」的运行时参数快照（B5-12 档案导入要用）。
+ *
+ * 为什么在模块加载时就抓：这些值来自环境变量，一旦被会话里的 POST /config 改过，
+ * 运行时就读不到原始默认了。档案导入的语义是「整份回到那份档案的状态」，
+ * 所以必须先把运行时开关与高级参数退回 env 默认，再让 _loadState 套用档案里的值 ——
+ * 档案里没有的字段才不会被上一次会话的残留污染。
+ */
+const DEFAULT_TOGGLES = {
+    userEmotionEnabled: config.userEmotion.enabled,
+    narrativeEnabled: config.narrative.enabled,
+    memoryFactsEnabled: config.memory.facts.enabled,
+    memoryRetrievalMode: config.memory.retrieval.mode,
+    triggerEnabled: isEventLayerEnabled(),
+};
+const DEFAULT_CHAT_PARAMS = {
+    maxPromptHistory: config.chat.maxPromptHistory,
+    unlimitedContext: config.chat.unlimitedContext,
+    temperature: config.chat.temperature,
+    maxTokens: config.chat.maxTokens,
+    reasoningEffort: config.chat.reasoningEffort,
+};
 
 class AiGirlfriend {
     constructor(config = {}) {
@@ -411,6 +436,37 @@ class AiGirlfriend {
         }
 
         return changed;
+    }
+
+    /**
+     * 从磁盘重新载入整份状态（档案导入后用，B5-12）。
+     *
+     * 顺序很重要：先把运行时开关与高级参数**退回 env 默认值**，再跑 _loadState。
+     * 否则导入一份「没有 toggles 字段的旧档案」时，当前会话改过的开关会残留下来，
+     * 表现为「导入后有一半状态来自上一次会话」——那是最难复现的一类脏状态。
+     * 不重建 OpenAI 客户端以外的东西：Key 仍然只在内存里，导入档案不该带 Key。
+     */
+    reloadState() {
+        config.userEmotion.enabled = DEFAULT_TOGGLES.userEmotionEnabled;
+        config.narrative.enabled = DEFAULT_TOGGLES.narrativeEnabled;
+        config.memory.facts.enabled = DEFAULT_TOGGLES.memoryFactsEnabled;
+        config.memory.retrieval.mode = DEFAULT_TOGGLES.memoryRetrievalMode;
+        setEventLayerEnabled(DEFAULT_TOGGLES.triggerEnabled);
+        for (const [key, value] of Object.entries(DEFAULT_CHAT_PARAMS)) {
+            config.chat[key] = value;
+        }
+
+        this.nickname = "你";
+        this.history = [{ role: "system", content: this.systemPrompt }];
+        this.systemPrompt = PERSONA_SYSTEM_PROMPT;
+        this._turnCount = 0;
+        this._stateGeneration += 1;   // 作废在途的后台收尾，别让旧对话把导入结果盖回去
+        this._loadState();
+        if (this.memory?.store?.reload) this.memory.store.reload();
+        return {
+            historyCount: this.history.filter((m) => m.role !== 'system').length,
+            nickname: this.nickname,
+        };
     }
 
     /** 供 /config/status 回显的高级参数当前值 */
@@ -1457,6 +1513,27 @@ class AiGirlfriend {
         await this._chatQueue.catch(() => { /* 队列内的错误已由 chat()/chatStream() 兜底 */ });
         this._stateGeneration++;
 
+        /**
+         * ③ 清空之前先落一份快照（B5-12）：「完全重置」在以前是不可逆的 ——
+         * 手滑一次就抹掉几个月甚至几年的对话、记忆与关系，而 UI 上只有一句确认。
+         * 先 flush 再快照，否则去抖里未落盘的数据（最近几轮）不会出现在快照里，
+         * 而那恰恰是最可能被误删、也最想找回的部分。
+         */
+        let snapshot = null;
+        try {
+            this._saveState();
+            this.affinityEngine._saveState();
+            this.emotionEngine._saveState();
+            this.personalityDrift._saveState();
+            this.memory?.flush?.();
+            this.flushNarratives?.();
+            this.flushUserEmotion?.();
+            snapshot = createSnapshot('pre-reset', new Date());
+        } catch (e) {
+            // 快照失败绝不阻断重置（用户已经明确要求清空），但必须如实报出来
+            console.error(`[Reset] 重置前快照失败（仍可继续重置，但这次不可回滚）: ${e.message}`);
+        }
+
         /** 依次执行的重置步骤；每步独立容错 */
         const steps = [
             ['history', () => {
@@ -1505,7 +1582,14 @@ class AiGirlfriend {
             console.error(`[AiGirlfriend] resetAll: final _saveState failed: ${e?.message || e}`);
         }
 
-        return { reset, failed };
+        return {
+            reset,
+            failed,
+            // 快照目录回给调用方（设置页要能告诉用户「万一后悔，在这里」）；
+            // 失败时是 null，界面据此显示「本次重置不可回滚」而不是假装有个快照。
+            snapshot: snapshot?.dir ?? null,
+            snapshotFiles: snapshot?.files?.length ?? 0,
+        };
     }
 
     /**

@@ -70,6 +70,24 @@ export class MemoryStore {
         this._load();
     }
 
+    /**
+     * 从磁盘重新载入（档案导入后用，B5-12）。
+     *
+     * ⚠️ 必须先取消去抖中的待写并清掉 dirty：否则导入写进去的文件会在几十秒内
+     * 被「内存里那份旧状态」的延迟 flush 盖回去 —— 用户看到的是「导入没生效」。
+     */
+    reload() {
+        if (this._saveTimer) {
+            clearTimeout(this._saveTimer);
+            this._saveTimer = null;
+        }
+        this._dirty = false;
+        this.episodes = [];
+        this.facts = [];
+        this._load();
+        return { episodes: this.episodes.length, facts: this.facts.length };
+    }
+
     _load() {
         const raw = readJson(DB_FILE, null);
         if (raw === null || raw === undefined) return;
@@ -158,18 +176,27 @@ export class MemoryStore {
         }, config.memory.flushDebounceMs);
     }
 
-    /** 立即落盘（幂等；无待写数据时为空操作）。进程退出前必须调用 */
+    /**
+     * 立即落盘（幂等；无待写数据时视为已完成）。进程退出前与档案导出前必须调用。
+     *
+     * B0-6 后半：返回**写盘结果**。以前 flush 什么都不回，于是
+     * 「磁盘满了 / 目录不可写」在整条去抖写盘链路上是完全不可观测的 ——
+     * 用户以为对话记忆存下来了，其实每次写都在静默失败。
+     * @returns {boolean}
+     */
     flush() {
         if (this._saveTimer) {
             clearTimeout(this._saveTimer);
             this._saveTimer = null;
         }
-        if (!this._dirty) return;
+        if (!this._dirty) return true;
         this._dirty = false;
-        writeJson(DB_FILE, {
+        const ok = writeJson(DB_FILE, {
             version: 2,
             episodes: this.episodes,
             facts: this.facts,
         });
+        if (!ok) this._dirty = true;      // 没写成功就仍然算脏，下次继续尝试
+        return ok;
     }
 }

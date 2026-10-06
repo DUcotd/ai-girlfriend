@@ -116,6 +116,16 @@ class TaskManager {
     }
 
     /**
+     * 从磁盘重新载入（档案导入后用，B5-12）。
+     * 走同一个 _load()，所以幂等迁移（补 source / reminderState 字段）也照旧生效。
+     */
+    reload() {
+        this.tasksPath = dataPath(TASKS_FILE);
+        this.tasks = this._load();
+        return { tasks: this.tasks.length };
+    }
+
+    /**
      * 载入并做幂等迁移。老数据没有 source / reminderState，这里补齐；
      * 只有真的有字段被补齐时才写盘一次（Q6）。
      */

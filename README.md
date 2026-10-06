@@ -173,6 +173,21 @@ framer-motion 经 MotionConfig reducedMotion="user" 跟随）。
 
 首次启动会自动把旧版 `<repo>/memory_db/` 下的数据迁移过来（不覆盖已有新数据）。
 
+### 备份与恢复（设置页 → 系统 → 数据与备份）
+
+上表这 11 个文件就是「小爱是谁」的全部。**没备份 = 丢了就是没了**，所以：
+
+- **导出档案**：一次请求拿到一份含全部 11 个文件的 JSON（导出前会先把去抖里
+  未落盘的数据 flush，否则最近几轮会在档案里凭空缺失）。档案里**不含 API Key**，
+  后端在导出前自检，检出疑似密钥就直接不出这份档案。换机器时导入这一份即可。
+- **自动快照**：`POST /reset`（完全重置）、档案导入、快照恢复之前，都会先把当前
+  `data/` 原样复制一份到 `backend-node/backups/<时间戳>-<原因>/`，默认保留最近 10 份
+  （`BACKUP_KEEP`）。手滑重置之后在设置页点「恢复」就能救回来。
+- **导入不需要重启**：写盘后逐个引擎热加载；万一某个引擎热加载失败，
+  响应里会明确写 `restartRecommended: true`，界面会提示你重启一次，不会假装成功。
+- 备份目录默认跟着数据目录走（`AI_GIRLFRIEND_DATA_DIR` 的旁边），所以跑测试不会
+  在仓库里堆真实快照；`backend-node/backups/` 已在 `.gitignore` 里。
+
 ## API 一览
 
 | 方法 | 路径 | 说明 |
@@ -196,6 +211,11 @@ framer-motion 经 MotionConfig reducedMotion="user" 跟随）。
 | GET | `/state/user-emotion` | 用户情绪时间线（REQ-01；引擎缺失时回落空结构） |
 | GET | `/state/narratives` | 共同经历叙事列表（REQ-03；含 stats） |
 | DELETE | `/state/narratives/:id` | 手动删除一条叙事 |
+| GET | `/backup/status` | 数据目录 / 备份目录 / 快照列表 |
+| GET | `/backup/export` | 导出整份档案（`.json` 附件下载；导出前自动 flush） |
+| POST | `/backup/import` | 导入档案（导入前自动快照；报告逐项列出写入与热加载结果） |
+| POST | `/backup/snapshot` | 只在服务器本地存一份当前状态快照 |
+| POST | `/backup/restore` | 从某份快照恢复（恢复前再存一份 pre-restore 快照） |
 | GET | `/affinity/ledger` | 好感度变更账本 |
 | GET/POST | `/system_prompt` | 人设 prompt |
 | GET/POST | `/personality` | 性格状态 / 更新（预设 / 七维 / 开关） |

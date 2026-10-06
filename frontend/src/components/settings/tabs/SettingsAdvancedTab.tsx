@@ -4,6 +4,7 @@ import { ShieldAlert } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Note from "@/components/ui/Note";
 import Switch from "@/components/ui/Switch";
+import DataBackupPanel from "@/components/settings/DataBackupPanel";
 import type { CompanionConfig } from "@/lib/storage";
 
 interface SettingsAdvancedTabProps {
@@ -61,15 +62,19 @@ export default function SettingsAdvancedTab({
                 </p>
             </div>
 
+            <DataBackupPanel />
+
             <div className="space-y-3 rounded-2xl border border-status-danger/25 bg-status-danger/5 p-4">
                 <h4 className="flex items-center gap-1 text-xs font-bold text-status-danger">
                     <ShieldAlert size={14} /> 危险操作
                 </h4>
                 <Button variant="danger" size="sm" className="w-full py-2.5" onClick={onReset}>
-                    🔄 完全重置小爱 (不可逆)
+                    🔄 完全重置小爱
                 </Button>
                 <p className="text-center text-[10px] text-status-danger/80">
-                    这将清空好感度、性格、情绪、全部任务、长期记忆、主动消息状态与生活日志，此操作不可恢复。
+                    这将清空好感度、性格、情绪、全部任务、长期记忆、主动消息状态与生活日志。
+                    重置前会自动存一份快照（见上方「数据与备份」），万一后悔还能恢复回去 ——
+                    但只有「最近几次」，想长期留存请点「导出档案」把数据拿到自己手里。
                 </p>
             </div>
 

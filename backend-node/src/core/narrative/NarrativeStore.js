@@ -102,6 +102,22 @@ export class NarrativeStore {
         this._load();
     }
 
+    /**
+     * 从磁盘重新载入（档案导入后用，B5-12）。同 MemoryStore.reload：
+     * 先取消去抖中的待写，否则旧内存态的延迟 flush 会把刚导入的文件盖掉。
+     */
+    reload() {
+        if (this._saveTimer) {
+            clearTimeout(this._saveTimer);
+            this._saveTimer = null;
+        }
+        this._dirty = false;
+        this.narratives = [];
+        this.stats = { lastExtractTurn: 0, lastExtractAt: 0 };
+        this._load();
+        return { narratives: this.narratives.length };
+    }
+
     // ==================== 读写 ====================
 
     /**
@@ -257,20 +273,26 @@ export class NarrativeStore {
         }, config.narrative.flushDebounceMs);
     }
 
-    /** 立即落盘（幂等；无待写数据时空操作）。进程退出前必须调用 */
+    /**
+     * 立即落盘（幂等；无待写数据时视为已完成）。进程退出前与档案导出前必须调用。
+     * B0-6 后半：回传写盘结果，false 时保持 dirty 让下次继续尝试。
+     * @returns {boolean}
+     */
     flush() {
         if (this._saveTimer) {
             clearTimeout(this._saveTimer);
             this._saveTimer = null;
         }
-        if (!this._dirty) return;
-        this._dirty = false;
-        this._saveNow();
+        if (!this._dirty) return true;
+        const ok = this._saveNow();
+        // 成功才清脏标记；失败保持脏，下一次 scheduleSave / flush 仍会重试
+        this._dirty = !ok;
+        return ok;
     }
 
-    /** 无条件写盘（reset / 测试用）。 */
+    /** 无条件写盘（reset / 测试 / 导出前用）。@returns {boolean} 是否落盘成功 */
     _saveNow() {
-        writeJson(DB_FILE, {
+        return writeJson(DB_FILE, {
             version: SCHEMA_VERSION,
             narratives: this.narratives,
             stats: this.stats,

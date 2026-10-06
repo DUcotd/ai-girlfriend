@@ -4,6 +4,8 @@
 import type {
   AffinityTraceEntry,
   AppState,
+  BackupReport,
+  BackupStatus,
   ChatResponse,
   CurrentActivity,
   FactItem,
@@ -415,6 +417,46 @@ export const api = {
     if (!res.ok) throw new Error("Failed to fetch proactive message");
     return res.json();
   },
+
+  // ---------- 全量档案：导出 / 导入 / 快照（B5-12）----------
+  /** 档案与快照的当前状态（数据目录、备份目录、快照列表） */
+  getBackupStatus: () => request<BackupStatus>("/backup/status"),
+
+  /**
+   * 导出整份档案。
+   * 走 raw 拿原始 Response：要读 `Content-Disposition` 里的文件名、
+   * 也要能在失败时区分「后端自检发现档案含密钥而中止」（500）这种情况。
+   */
+  async exportArchive(): Promise<{ blob: Blob; filename: string }> {
+    // raw: true → 由调用方自己处理错误（要读响应头，也要把「后端自检发现档案含密钥
+    // 而中止导出」这类失败说清楚），所以这里不再附加 headers，交给 request() 统一加
+    const res = await request<Response>("/backup/export", { raw: true });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.detail || `导出失败：${res.status}`);
+    }
+    const disposition = res.headers.get("content-disposition") || "";
+    const filename = /filename="?([^";]+)"?/.exec(disposition)?.[1] || "ai-girlfriend-archive.json";
+    return { blob: await res.blob(), filename };
+  },
+
+  /** 导入一份档案（会覆盖当前全部数据；后端在导入前自动做快照） */
+  importArchive: (archive: unknown) =>
+    request<BackupReport>("/backup/import", { method: "POST", body: JSON.stringify(archive) }),
+
+  /** 只在服务器本地留一份当前状态，不下载 */
+  createSnapshot: (reason = "manual") =>
+    request<{ status: string; dir: string; files: string[] }>("/backup/snapshot", {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+
+  /** 从某份快照恢复（同样会先做一次 pre-restore 快照） */
+  restoreSnapshot: (id: string) =>
+    request<BackupReport & { restoredFrom: string }>("/backup/restore", {
+      method: "POST",
+      body: JSON.stringify({ id }),
+    }),
 
   // ---------- 生活模拟 ----------
   getCurrentActivity: () => request<CurrentActivity>("/life/current"),

@@ -139,21 +139,45 @@ export class TriggerRegistry {
         if (typeof this._saveTimer.unref === 'function') this._saveTimer.unref();
     }
 
-    /** 立即落盘（幂等；无待写数据时空操作）。停机前必须调用 */
+    /**
+     * 立即落盘（幂等；无待写数据时视为已完成）。停机与档案导出前必须调用。
+     * B0-6 后半：回传写盘结果，失败时保持脏标记 —— 否则「事件队列一直没存下来」
+     * 这种状态在日志里完全看不见，重启后才发现候选没了。
+     * @returns {boolean}
+     */
     flush() {
         if (this._saveTimer) {
             clearTimeout(this._saveTimer);
             this._saveTimer = null;
         }
-        if (!this._dirty) return;
+        if (!this._dirty) return true;
         this._dirty = false;
-        writeJson(TRIGGER_STATE_FILE, {
+        const ok = writeJson(TRIGGER_STATE_FILE, {
             version: this.config.stateVersion,
             eventQueue: this.eventQueue,
             cooldowns: this.cooldowns,
             dedupeSeen: this.dedupeSeen,
             lastUpdated: new Date().toISOString(),
         });
+        if (!ok) this._dirty = true;
+        return ok;
+    }
+
+    /**
+     * 从磁盘重新载入（档案导入后用，B5-12）。
+     * 同样要先取消去抖：否则旧队列与冷却标记会被延迟 flush 盖回导入结果。
+     */
+    reload() {
+        if (this._saveTimer) {
+            clearTimeout(this._saveTimer);
+            this._saveTimer = null;
+        }
+        this._dirty = false;
+        this.eventQueue = [];
+        this.cooldowns = {};
+        this.dedupeSeen = {};
+        this._load();
+        return { queueSize: this.eventQueue.length };
     }
 
     // ==================== 注册与订阅 ====================

@@ -161,6 +161,16 @@ class PersonalityDrift {
         this._loadState();
     }
 
+    /**
+     * 从磁盘重新载入（档案导入后用，B5-12）：先回到默认预设的 v2 状态再读盘，
+     * 这样导入的档案里没有的字段不会残留当前会话漂移出来的值。
+     */
+    reload() {
+        this._initializeDefaults();
+        this._loadState();
+        return { presetId: this.presetId, dims: this.getDominantTraits?.().length ?? 0 };
+    }
+
     /** 初始化温柔预设的 v2 状态。 */
     _initializeDefaults(now = Date.now()) {
         const preset = getPreset(DEFAULT_PRESET_ID);

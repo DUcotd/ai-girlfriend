@@ -58,6 +58,20 @@ class AffinityEngine {
         this._loadState();
     }
 
+    /**
+     * 从磁盘重新载入（档案导入后用，B5-12）。
+     * 本引擎每轮都同步写盘、没有去抖定时器，所以只需要重置内存态再读。
+     */
+    reload() {
+        this._affinity = DEFAULT_AFFINITY;
+        this.lastUserActiveTime = Date.now();
+        this.gainEvents = [];
+        this.daily = { dayKey: dayKey(), gained: 0 };
+        this.ledger = [];
+        this._loadState();
+        return { affinity: this._affinity, ledger: this.ledger.length };
+    }
+
     // ==================== 读写 ====================
 
     get affinity() { return this._affinity; }

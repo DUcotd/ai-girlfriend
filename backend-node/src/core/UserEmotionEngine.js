@@ -42,6 +42,28 @@ class UserEmotionEngine {
         this._load();
     }
 
+    /**
+     * 从磁盘重新载入（档案导入后用，B5-12）。
+     * 取消去抖中的待写是必须的：否则旧内存态会在 flushDebounceMs 后盖掉刚导入的时间线。
+     */
+    reload() {
+        if (this._saveTimer) {
+            clearTimeout(this._saveTimer);
+            this._saveTimer = null;
+        }
+        this._dirty = false;
+        this.state = {
+            valence: NEUTRAL_EMOTION.valence,
+            arousal: NEUTRAL_EMOTION.arousal,
+            intensity: NEUTRAL_EMOTION.intensity,
+            label: NEUTRAL_LABEL,
+            updatedAt: null,
+        };
+        this.timeline = [];
+        this._load();
+        return { label: this.state.label, timeline: this.timeline.length };
+    }
+
     // ==================== 词表分析（同步纯计算，不落盘） ====================
 
     /**
@@ -368,28 +390,35 @@ class UserEmotionEngine {
         }, config.userEmotion.flushDebounceMs);
     }
 
-    /** 立即落盘（幂等；无待写数据时空操作）。 */
+    /**
+     * 立即落盘（幂等；无待写数据时视为已完成）。停机与档案导出前必须调用。
+     * B0-6 后半：回传写盘结果，失败时保持脏标记等下次重试。
+     * @returns {boolean}
+     */
     _flush() {
         if (this._saveTimer) {
             clearTimeout(this._saveTimer);
             this._saveTimer = null;
         }
-        if (!this._dirty) return;
+        if (!this._dirty) return true;
         this._dirty = false;
-        this._saveNow();
+        const ok = this._saveNow();
+        if (!ok) this._dirty = true;
+        return ok;
     }
 
     /**
      * 公开 flush（停机兜底，对照 MemoryStore.flush / NarrativeStore.flush）：
      * 把去抖中的待写时间线立即落盘。内部转发 _flush，避免外部触碰私有方法。
+     * @returns {boolean} 是否落盘成功
      */
     flush() {
-        this._flush();
+        return this._flush();
     }
 
-    /** 无条件写盘（reset 用）。 */
+    /** 无条件写盘（reset 与导出前用）。@returns {boolean} */
     _saveNow() {
-        writeJson(STATE_FILE, {
+        return writeJson(STATE_FILE, {
             version: SCHEMA_VERSION,
             state: this.state,
             timeline: this.timeline,

@@ -96,6 +96,24 @@ class LifeSimulator {
         this.init();
     }
 
+    /**
+     * 从磁盘重新载入生活日志（档案导入后用，B5-12）。
+     * 只动状态字段，不重开定时器：定时器由 startSimulation() 独家负责。
+     */
+    reload() {
+        this.logPath = dataPath(LOG_FILE);
+        this.currentActivity = null;
+        this.activityStartTime = null;
+        this.activityEndTime = null;
+        this.activityHistory = [];
+        this.loadState();
+        if (!this.currentActivity) {
+            // 与 init() 同口径：没有当前活动就现场抽一条，否则 /life/current 会一直空
+            this.startNewActivity();
+        }
+        return { activity: this.currentActivity?.activity, history: this.activityHistory.length };
+    }
+
     init() {
         // 加载历史记录
         this.loadState();
