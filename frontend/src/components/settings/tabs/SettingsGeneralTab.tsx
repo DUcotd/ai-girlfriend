@@ -1,6 +1,7 @@
 "use client";
 
 import ApiConfigForm from "@/components/ui/ApiConfigForm";
+import type { LiveConfig } from "@/components/ui/ApiConfigForm";
 import type { AdvancedChatConfig } from "@/lib/chatParams";
 
 interface SettingsGeneralTabProps {
@@ -14,6 +15,10 @@ interface SettingsGeneralTabProps {
     advanced: AdvancedChatConfig;
     /** 高级选项增量变更；状态由 SettingsDialog 持有并统一保存 */
     onAdvancedChange: (patch: Partial<AdvancedChatConfig>) => void;
+    /** 后端当前真正生效的连接配置（GET /config/status，不含 Key） */
+    live?: LiveConfig | null;
+    /** 上次保存后端回传的 warnings，留在表单里供用户读完 */
+    saveWarnings?: string[];
 }
 
 /**

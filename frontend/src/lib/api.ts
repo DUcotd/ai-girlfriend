@@ -224,9 +224,22 @@ export const api = {
   // （updateConfig 已删除：它接收裸 payload、绕过 snake_case 映射，是「静默失效」的footgun；
   //   所有下发路径统一走 syncConfig。）
 
-  /** 下发 UI 配置（camelCase）——自动完成字段映射，所有调用方都用它，勿直发 camelCase */
+  /**
+   * 下发 UI 配置（camelCase）——自动完成字段映射，所有调用方都用它，勿直发 camelCase。
+   *
+   * 失败时后端回 400 + `{status:'invalid_config', detail, errors[]}`，`request()`
+   * 会把 `detail` 放进 Error.message —— 调用方必须把它显示给用户，
+   * 不能一律替换成「请检查后端连接」（地址被拒和后端离线是两回事）。
+   * 成功时 warnings 非空 = 「存下了，但没按你以为的方式生效」（未知字段、
+   * 本机/局域网地址），调用方同样必须呈现，否则又是一次静默失效。
+   */
   syncConfig: (cfg: UiChatConfig) =>
-    request<{ status: string; current_model?: string }>("/config", {
+    request<{
+      status: string;
+      current_model?: string;
+      base_url?: string | null;
+      warnings?: string[];
+    }>("/config", {
       method: "POST",
       body: JSON.stringify(toBackendConfigPayload(cfg)),
     }),

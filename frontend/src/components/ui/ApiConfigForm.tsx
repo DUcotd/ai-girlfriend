@@ -5,6 +5,8 @@ import type { ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronDown } from "lucide-react";
 import { PROVIDER_PRESETS, matchPreset } from "@/lib/providers";
+import { assessBaseUrl } from "@/lib/baseUrlGrade";
+import type { BaseUrlGrade } from "@/lib/baseUrlGrade";
 import {
     CHAT_NUMBER_LIMITS,
     DEFAULT_ADVANCED_CONFIG,
@@ -48,7 +50,45 @@ interface ApiConfigFormProps {
     /** 基础 URL 下方的补充说明（如向导里的 DeepSeek 提示） */
     baseUrlHint?: ReactNode;
     modelPlaceholder?: string;
+    /**
+     * 后端**当前真正生效**的配置（`GET /config/status`，不含任何 Key）。
+     * 只有设置页会传；不传就不渲染「当前生效」那一行。
+     */
+    live?: LiveConfig | null;
+    /**
+     * 上一次保存成功后后端回传的 warnings（`POST /config` 响应字段）。
+     * 「保存成功但有话要说」时不能只甩一句「已保存」—— 那正是静默失效的温床。
+     */
+    saveWarnings?: string[];
 }
+
+export interface LiveConfig {
+    /** 后端进程里是否已经有 API Key（后端重启后未回灌时为 false） */
+    configured: boolean;
+    baseUrl: string | null;
+    currentModel: string | null;
+}
+
+/**
+ * baseUrl 分级的展示样式。分级规则在 `lib/baseUrlGrade.ts`，与后端
+ * `configValidation.classifyBaseUrlHost()` 是同一把尺子（跨端测试逐样本比对）。
+ * ok 不占版面：只在 warn / block 时给一行说明。
+ */
+const GRADE_STYLE: Record<
+    Exclude<BaseUrlGrade, "ok">,
+    { note: string; input: string; label: string }
+> = {
+    warn: {
+        note: "text-status-warning",
+        input: "border-status-warning/60 focus:border-status-warning focus:ring-status-warning/15",
+        label: "⚠️",
+    },
+    block: {
+        note: "text-status-danger",
+        input: "border-status-danger/60 focus:border-status-danger focus:ring-status-danger/15",
+        label: "⛔",
+    },
+};
 
 /**
  * LLM 服务商配置表单：设置页「通用」页签与首启向导共用，
@@ -67,6 +107,8 @@ export default function ApiConfigForm({
     onAdvancedChange,
     baseUrlHint,
     modelPlaceholder = "gpt-3.5-turbo",
+    live = null,
+    saveWarnings = [],
 }: ApiConfigFormProps) {
     const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
     /**
@@ -82,6 +124,17 @@ export default function ApiConfigForm({
 
     const adv = advanced ?? DEFAULT_ADVANCED_CONFIG;
     const patchAdvanced = (patch: Partial<AdvancedChatConfig>) => onAdvancedChange?.(patch);
+
+    /**
+     * 地址分级在「输入时就显示」，而不是等保存失败后弹一句「请检查后端连接」：
+     * block 与后端的拒绝结论一致，warn 与后端 warnings 的文案逐字一致。
+     */
+    const assessment = assessBaseUrl(baseUrl);
+    const gradeStyle = assessment.grade === "ok" ? null : GRADE_STYLE[assessment.grade];
+    /** 后端已生效但表单还没保存的地址（保存前后对得上才算真的生效） */
+    const normalizedFormUrl = baseUrl.trim().replace(/\/$/, "");
+    const liveUrl = live?.baseUrl?.replace(/\/$/, "") ?? null;
+    const liveDiffers = !!liveUrl && liveUrl !== normalizedFormUrl;
 
     return (
         <>
@@ -145,7 +198,28 @@ export default function ApiConfigForm({
                     value={baseUrl}
                     onChange={(e) => onBaseUrlChange(e.target.value)}
                     placeholder="https://api.openai.com/v1"
+                    className={gradeStyle?.input}
                 />
+                {/* 分级说明：warn 用后端的原话，block 表示「这样保存会被拒绝」 */}
+                {gradeStyle && assessment.message && (
+                    <p className={cn("pl-1 text-[10px] leading-relaxed", gradeStyle.note)}>
+                        {gradeStyle.label} {assessment.message}
+                    </p>
+                )}
+                {/* 「当前生效」以后端为准：界面显示已保存、后端其实还是旧地址，
+                    是这类配置页最常见的自欺（Key 未回灌时也在这里暴露） */}
+                {live && (
+                    <p className="pl-1 text-[10px] leading-relaxed text-content-muted">
+                        后端当前生效：{liveUrl || "（尚未设置）"}
+                        {liveDiffers && " ｜与上方填写不同，保存后才会切换"}
+                    </p>
+                )}
+                {live && !live.configured && (
+                    <p className="pl-1 text-[10px] leading-relaxed text-status-warning">
+                        ⚠️ 后端进程里还没有 API Key（后端刚重启过就是这种状态）——
+                        点一次「保存设置」即可恢复对话。
+                    </p>
+                )}
             </Field>
 
             <Field label="模型名称">
@@ -289,6 +363,24 @@ export default function ApiConfigForm({
                             </motion.div>
                         )}
                     </AnimatePresence>
+                </div>
+            )}
+
+            {/* 后端保存成功后回传的 warnings（未知字段、本机/局域网地址等）。
+                留在表单里而不是只弹 3 秒 toast：这些是「配置没按你以为的生效」的信号。 */}
+            {saveWarnings.length > 0 && (
+                <div className="space-y-1 rounded-2xl border border-status-warning/40 bg-status-warning/5 p-3">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-status-warning">
+                        已保存，但有 {saveWarnings.length} 条提醒
+                    </p>
+                    {saveWarnings.map((warning) => (
+                        <p
+                            key={warning}
+                            className="pl-1 text-[10px] leading-relaxed text-content-secondary"
+                        >
+                            · {warning}
+                        </p>
+                    ))}
                 </div>
             )}
         </>

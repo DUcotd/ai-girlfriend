@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Settings, MessageSquare, Mic, Brain, Palette, ShieldAlert, Bell } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -26,12 +26,29 @@ import SettingsMemoryTab from "./tabs/SettingsMemoryTab";
 import SettingsPersonalityTab from "./tabs/SettingsPersonalityTab";
 import SettingsProactiveTab from "./tabs/SettingsProactiveTab";
 import SettingsVoiceTab from "./tabs/SettingsVoiceTab";
+import type { LiveConfig } from "@/components/ui/ApiConfigForm";
 
 interface SettingsDialogProps {
     onClose: () => void;
 }
 
 type SettingsTab = "general" | "voice" | "memory" | "personality" | "proactive" | "advanced";
+
+/**
+ * 把保存失败的原因说清楚。
+ *
+ * 后端业务 4xx 的 `detail` 已经被 `request()` 放进 Error.message（地址不合规、
+ * 未知主动消息类型……），而后端离线时 fetch 抛的是 "Failed to fetch"。
+ * 两者必须分开提示 —— 一律写成「请检查后端连接」会指挥用户去查网络，
+ * 而真正的问题是他们刚填的那个地址。
+ */
+function saveFailureMessage(error: unknown): string {
+    const raw = error instanceof Error ? error.message.trim() : "";
+    if (!raw || /failed to fetch|networkerror|network request failed|load failed/i.test(raw)) {
+        return "保存失败：连不上后端（默认 8000 端口），请确认后端已启动后重试";
+    }
+    return `保存失败：${raw}`;
+}
 
 const tabs: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
     { id: "general", label: "通用", icon: MessageSquare },
@@ -72,6 +89,14 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
     const [isLoading, setIsLoading] = useState(false);
     const [showResetConfirm, setShowResetConfirm] = useState(false);
     const [showPersonalityResetConfirm, setShowPersonalityResetConfirm] = useState(false);
+    /**
+     * 后端**当前真正生效**的连接配置（`GET /config/status`，只有非敏感字段）。
+     * 「表单值」和「生效值」是两回事：后端重启后 Key 没回灌时，界面照样显示上次保存的
+     * 地址与模型，聊天却一路报错 —— 这一行就是用来戳破这种自欺的。
+     */
+    const [liveConfig, setLiveConfig] = useState<LiveConfig | null>(null);
+    /** `POST /config` 成功但带回 warnings（未知字段、本机/局域网地址）时留在这里供读完 */
+    const [saveWarnings, setSaveWarnings] = useState<string[]>([]);
 
     // 性格状态与提交（即时提交，不走「保存全部配置」）；
     // 挂在弹窗层级，性格页签只做展示，「恢复默认预设」确认框才能渲染为 Dialog 的兄弟节点。
@@ -141,26 +166,43 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         };
     }, []);
 
+    /**
+     * 把 `GET /config/status` 写进界面状态：陪伴感开关 + 后端当前生效的连接配置。
+     * 只读非敏感字段（后端不会回传任何 Key）。
+     */
+    const applyConfigStatus = useCallback(
+        (data: Awaited<ReturnType<typeof api.getConfigStatus>>) => {
+            setLiveConfig({
+                configured: !!data.isConfigured,
+                baseUrl: data.baseUrl ?? null,
+                currentModel: data.currentModel ?? null,
+            });
+            if (data.companion) {
+                setCompanion({
+                    userEmotionEnabled: !!data.companion.userEmotionEnabled,
+                    narrativeEnabled: !!data.companion.narrativeEnabled,
+                    triggerEnabled: !!data.companion.triggerEnabled,
+                });
+            }
+        },
+        []
+    );
+
     // 陪伴感开关以**后端真值**为准：后端现在会把它们持久化，本地镜像只作离线兜底，
     // 否则会出现「界面显示开着、后端其实早就回弹了」的假象（审计 HTTP-10）。
     useEffect(() => {
         let cancelled = false;
         api.getConfigStatus()
             .then((data) => {
-                if (cancelled || !data.companion) return;
-                setCompanion({
-                    userEmotionEnabled: !!data.companion.userEmotionEnabled,
-                    narrativeEnabled: !!data.companion.narrativeEnabled,
-                    triggerEnabled: !!data.companion.triggerEnabled,
-                });
+                if (!cancelled) applyConfigStatus(data);
             })
             .catch((e) => {
-                if (!cancelled) console.error("Failed to fetch companion status:", e);
+                if (!cancelled) console.error("Failed to fetch config status:", e);
             });
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [applyConfigStatus]);
 
     /** 高级选项增量变更（页签只上报改动的字段） */
     const patchAdvanced = (patch: Partial<AdvancedChatConfig>) => {
@@ -174,6 +216,8 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
 
     const handleSave = async () => {
         setIsLoading(true);
+        // 每次保存重新开始收集提醒，否则上一次的警告会一直挂着
+        setSaveWarnings([]);
         // 保存前再钳一次：输入框失焦已钳过，这里是防「改完直接点保存」的漏网值
         const safeAdvanced = normalizeAdvancedConfig(advanced);
 
@@ -205,7 +249,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
 
         try {
             // 同步到后端（camelCase → snake_case 由 syncConfig 统一处理）
-            await api.syncConfig({
+            const result = await api.syncConfig({
                 apiKey,
                 baseUrl,
                 modelName,
@@ -229,10 +273,24 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
             // 通知运行时（useSpeech 等订阅方）引擎已切换
             useSettingsStore.getState().setTtsEngine(ttsEngine);
 
+            // 保存后立刻用后端真值刷新「当前生效」，让界面说的就是进程里的事实
+            try {
+                applyConfigStatus(await api.getConfigStatus());
+            } catch {
+                // 后端在保存之后掉线不该把成功的保存报成失败，保留上次快照即可
+            }
+
+            const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
+            setSaveWarnings(warnings);
+            if (warnings.length) {
+                // 「存下了，但没按你以为的方式生效」——弹窗不关，警告留在表单里读完
+                showToast(`设置已保存，但有 ${warnings.length} 条提醒需要你确认`, "info");
+                return;
+            }
             showToast("设置已保存并同步! ✨", "success");
             onClose();
-        } catch {
-            showToast("保存失败，请检查后端连接", "error");
+        } catch (error) {
+            showToast(saveFailureMessage(error), "error");
         } finally {
             setIsLoading(false);
         }
@@ -338,6 +396,8 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                                     onModelNameChange={setModelName}
                                     advanced={advanced}
                                     onAdvancedChange={patchAdvanced}
+                                    live={liveConfig}
+                                    saveWarnings={saveWarnings}
                                 />
                             )}
 
