@@ -234,7 +234,7 @@
 | 2026-10-06 | **B3**（接口契约与安全）：`POST /config` 全字段校验、baseUrl 分级、消费型 GET 改 POST、上游错误稳定码、上传/TTS 收紧、自由文本上限、一致性小修打包、日志隐私与队列上限。新增 `test-audit-b3.mjs` 95 项 → 后端 18 套全绿、前端 89 例全绿 | `728cacb` |
 | 2026-10-07 | **B5**（工程基建，除档案导出与依赖升级）：`GET /health` + 零依赖 logger（时间戳/级别/堆栈）、启动脚本改探 `/health`、`npm run check` 补真导入冒烟、零依赖静态检查 `npm run lint`、`testKit` 让「用例没跑」也判失败、`.env.example`（86 个旋钮分 10 组）+ 文档一致性测试、CI 补 lint/build/boot smoke、`.gitattributes`、engines 对齐 20.9。后端 **20 套**全绿、前端 typecheck/lint/test/build 全绿 | `1a68590` |
 | 2026-10-07 | **B5-12**（全量档案导出/导入/自动快照）+ **B0-6 后半**（四个去抖 flush 回传写盘结果）：`/backup/{status,export,import,snapshot,restore}`、11 个数据文件的唯一清单与逐个热加载、`POST /reset` 前自动快照、设置页「数据与备份」面板。新增 `test-audit-b5b.mjs` 65 项 → 后端 **21 套**全绿、前端 **94 例**全绿 | `7e8d5b3` `46a03bb` `960d2d8` |
-| 2026-10-07 | **B3-3 前端半格（B3 就此收完）**：设置页在**输入时**就显示 baseUrl 分级（ok 不占版面 / warn 琥珀 / block 红），文案与后端 `normalizeBaseUrl()` 逐字同源；新增 `lib/baseUrlGrade.ts` + `baseUrlGrade.test.ts`（36 例，**直接 import 后端模块**逐样本比对分级、放行/拒绝与告警文案，不再用正则抄）；「后端当前生效：…」一行暴露表单值≠生效值（含后端重启后 Key 未回灌）；`POST /config` 的 `warnings` 存进表单并在保存后展示、弹窗不关；保存失败提示由「请检查后端连接」改成后端 `detail` 原文，后端离线才提网络。前端 **10 套 / 130 例**全绿、后端 21 套全绿 | `待提交` |
+| 2026-10-07 | **B3-3 前端半格（B3 就此收完）**：设置页在**输入时**就显示 baseUrl 分级（ok 不占版面 / warn 琥珀 / block 红），文案与后端 `normalizeBaseUrl()` 逐字同源；新增 `lib/baseUrlGrade.ts` + `baseUrlGrade.test.ts`（36 例，**直接 import 后端模块**逐样本比对分级、放行/拒绝与告警文案，不再用正则抄）；「后端当前生效：…」一行暴露表单值≠生效值（含后端重启后 Key 未回灌）；`POST /config` 的 `warnings` 存进表单并在保存后展示、弹窗不关；保存失败提示由「请检查后端连接」改成后端 `detail` 原文，后端离线才提网络。前端 **10 套 / 130 例**全绿、后端 21 套全绿 | `cde4201` |
 
 **B3-3 前端落地要点（2026-10-07）**：
 
