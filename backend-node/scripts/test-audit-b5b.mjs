@@ -52,7 +52,7 @@ const { createHarness } = await import('./lib/testKit.mjs');
 const NarrativeStore = (await import('../src/core/narrative/NarrativeStore.js')).default;
 const UserEmotionEngine = (await import('../src/core/UserEmotionEngine.js')).default;
 
-const t = createHarness('audit-b5b', { expect: 66 });
+const t = createHarness('audit-b5b', { expect: 67 });
 const check = t.check;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -343,13 +343,18 @@ console.log('== B0-6 后半：去抖 flush 必须回传写盘结果 ==');
         ueFailed === false && ue._dirty === true, `${ueFailed}/${ue._dirty}`);
 
     triggerRegistry.eventQueue.push({ id: 'q1', triggerId: 't', targetType: 'miss_you', data: {} });
+    // 直接 flush 而不是「scheduleSave 后睡 1.2 秒等去抖定时器」：CI 的 2 核 runner 上
+    // 那个定时器可能晚于 1.2 秒才跑，测试就会偶发假失败（本地永远复现不出来）
     triggerRegistry.scheduleSave();
-    await sleep(config.triggerRegistry ? 1200 : 1200);
-    check('TriggerRegistry 的队列变更能落盘并在重启后恢复',
+    // 直接 flush 而不是「scheduleSave 后睡觉等定时器」：CI 的 2 核 runner 上去抖定时器
+    // 可能晚于任何合理的等待时间，测试就会偶发假失败（本地永远复现不出来）
+    const flushed = triggerRegistry.flush();
+    check('flush() 把去抖中的待写数据立刻落盘并回传 true', flushed === true);
+    check('TriggerRegistry 的队列变更确实写到了磁盘（重启后能恢复）',
         !!readFile('trigger_state.json')?.eventQueue?.some((q) => q.id === 'q1'),
         JSON.stringify(readFile('trigger_state.json')?.eventQueue));
-    check('flush() 在无事可写时返回 true（幂等，不误报失败）',
-        triggerRegistry.flush() === true || true);
+    check('无事可写时 flush() 仍返回 true（幂等，不误报失败）',
+        triggerRegistry.flush() === true);
 }
 
 // =========================================================================

@@ -539,8 +539,26 @@ console.log('== B3-9 日志隐私与队列上限 ==');
     check('preview 折叠空白并截断', preview(`a\n  b ${'c'.repeat(300)}`).length <= config.logging.textPreviewChars + 20,
         preview('x'));
 
-    // 队列上限：慢速上游 + 并发请求 → 超出的直接 429
+    // 队列上限。
+    // ⚠️ 刻意**不**用「并发打一轮慢请求，期望出现 429」这种写法：那等于把断言
+    // 绑在调度时序上 —— 本机 4 核能过，CI 的 2 核 Linux runner 上请求可能一枚接一枚
+    // 地串行完成（每次入队时深度已经掉回 0），于是要么偶尔要么稳定地假失败。
+    // 这里直接把深度推到上限来验闸门本身（与时间无关），并发那一轮只验「不 500、计数归零」。
     fakeUpstream({ delayMs: 120, chunks: 3 });
+    const savedDepth = aiGirlfriend._queueDepth;
+    aiGirlfriend._queueDepth = config.logging.maxChatQueue;
+    const saturated = await fetch(`${base}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: '队列满了还发' }),
+    }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
+    aiGirlfriend._queueDepth = savedDepth;
+    check(`深度到达上限（${config.logging.maxChatQueue}）时新请求被拒 429`,
+        saturated.status === 429, `${saturated.status}`);
+    check('被拒的请求拿到的是 service_busy 稳定码与可读文案',
+        saturated.body?.error_code === UPSTREAM_ERROR_CODES.BUSY
+        && typeof saturated.body?.detail === 'string', JSON.stringify(saturated.body));
+
     const n = config.logging.maxChatQueue + 3;
     const results = await Promise.all(
         Array.from({ length: n }, (_, i) => fetch(`${base}/chat`, {
@@ -549,13 +567,10 @@ console.log('== B3-9 日志隐私与队列上限 ==');
             body: JSON.stringify({ message: `压力测试 ${i}` }),
         }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) })))
     );
-    const busy = results.filter((r) => r.status === 429);
-    check(`并发 ${n} 轮（上限 ${config.logging.maxChatQueue}）时超额请求被拒`,
-        busy.length >= 1, JSON.stringify(results.map((r) => r.status)));
-    check('被拒的请求拿到的是 service_busy 稳定码与可读文案',
-        busy.every((r) => r.body?.error_code === UPSTREAM_ERROR_CODES.BUSY && typeof r.body?.detail === 'string'),
-        JSON.stringify(busy[0]?.body));
-    check('队列深度在全部请求结束后归零（不泄漏计数）',
+    check(`并发 ${n} 轮里每一轮要么正常要么被明确拒绝，绝不 500`,
+        results.every((r) => r.status === 200 || r.status === 429),
+        JSON.stringify(results.map((r) => r.status)));
+    check('压力过后队列深度归零（计数不泄漏）',
         aiGirlfriend._queueDepth === 0, String(aiGirlfriend._queueDepth));
 
     fakeUpstream();
