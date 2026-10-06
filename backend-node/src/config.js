@@ -64,10 +64,10 @@ export const config = {
     staticDir: path.join(BACKEND_ROOT, 'static'),
     /**
      * 档案导出/导入与自动快照（B5-12）。
-     * `dir` 默认**留空**：由 core/backup.js 在首次使用时按「当前数据目录的旁边」推导。
-     * 为什么不在这里算：DATA_DIR 属于 jsonStore（它 import 本文件，反向 import 会成环）；
-     * 更重要的是——测试与多实例都用 AI_GIRLFRIEND_DATA_DIR 隔离，跟着数据目录走
-     * 才能让自动快照也落进沙盒，而不是每次跑测试都在 backend-node/backups 里堆真快照。
+     * `dir` 默认**留空**：由 core/backup.js 在首次使用时按「当前数据目录里的 backups/ 子目录」推导。
+     * 为什么必须跟着数据目录：测试与多实例都用 AI_GIRLFRIEND_DATA_DIR 隔离，跟着走才能
+     * 让自动快照永远落进那个沙盒。早先用「数据目录的上一级/backups」推导时，跑一次测试
+     * 就在仓库里留下了几份快照（内容当然是测试夹具，但位置完全出人意料、也没人清理）。
      */
     backup: {
         dir: process.env.AI_GIRLFRIEND_BACKUP_DIR ? path.resolve(process.env.AI_GIRLFRIEND_BACKUP_DIR) : null,

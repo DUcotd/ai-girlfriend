@@ -185,8 +185,10 @@ framer-motion 经 MotionConfig reducedMotion="user" 跟随）。
   （`BACKUP_KEEP`）。手滑重置之后在设置页点「恢复」就能救回来。
 - **导入不需要重启**：写盘后逐个引擎热加载；万一某个引擎热加载失败，
   响应里会明确写 `restartRecommended: true`，界面会提示你重启一次，不会假装成功。
-- 备份目录默认跟着数据目录走（`AI_GIRLFRIEND_DATA_DIR` 的旁边），所以跑测试不会
-  在仓库里堆真实快照；`backend-node/backups/` 已在 `.gitignore` 里。
+- 备份目录默认是**数据目录里的 `backups/` 子目录**（`backend-node/data/backups/`，已随
+  `data/` 一起被 `.gitignore` 排除）。它跟着 `AI_GIRLFRIEND_DATA_DIR` 走，所以跑测试时
+  自动快照只会落进沙盒，不会在仓库里留下任何真实对话的副本；想放到别处用
+  `AI_GIRLFRIEND_BACKUP_DIR` 指定。
 
 ## API 一览
 

@@ -195,13 +195,19 @@ export function validateArchive(archive) {
 }
 
 /**
- * 备份根目录。默认「当前数据目录的旁边」而不是写死 backend-node/backups：
- * 测试与多实例都用 AI_GIRLFRIEND_DATA_DIR 隔离，跟着走才能让自动快照也落进沙盒。
+ * 备份根目录。
+ *
+ * 默认落在**数据目录里面**的 `backups/` 子目录，而不是 `data/../backups`：
+ * 前者永远跟着 `AI_GIRLFRIEND_DATA_DIR` 走，任何沙盒/多实例重定向都不会把快照
+ * 写到仓库或别的项目里（用 `..` 推导时踩过一次：测试的临时数据目录在系统临时盘，
+ * 结果快照跑到了完全无关的位置，事后要靠目录内容才认得出来是哪次测试留的）。
+ * 混在 data/ 里也不会有歧义：那 11 个数据文件都是**文件**且各自对应一个引擎，
+ * 目录只此一个，`ARCHIVE_FILES` 的清单与对账测试都只认 `.json` 文件。
  */
 export function backupRoot() {
     return config.backup.dir
         ? path.resolve(config.backup.dir)
-        : path.resolve(dataDir(), '..', 'backups');
+        : path.join(dataDir(), 'backups');
 }
 
 /** 快照目录与命名：时间戳前缀保证排序，reason 让目录名自己说明为什么存在 */

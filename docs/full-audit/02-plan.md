@@ -244,7 +244,7 @@
 | 导入 | `validateArchive` 纯函数先拒掉：不是本格式 / 版本不对 / 没有 files / 某项内容不是对象（否则等于「清空这份数据」）；校验和只作告警不作拒绝（对象重新序列化本就会差空白）。通过后 **先快照 → 写盘 → 逐个 reload**，报告如实列出 `written/writeFailed/reloaded/reloadFailed/restartRecommended` |
 | 不重启就生效 | 每个 owner 加 `reload()`，第一件事都是**取消去抖中的待写定时器**并清/保脏标记 —— 不取消的话内存里的旧状态会在两秒后把刚导入的文件盖回去（表现成「导入没生效」）。测试里真的等了 `flushDebounceMs + 800ms` 再回读磁盘确认没被覆盖 |
 | 重置可回滚 | `resetAll()` 开头 flush + `createSnapshot('pre-reset')`，快照目录随响应 `snapshot` 字段回给界面；快照失败**不阻断重置**但会如实打日志（用户已明确要求清空） |
-| 备份目录推导 | `config.backup.dir` 默认 `null`，由 `backupRoot()` 落在**当前数据目录的旁边** —— 这样测试与多实例用 `AI_GIRLFRIEND_DATA_DIR` 隔离时，自动快照也进沙盒，不会在仓库里堆真实对话；`backend-node/backups/` 已进 `.gitignore` |
+| 备份目录推导 | `config.backup.dir` 默认 `null`，由 `backupRoot()` 落在**数据目录里面的 `backups/` 子目录**（跟着 `AI_GIRLFRIEND_DATA_DIR` 走，已随 `data/` 被 gitignore）。第一版用「数据目录的上一级/backups」推导，跑一次测试就在 `backend-node/backups/` 留下 4 份快照（内容是测试夹具，但位置出人意料且无人清理）—— 改成数据目录内部后，b5b 里加了「跑完不留仓库残留」的断言钉住 |
 | B0-6 后半 | `MemoryStore/NarrativeStore/UserEmotionEngine/TriggerRegistry` 的 `flush()` 一律回传布尔，**失败时保持脏标记**（旧写法什么都不回，「磁盘满了」在整条去抖链路上完全不可观测） |
 
 **测试自己踩到的两个坑（值得记）**：
@@ -326,6 +326,12 @@ git add -A && git commit            # 任一步 npm test 红就回退这一步�
 ② 向下跃迁要不要让她点破（`stageTransitionTrigger.evaluate` 现在对 `direction==='down'` 一律返回 null，
    事实已经发成事件，只差一个决定）；
 ③ REQ-05 话题闭环（`sourceEpisodeId` 写路径）/ REQ-09 冷落分层（`EmotionEngine` 的离线惰性结算）。
+
+**B5-12 之后又抓到的一处自伤（2026-10-07）**：档案功能上线后第一次跑全量测试，
+`backend-node/backups/` 里就多了 4 份 `pre-reset` 快照 —— 快照位置的推导规则
+（「数据目录的上一级」）与测试的沙盒推导（系统临时目录）刚好错开，导致测试写到了仓库里。
+改成「数据目录里面的 backups/ 子目录」并加断言；这类「新写的持久化路径没跟着 DATA_DIR 走」
+的问题，凡是以后再加目录都要照这条检查一遍。
 
 **下次开工的断点**：B5 已收完（只剩依赖升级，等有快网络）。接着做 **B7（17 项，前端）**，
 头两格直接吃本批次的成果：

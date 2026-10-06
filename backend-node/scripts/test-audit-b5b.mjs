@@ -52,7 +52,7 @@ const { createHarness } = await import('./lib/testKit.mjs');
 const NarrativeStore = (await import('../src/core/narrative/NarrativeStore.js')).default;
 const UserEmotionEngine = (await import('../src/core/UserEmotionEngine.js')).default;
 
-const t = createHarness('audit-b5b', { expect: 65 });
+const t = createHarness('audit-b5b', { expect: 66 });
 const check = t.check;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -223,11 +223,16 @@ console.log('== 快照：建、列、清、恢复 ==');
     check('快照数量被收敛到 keep 份', listed.length === 3, `实际 ${listed.length}`);
     check('列表按时间倒序（新的在前）', listed[0].id > listed[2].id,
         listed.map((s) => s.id).join(','));
+    // 显式设了 AI_GIRLFRIEND_BACKUP_DIR（本套件就是这么跑的），快照就该在指定目录里；
+    // 断言的实质是「不逃到仓库/别处」，所以比 sandbox 根而不是比 DATA（后者会被显式目录合法地越过）
+    check('快照目录不会逃到本次运行隔离区之外',
+        listed.every((x) => path.resolve(x.dir).startsWith(path.resolve(sandbox))),
+        listed[0]?.dir);
     check('每个快照都自带 SNAPSHOT_INFO.json 说明来源',
         listed.every((s) => s.reason && Array.isArray(s.files)), JSON.stringify(listed[0]));
-    check('快照目录就在备份根目录下、且跟着数据沙盒走（不污染仓库）',
+    check('快照目录就在备份根目录下、且整体落在本次的沙盒里',
         listed.every((s) => path.resolve(s.dir).startsWith(path.resolve(backup.backupRoot())))
-        && path.resolve(backup.backupRoot()).startsWith(path.resolve(os.tmpdir())),
+        && path.resolve(backup.backupRoot()).startsWith(path.resolve(sandbox)),
         backup.backupRoot());
 
     // 恢复一份快照：等于把那份快照当档案导入
@@ -357,10 +362,10 @@ console.log('== 备份目录推导 ==');
     config.backup.dir = null;
     const derived = path.resolve(backup.backupRoot());
     config.backup.dir = savedDir;
-    check('未设置时落在数据目录旁边（沙盒测试因此不会在仓库里堆快照）',
-        derived === path.resolve(path.join(DATA, '..', 'backups')), derived);
-    check('仓库里没有因为跑测试而产生的 backups 目录',
-        !fs.existsSync(path.resolve('backups')) || true);
+    check('未设置时落在数据目录**里面**（任何重定向都带着它走，不会漏到仓库或别处）',
+        derived === path.resolve(path.join(DATA, 'backups')), derived);
+    check('仓库工作区里没有被测试留下的 backups 目录',
+        !fs.existsSync(path.resolve('backups')), 'backend-node/backups 存在，说明有测试写到了真实目录');
 }
 
 server.closeAllConnections?.();
