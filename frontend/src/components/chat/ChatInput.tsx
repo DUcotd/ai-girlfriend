@@ -9,6 +9,7 @@ import RecordButton from "./input/RecordButton";
 import VoiceModeControls from "./input/VoiceModeControls";
 import type { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { useChatStore } from "@/stores/chatStore";
+import { shouldSendOnEnter } from "@/lib/sendShortcut";
 
 interface ChatInputProps {
     input: string;
@@ -57,8 +58,9 @@ export default function ChatInput({
                     type="text"
                     value={input}
                     onChange={(e) => onInputChange(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && onSend()}
+                    onKeyDown={(e) => shouldSendOnEnter(e) && onSend()}
                     placeholder="说点什么..."
+                    aria-label="想对小爱说的话"
                     className="min-w-0 flex-1 bg-transparent px-2 py-2 text-content-primary transition-colors duration-fast placeholder:text-content-muted focus:outline-none disabled:opacity-60"
                     disabled={isLoading}
                 />
@@ -74,7 +76,10 @@ export default function ChatInput({
                     onClick={onSend}
                     disabled={!input.trim() || isLoading}
                     className="rounded-full p-3"
+                    // title 只是鼠标悬停提示；aria-label 才是给读屏与自动化用的名字
+                    // （纯图标按钮必须有，否则可访问名完全依赖 title 这一条腿）
                     title="发送"
+                    aria-label="发送"
                 >
                     <Send size={20} />
                 </Button>
