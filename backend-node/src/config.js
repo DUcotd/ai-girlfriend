@@ -406,6 +406,12 @@ export const config = {
         // 单条注入条目字符上限（超出截断）
         injectEntryMaxChars: envNumber(process.env.NARRATIVE_INJECT_ENTRY_MAX_CHARS, 80, 20, 500),
         /**
+         * 联想召回（F-3）的条数上限：本轮用户话里命中「专属梗 / 线索词」时，
+         * 最多额外带几条故事进注入段（排在检索结果前面）。
+         * = 0 等于关掉联想注入（字段照旧落盘，只是不参与召回）。
+         */
+        associationMaxInject: envNumber(process.env.NARRATIVE_ASSOCIATION_MAX_INJECT, 2, 0, 5),
+        /**
          * 主动回顾的冷却窗（B6-α④）：一条故事提起后多久之内不再拿出来讲。
          * 旧做法是在内存里记一个 `_recentStoryIds` 集合（重启即失忆，
          * 而且 getRandomStory 是随机重掷，小池子里几乎每次都掷回同一条），

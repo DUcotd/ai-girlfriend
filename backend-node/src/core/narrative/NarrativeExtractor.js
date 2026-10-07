@@ -20,6 +20,25 @@ import {
     EXTRACT_NARRATIVE_SYSTEM_PROMPT, normalizeNarrativeType, clampImportance,
     hasNarrativeSignal,
 } from './narrativeTypes.js';
+import { resolveNarrativeDate, DATE_SOURCE } from './narrativeDate.js';
+
+/**
+ * 联想线索标签的统一裁剪（add / update 两条路共用，避免一处放宽一处收紧）。
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+function clampTags(raw) {
+    if (!Array.isArray(raw)) return [];
+    return raw
+        .filter((t) => typeof t === 'string' && t.trim())
+        .map((t) => t.trim().slice(0, 20))
+        .slice(0, 8);
+}
+
+/** 专属梗触发语裁剪；非字符串/空白 → null。 */
+function clampJokeTrigger(raw) {
+    return typeof raw === 'string' && raw.trim() ? raw.trim().slice(0, 40) : null;
+}
 
 /**
  * 解析 LLM 输出的叙事操作（容错：剥代码栅栏、截取首尾大括号、字段校验）。
@@ -179,29 +198,33 @@ export class NarrativeExtractor {
      * 把 LLM 的 add 操作归一化成交付 store 的字段（类型/重要度/标题兜底）。
      * 纯函数，便于单测。
      * @param {object} add
+     * @param {number} [now] 基准时间（ms）；解析「今天/三天前」这类相对说法要用它
      * @returns {object|null}
      */
-    static normalizeAdd(add) {
+    static normalizeAdd(add, now = Date.now()) {
         if (!add || typeof add !== 'object') return null;
         const summary = typeof add.summary === 'string' ? add.summary.trim() : '';
         const title = typeof add.title === 'string' ? add.title.trim() : '';
         if (!summary && !title) return null;
+        // F-1：以前这里写的是 `Number.isFinite(add.occurredAt) ? add.occurredAt : Date.now()`，
+        // 而 prompt 要模型给的是 "YYYY-MM-DD" **字符串** —— 字符串永远不是有限数，于是模型每次
+        // 认真回答的日期都被丢掉，每条故事的发生日期都变成「抽取当天」，纪念日跟着一起错。
+        const date = resolveNarrativeDate(add.occurredAt, { now });
         return {
             type: normalizeNarrativeType(add.type),
             title: title.slice(0, 20),
             summary,
             importance: clampImportance(add.importance, 3),
             recurring: add.recurring && typeof add.recurring === 'object' ? add.recurring : null,
-            occurredAt: Number.isFinite(add.occurredAt) ? add.occurredAt : Date.now(),
+            occurredAt: date.occurredAt,
+            // 「这个日期是她记得的，还是她猜的」——透出来源，界面与 prompt 才不用假装确定
+            occurredAtSource: date.source,
             // B2-10：这三个字段以前在抽取层被**整段丢掉**，于是 store 的 normalizeNarrative
             // 永远收到空值 —— 「写了没接线」的典型形状。标签与笑点触发词让她能
-            // 「按标签联想」，sourceEpisodeId 让故事能回溯到当初那段对话。
-            tags: Array.isArray(add.tags)
-                ? add.tags.filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim().slice(0, 20)).slice(0, 8)
-                : [],
-            jokeTrigger: typeof add.jokeTrigger === 'string' && add.jokeTrigger.trim()
-                ? add.jokeTrigger.trim().slice(0, 40)
-                : null,
+            // 「按标签联想」（最后一轮已接上 AssociationRecall），sourceEpisodeId 让故事
+            // 能回溯到当初那段对话。
+            tags: clampTags(add.tags),
+            jokeTrigger: clampJokeTrigger(add.jokeTrigger),
             sourceEpisodeId: typeof add.sourceEpisodeId === 'string' && add.sourceEpisodeId.trim()
                 ? add.sourceEpisodeId.trim()
                 : null,
@@ -209,7 +232,18 @@ export class NarrativeExtractor {
     }
 
     /** 把 LLM 的 update 操作归一化成 store.updateNarrative 可用的 updates。 */
-    static normalizeUpdate(upd) {
+    /**
+     * 把 LLM 的 update 操作归一化成 store.updateNarrative 可用的 updates。
+     *
+     * F-2：prompt 的 JSON 示例里明写了 `"update": [{..., "tags": [...]}]`，
+     * 但这里过去只透 summary/title/importance/type/recurring —— 等于对着模型说
+     * 「你可以改标签」，然后把改的丢掉。更要紧的是 occurredAt：她后来才想清楚
+     * 「原来是 3 月 8 日，不是 3 月」的时候，没有任何一条路能把正确日期写回去。
+     * @param {object} upd
+     * @param {number} [now]
+     * @returns {object|null}
+     */
+    static normalizeUpdate(upd, now = Date.now()) {
         if (!upd || typeof upd !== 'object' || typeof upd.id !== 'string' || !upd.id) return null;
         const updates = { id: upd.id };
         if (typeof upd.summary === 'string' && upd.summary.trim()) updates.summary = upd.summary.trim();
@@ -217,6 +251,16 @@ export class NarrativeExtractor {
         if (upd.importance !== undefined) updates.importance = clampImportance(upd.importance, 3);
         if (upd.type !== undefined) updates.type = normalizeNarrativeType(upd.type);
         if (upd.recurring !== undefined) updates.recurring = upd.recurring;
+        if (Array.isArray(upd.tags)) updates.tags = clampTags(upd.tags);
+        if (upd.jokeTrigger !== undefined) updates.jokeTrigger = clampJokeTrigger(upd.jokeTrigger);
+        if (upd.occurredAt !== undefined) {
+            const date = resolveNarrativeDate(upd.occurredAt, { now });
+            // 更新时解析失败 = 模型这次没说清 → **保持原日期**，不要用「今天」覆盖掉旧信息
+            if (date.source !== DATE_SOURCE.fallback) {
+                updates.occurredAt = date.occurredAt;
+                updates.occurredAtSource = date.source;
+            }
+        }
         return updates;
     }
 }

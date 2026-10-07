@@ -62,6 +62,9 @@ export function normalizeNarrative(raw) {
         title: title || `我们的${getTypeMeta(type).labelZh}`,
         summary,
         occurredAt: Number.isFinite(raw.occurredAt) ? raw.occurredAt : now,
+        // 日期来源（'stated' / 'relative' / 'month-day' / 'fallback'）。老库里没这个字段 → null，
+        // 界面把它当「她没说她记不记得具体日子」处理，不假装是猜出来的那天。
+        occurredAtSource: typeof raw.occurredAtSource === 'string' ? raw.occurredAtSource : null,
         sourceEpisodeId: typeof raw.sourceEpisodeId === 'string' ? raw.sourceEpisodeId : null,
         participants: Array.isArray(raw.participants) && raw.participants.length
             ? raw.participants.filter((p) => typeof p === 'string')
@@ -161,11 +164,18 @@ export class NarrativeStore {
         }
         if (updates.occurredAt !== undefined && Number.isFinite(updates.occurredAt)) {
             narrative.occurredAt = updates.occurredAt;
+            // 日期被改写时来源必须跟着改：否则一条被纠正过的日期还挂着「她不确定」的标记，
+            // 或者反过来，被静默写回的旧标记让界面继续显示「大概这几天」
+            narrative.occurredAtSource = typeof updates.occurredAtSource === 'string'
+                ? updates.occurredAtSource : narrative.occurredAtSource;
         }
         if (updates.recurring !== undefined) {
             narrative.recurring = normalizeRecurring(updates.recurring);
         }
-        if (updates.jokeTrigger !== undefined && typeof updates.jokeTrigger === 'string') {
+        // 允许显式清空（抽取层归一化后给 null = 「这条不再有专属梗触发语」），
+        // 但 undefined（模型这次没提这个字段）绝不动旧值
+        if (updates.jokeTrigger !== undefined
+            && (typeof updates.jokeTrigger === 'string' || updates.jokeTrigger === null)) {
             narrative.jokeTrigger = updates.jokeTrigger;
         }
         if (Array.isArray(updates.tags)) {
@@ -318,6 +328,7 @@ export class NarrativeStore {
             title: n.title,
             summary: n.summary,
             occurredAt: n.occurredAt,
+            occurredAtSource: n.occurredAtSource ?? null,
             importance: n.importance,
             recurring: n.recurring,
             jokeTrigger: n.jokeTrigger,

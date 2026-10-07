@@ -796,13 +796,15 @@ class AiGirlfriend {
         }
 
         // ========== 共同经历叙事（REQ-03，I8） ==========
-        // 从叙事池检索与本轮相关的 [我们的故事] 段（topK 2-3、整体 300 字内）。
+        // 从叙事池取本轮要注入的 [我们的故事] 段（topK 2-3、整体 300 字内）。
+        // F-3：改为走 getNarrativesForTurn —— 用户话里的**专属梗/线索词**命中时，
+        // 那条故事必定排在最前并带上「她被哪个词勾起」，暗号才真的能被接住。
         // 全链路容错：检索/构建失败一律降级为空段，绝不打断主对话。
         let narrativePrompt = '';
         try {
             if (this._narrativeEnabled() && this.narrativeRetriever && this.narrativeStore.narratives.length > 0) {
-                const hits = await this.narrativeRetriever.getRelevantNarratives(userInput);
-                narrativePrompt = buildNarrativeContext(hits);
+                const { narratives, notes } = await this.narrativeRetriever.getNarrativesForTurn(userInput);
+                narrativePrompt = buildNarrativeContext(narratives, { notes });
             }
         } catch (e) {
             console.error(`[Chat] narrative prompt injection failed: ${e.message}`);

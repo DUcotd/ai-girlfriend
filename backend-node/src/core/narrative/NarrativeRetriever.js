@@ -20,6 +20,7 @@ import { config } from '../../config.js';
 import { EmbeddingClient } from '../memory/EmbeddingClient.js';
 import { KeywordIndex, prepareKeywordQuery, countHits } from '../memory/KeywordScorer.js';
 import { toVector } from '../memory/vectorCodec.js';
+import { matchAssociations, mergeWithRetrieved } from './AssociationRecall.js';
 
 /** 从叙事文本里取检索用的拼接文本（title + summary + tags）。 */
 function narrativeText(n) {
@@ -118,6 +119,44 @@ export class NarrativeRetriever {
             return this._keywordSearch(query, topK);
         } catch (e) {
             console.error(`[Narrative] getRelevantNarratives failed: ${e.message}`);
+            return [];
+        }
+    }
+
+    /**
+     * 本轮注入用的叙事 = 联想命中（专属梗 / 线索词）优先 + 语义或关键词检索补足。
+     *
+     * F-3：`jokeTrigger` 自 B2-10 起只是躺在磁盘上的字段，没有任何一处读它。
+     * 现在它成为**最强**的召回信号：用户说出那句暗号，这条故事必然排在注入段第一位，
+     * 并带上「她被哪个词勾起」的说明——这比"检索相似度"更接近人想起一件事的方式。
+     *
+     * 同步、零网络开销（不嵌 query，纯字符串匹配），所以即便嵌入熔断中也照样生效。
+     *
+     * @param {string} query 本轮用户原话
+     * @param {number} [topK] 注入总条数上限
+     * @returns {Promise<{narratives: Array, notes: Map<string,string>}>}
+     */
+    async getNarrativesForTurn(query, topK = config.narrative.injectTopK) {
+        const hits = this.matchAssociations(query);
+        const retrieved = await this.getRelevantNarratives(query, topK);
+        const limit = Math.max(1, Number(topK) || 1)
+            + Math.max(0, Number(config.narrative.associationMaxInject) || 0);
+        return mergeWithRetrieved(hits, retrieved, limit);
+    }
+
+    /**
+     * 联想匹配（专属梗 jokeTrigger + 线索 tags）。
+     * @param {string} userText
+     * @returns {Array<{narrative:object, kind:string, matched:string, weight:number}>}
+     */
+    matchAssociations(userText) {
+        const cap = Number(config.narrative.associationMaxInject);
+        // 0 = 关闭联想（「关闭态安全」：字段照旧落盘，只是不参与召回）
+        if (!Number.isFinite(cap) || cap <= 0) return [];
+        try {
+            return matchAssociations(userText, this.store?.narratives || [], { maxHits: cap });
+        } catch (e) {
+            console.error(`[Narrative] matchAssociations failed: ${e.message}`);
             return [];
         }
     }
