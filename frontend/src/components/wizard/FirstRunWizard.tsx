@@ -4,6 +4,7 @@ import { useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { useToast } from "../ui/Toast";
 import { api } from "@/lib/api";
+import { toApiError } from "@/lib/apiError";
 import { set } from "@/lib/storage";
 import { DEFAULT_PROVIDER } from "@/lib/providers";
 import ApiConfigStep from "./steps/ApiConfigStep";
@@ -38,15 +39,23 @@ export default function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
             set("apiKey", apiKey);
             set("baseUrl", baseUrl);
             set("modelName", modelName);
-            set("hasCompletedSetup", "true");
 
             // 同步到后端（camelCase → snake_case 由 syncConfig 统一处理）
-            await api.syncConfig({ apiKey, baseUrl, modelName });
+            const result = await api.syncConfig({ apiKey, baseUrl, modelName });
 
-            showToast("配置保存成功！", "success");
+            // ⚠️ hasCompletedSetup 必须在后端**真的收下配置之后**才写（FE-09）。
+            // 旧写法先写完成标记再 fire-and-forget 同步：后端没起来时向导照样宣告完成、
+            // 再也不出现，用户接下来发的第一条消息必然报错，而向导已经被关闭了。
+            set("hasCompletedSetup", "true");
+
+            const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
+            showToast(warnings.length ? `配置已保存，但有 ${warnings.length} 条提醒` : "配置保存成功！", warnings.length ? "info" : "success");
+            if (warnings.length) setError(warnings.join("\n"));
             setStep(2);
         } catch (e) {
-            setError("配置保存失败，请检查后端是否已启动");
+            // 失败原因照抄后端 detail（没配 Key / 地址被拒 / 后端离线是三件事，
+            // 一律写成「检查后端是否已启动」会把用户支去查网络）
+            setError(`配置没能同步到后端：${toApiError(e).userMessage}`);
             console.error(e);
         } finally {
             setIsLoading(false);

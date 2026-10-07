@@ -19,7 +19,10 @@ import type {
 } from "@/types";
 import type { ReasoningEffort } from "./chatParams";
 import { apiErrorFrom, networkError } from "./apiError";
-import type { ApiErrorBody } from "./apiError";
+import type { ApiError, ApiErrorBody } from "./apiError";
+
+/** `/audio/transcribe` 的结果：成功带文本，失败带 ApiError（见 api.transcribe） */
+export type TranscribeResult = { ok: true; text: string } | { ok: false; error: ApiError };
 
 export const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -54,6 +57,30 @@ function withAuth(headers: HeadersInit | undefined): HeadersInit | undefined {
   const token = getAuthToken();
   if (!token) return headers;
   return { ...(headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` };
+}
+
+/**
+ * 写入/清除访问令牌（设置页 → 系统，FE-08 / HTTP-05）。
+ *
+ * 后端要求 token 而界面没有填的地方时，用户唯一的出路是打开 DevTools 手敲
+ * localStorage —— 那等于把一个可 self-service 的配置做成隐藏关卡。
+ * 这里就是那条入口的唯一实现，读写都指向已有的 `AUTH_TOKEN_STORAGE_KEY`。
+ */
+export function setAuthToken(token: string): boolean {
+  if (typeof window === "undefined") return false;
+  const value = token.trim();
+  try {
+    if (value) window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, value);
+    else window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    return value.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** 本机是否已经存过访问令牌（提示语用，不回显内容） */
+export function hasAuthToken(): boolean {
+  return getAuthToken() !== undefined;
 }
 
 /**
@@ -237,6 +264,19 @@ export const api = {
 
   /** 好感度变更账本（时间升序，≤200 条）；路由挂根路径，无 /api 前缀 */
   getAffinityLedger: () => request<AffinityTraceEntry[]>("/affinity/ledger"),
+
+  /**
+   * 她的情绪结算历史（REQ-10）。
+   * 后端 `EmotionEngine.history` 一直写着盘，这里补上消费端；
+   * 条目形状 { timestamp, before, delta, after }，脏条目由 lib/emotionSeries 归一。
+   */
+  getEmotionHistory: () =>
+    request<{
+      history: { timestamp?: number; before?: unknown; delta?: unknown; after?: unknown }[];
+      state?: unknown;
+      baseline?: unknown;
+      count?: number;
+    }>("/state/emotion-history"),
 
   getHistory: () => request<import("@/types").Message[]>("/history"),
 
@@ -575,18 +615,34 @@ export const api = {
       body: JSON.stringify({ text }),
     }),
 
-  async transcribe(audioBlob: Blob): Promise<string | null> {
+  /**
+   * 语音转文字。
+   *
+   * ⚠️ 返回**结果对象**而不是 `string | null`（FE-15）：`null` 把「后端没起来」
+   * 「服务商拒了 Key」「录到的声音是空的」压成同一个值，调用方只能一句
+   * 「转写失败」糊过去，用户于是反复重录。失败必须带 ApiError（有码、有文案）。
+   */
+  async transcribe(audioBlob: Blob): Promise<TranscribeResult> {
     const formData = new FormData();
     formData.append("file", audioBlob, "recording.webm");
-    const res = await fetch(`${BACKEND_URL}/audio/transcribe`, {
-      method: "POST",
-      // FormData 场景不能手动设 Content-Type（浏览器需自行补 boundary），
-      // 但仍需带 Authorization
-      headers: withAuth(undefined),
-      body: formData,
-    });
-    if (!res.ok) return null;
-    const data = await res.json().catch(() => null);
-    return data?.text ?? null;
+    let res: Response;
+    try {
+      res = await fetch(`${BACKEND_URL}/audio/transcribe`, {
+        method: "POST",
+        // FormData 场景不能手动设 Content-Type（浏览器需自行补 boundary），
+        // 但仍需带 Authorization
+        headers: withAuth(undefined),
+        body: formData,
+      });
+    } catch (e) {
+      noteNetworkFailure();
+      return { ok: false, error: networkError(e) };
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      return { ok: false, error: apiErrorFrom(res.status, data as ApiErrorBody | null) };
+    }
+    const data = (await res.json().catch(() => null)) as { text?: unknown } | null;
+    return { ok: true, text: typeof data?.text === "string" ? data.text : "" };
   },
 };

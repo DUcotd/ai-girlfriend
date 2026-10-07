@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { streamSendMessage } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
 import { getStoredAffinity, setStoredAffinity } from "@/lib/storage";
+import { ProactiveDeliveryQueue } from "@/lib/proactiveQueue";
+import { proactiveTypingDelay } from "@/lib/proactiveDisplay";
 import type {
   AffinityStageMeta,
   AffinityTraceEntry,
@@ -38,8 +40,14 @@ function pickStageMeta(data: Partial<AffinityStageMeta>): AffinityStageMeta | nu
   };
 }
 
-/** 主动消息 typing 延时器：模块级，避免组件卸载后仍触发 set */
-let proactiveTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * 主动消息投递：FIFO 队列（FE-02）。
+ *
+ * 旧写法是「一个模块级 timer + 每条新消息先 clearTimeout 旧的」，
+ * 于是 200 ms 内连到 3 条时，前两条的「思考中」还没结束就被顶掉，**它们永远不会上屏**。
+ * 队列保证每条都按顺序落地；流式回复进行中整体挂起（见 sendMessage），
+ * 说完这一轮再补投 —— 她不会把话插进自己正在逐字流出的气泡中间（FE-03）。
+ */
 
 interface ChatState {
   messages: Message[];
@@ -77,6 +85,9 @@ interface ChatState {
  * 在 hooks/useChatStream.ts，与 useChat.ts 时代逐行一致。
  */
 export const useChatStore = create<ChatState>()((set, get) => {
+  /** 本轮流式回复所在气泡的 id（FE-03：所有流式写入按它点名，不看「最后一条」） */
+  let streamingId: string | null = null;
+
   const applyMeta = (data: Partial<ChatResponse>) => {
     if (data.emotion) set({ emotion: data.emotion });
     if (typeof data.affinity === "number") get().setAffinity(data.affinity);
@@ -92,40 +103,70 @@ export const useChatStore = create<ChatState>()((set, get) => {
     if (typeof data.dailyCapReached === "boolean") set({ dailyCapReached: data.dailyCapReached });
   };
 
-  const pushMessage = (msg: Omit<Message, "id"> & { id?: string }) =>
-    set((state) => ({
-      messages: [...state.messages, { ...msg, id: msg.id ?? nextMessageId() }],
-    }));
+  /**
+   * 追加消息并返回它的 id。
+   * 流式占位必须拿回 id：靠「最后一条 assistant」定位，在主动消息插进来之后就点错了位置。
+   */
+  const pushMessage = (msg: Omit<Message, "id"> & { id?: string }): string => {
+    const id = msg.id ?? nextMessageId();
+    set((state) => ({ messages: [...state.messages, { ...msg, id }] }));
+    return id;
+  };
 
-  /** 把最后一条（占位）assistant 替换成指定内容，并挂上内心独白（若有） */
+  /**
+   * 按 `streamingId` **点名**改这一轮流式气泡（FE-03）。
+   * 找不到那条（已被「新对话」清掉 / 后端重启后历史重拉）就原样返回，
+   * 绝不退化成「改最后一条」——那正是把一个气泡的字写进另一个气泡的串扰路径。
+   */
+  const patchStreaming = (patch: (m: Message) => Message, { allowFallback }: { allowFallback: boolean } = { allowFallback: false }) =>
+    set((state) => {
+      let idx = streamingId ? state.messages.findIndex((m) => m.id === streamingId) : -1;
+      if (idx < 0 && allowFallback) {
+        for (let i = state.messages.length - 1; i >= 0; i--) {
+          if (state.messages[i].role === "assistant") {
+            idx = i;
+            break;
+          }
+        }
+      }
+      if (idx < 0) return state;
+      const next = [...state.messages];
+      next[idx] = patch(next[idx]);
+      return { messages: next };
+    });
+
+  /** 收尾：把本轮流式气泡替换成最终内容，并挂上内心独白（若有） */
   const finishWith = (content: string, thought?: string | null) =>
-    set((state) => {
-      if (state.messages.length === 0) return state;
-      const next = [...state.messages];
-      const last = next[next.length - 1];
-      next[next.length - 1] =
-        last.role === "assistant" ? { ...last, content, thought: thought ?? null } : last;
-      return { messages: next };
+    patchStreaming((m) => ({ ...m, content, thought: thought ?? null }), {
+      // 收尾这一步要兜住「占位因异常丢失」：宁可把正文落在最后一条 assistant，
+      // 也不能让这一轮的回复凭空消失（回复丢了比串气泡更难发现）
+      allowFallback: true,
     });
 
-  /** Ghosting：把占位换成系统提示 */
+  /** Ghosting：把本轮占位换成系统提示（id 保留，后续按点名的清理才不会找不到它） */
   const markGhosting = () =>
-    set((state) => ({
-      messages: [
-        ...state.messages.slice(0, -1),
-        { id: nextMessageId(), role: "system", content: "💔 已读不回..." },
-      ],
-    }));
+    patchStreaming((m) => ({ ...m, role: "system", content: "💔 已读不回..." }));
 
+  /** 流式增量：只往本轮占位里追加，别的（含主动消息气泡）一律不碰 */
   const appendDelta = (chunk: string) =>
-    set((state) => {
-      if (state.messages.length === 0) return state;
-      const next = [...state.messages];
-      const last = next[next.length - 1];
-      if (last.role !== "assistant") return state;
-      next[next.length - 1] = { ...last, content: last.content + chunk };
-      return { messages: next };
-    });
+    patchStreaming((m) => ({ ...m, content: m.content + chunk }));
+
+  /** 主动消息 FIFO 队列：入队永不取消已排队条目，流式进行中整体挂起 */
+  const proactiveQueue = new ProactiveDeliveryQueue<ProactiveMessage>({
+    deliver: (message) =>
+      pushMessage({
+        id: `proactive-${message.id}`,
+        role: "assistant",
+        content: message.content,
+      }),
+    setTyping: (on) => useUiStore.getState().setTypingProactive(on),
+    // 流式回复进行中 = 挂起，等这一轮说完再按顺序补投
+    isBusy: () => get().isLoading,
+    typingDelay: proactiveTypingDelay,
+    maxQueueSize: 20,
+    onOverflow: (dropped) =>
+      console.warn("[ChatStore] 主动消息排队溢出，丢弃最旧一条未出场的候选:", dropped.key),
+  });
 
   return {
     messages: [],
@@ -162,13 +203,25 @@ export const useChatStore = create<ChatState>()((set, get) => {
 
       pushMessage({ role: "user", content: text });
       set({ isLoading: true });
-      // 先放一条空的 assistant 占位，流式过程中往里面追加文本
-      pushMessage({ role: "assistant", content: "" });
+      // 先放一条空的 assistant 占位，流式过程中往里面追加文本；
+      // 这一轮的所有写入都按返回的 id 点名（FE-03）
+      streamingId = pushMessage({ role: "assistant", content: "" });
+      // 主动消息在这一轮说完之前一律不许插进消息流
+      proactiveQueue.setPaused(true);
 
       try {
-        await streamSendMessage(text, { appendDelta, finishWith, markGhosting, applyMeta });
+        await streamSendMessage(text, {
+          appendDelta,
+          finishWith,
+          markGhosting,
+          applyMeta,
+          // 超时后这一轮在后端可能其实已经结算过了：用后端真值覆盖界面，别继续显示旧分数
+          resyncAfterTimeout: () => void get().syncState(),
+        });
       } finally {
         set({ isLoading: false });
+        streamingId = null;
+        proactiveQueue.setPaused(false);
       }
     },
 
@@ -191,6 +244,9 @@ export const useChatStore = create<ChatState>()((set, get) => {
     newConversation: async () => {
       try {
         await api.clearHistory();
+        // 队列里那些「她想起刚才那段对话」的候选别再补进空白聊天
+        proactiveQueue.dropAll();
+        streamingId = null;
         set({ messages: [] });
       } catch {
         useUiStore.getState().pushToast("清空失败", "error");
@@ -224,19 +280,16 @@ export const useChatStore = create<ChatState>()((set, get) => {
       }
     },
 
+    /**
+     * 主动消息：入队即返回，出场顺序由队列保证（先到先发，一条都不会被后到的顶掉）。
+     * 「思考中」时长按字数算，与改造前的编排一致。
+     */
     appendProactiveMessage: (message) => {
-      useUiStore.getState().setTypingProactive(true);
-      const typingDelay = Math.min(2000, Math.max(800, message.content.length * 30));
-      if (proactiveTimer) clearTimeout(proactiveTimer);
-      proactiveTimer = setTimeout(() => {
-        proactiveTimer = null;
-        useUiStore.getState().setTypingProactive(false);
-        pushMessage({
-          id: `proactive-${message.id}`,
-          role: "assistant",
-          content: message.content,
-        });
-      }, typingDelay);
+      proactiveQueue.enqueue({
+        key: String(message.id),
+        text: message.content,
+        payload: message,
+      });
     },
   };
 });

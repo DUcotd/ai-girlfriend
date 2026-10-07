@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 
@@ -33,8 +33,13 @@ export default function Dialog({
     className,
     bodyClassName,
 }: DialogProps) {
+    // 标题 id 由 useId 生成：同名弹窗开两个也不会撞车（手写字符串迟早重复）
+    const titleId = useId();
     return (
         <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
             className={cn(
                 "flex max-h-[90vh] flex-col rounded-[28px] border border-accent-1/20",
                 // max-w 兜底：手机竖屏(375-430px)下 w-[520px] 这类写死宽度会溢出被裁，
@@ -46,7 +51,7 @@ export default function Dialog({
             )}
         >
             <div className="flex shrink-0 items-center justify-between border-b border-line-subtle px-6 py-4">
-                <h3 className="flex items-center gap-2 text-lg font-bold">
+                <h3 id={titleId} className="flex items-center gap-2 text-lg font-bold">
                     {icon && <span className="text-accent-1">{icon}</span>}
                     {title}
                 </h3>

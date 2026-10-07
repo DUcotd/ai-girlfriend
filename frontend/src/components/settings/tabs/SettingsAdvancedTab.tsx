@@ -1,10 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import { ShieldAlert } from "lucide-react";
 import Button from "@/components/ui/Button";
+import Input from "@/components/ui/Input";
 import Note from "@/components/ui/Note";
 import Switch from "@/components/ui/Switch";
 import DataBackupPanel from "@/components/settings/DataBackupPanel";
+import { hasAuthToken, setAuthToken } from "@/lib/api";
+import { useToast } from "@/components/ui/Toast";
 import type { CompanionConfig } from "@/lib/storage";
 
 interface SettingsAdvancedTabProps {
@@ -34,14 +38,65 @@ const COMPANION_TOGGLES = [
     },
 ] as const;
 
-/** 设置 → 系统：陪伴感子系统开关 + 危险操作区。 */
+/**
+ * 设置 → 系统：访问令牌 + 陪伴感子系统开关 + 危险操作区。
+ *
+ * 为什么要专门给一个令牌输入框（FE-08 / HTTP-05）：后端一旦设了
+ * `AI_GIRLFRIEND_API_KEY` 之外的 `AI_GIRLFRIEND_TOKEN`（或监听在非本机地址），
+ * 所有请求都会 401；此前这个值只能靠 DevTools 手敲 localStorage 写进
+ * `ai-girlfriend-token`，界面上的报错却只会说「请确认后端已启动」——
+ * 用户照着查网络，而真正缺的是这一格令牌。
+ */
 export default function SettingsAdvancedTab({
     onReset,
     companion,
     onCompanionChange,
 }: SettingsAdvancedTabProps) {
+    const showToast = useToast();
+    const [tokenDraft, setTokenDraft] = useState("");
+    /** 只记「存没存过」，绝不在界面上回显令牌内容 */
+    const [tokenStored, setTokenStored] = useState(() => hasAuthToken());
+
+    const handleSaveToken = () => {
+        const saved = setAuthToken(tokenDraft);
+        setTokenStored(saved);
+        if (saved) {
+            setTokenDraft("");
+            showToast("访问令牌已保存在本机，刷新即生效", "success");
+        } else {
+            showToast("已清除访问令牌（输入框留空即为清除）", "info");
+        }
+    };
+
     return (
         <div className="space-y-6">
+            <div className="space-y-3">
+                <h4 className="text-xs font-bold text-content-secondary">后端访问令牌</h4>
+                <div className="space-y-2 rounded-2xl border border-line-subtle bg-surface-2/50 p-4">
+                    <p className="text-[11px] leading-relaxed text-content-muted">
+                        后端配置了 <code>AI_GIRLFRIEND_TOKEN</code>，或监听在非 127.0.0.1 的地址时，
+                        每个请求都要带这把令牌。留空保存 = 清除。
+                    </p>
+                    <div className="flex gap-2">
+                        <Input
+                            type="password"
+                            value={tokenDraft}
+                            onChange={(e) => setTokenDraft(e.target.value)}
+                            placeholder={tokenStored ? "已保存令牌（输入新值可覆盖）" : "填写访问令牌"}
+                            aria-label="后端访问令牌"
+                            className="flex-1 py-2 text-sm"
+                            autoComplete="off"
+                        />
+                        <Button onClick={handleSaveToken} className="px-4 py-2 text-xs">
+                            保存
+                        </Button>
+                    </div>
+                    <p className="text-[10px] text-content-muted">
+                        当前状态：{tokenStored ? "本机已保存令牌" : "本机未保存令牌（未启用鉴权的后端不需要）"}
+                    </p>
+                </div>
+            </div>
+
             <div className="space-y-3">
                 <h4 className="text-xs font-bold text-content-secondary">陪伴感子系统</h4>
                 {COMPANION_TOGGLES.map(({ key, label, desc }) => (

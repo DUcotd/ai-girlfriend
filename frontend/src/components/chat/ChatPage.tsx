@@ -22,6 +22,7 @@ import { useProactivePolling } from "@/hooks/useProactivePolling";
 import { useSpeech } from "@/hooks/useSpeech";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { api } from "@/lib/api";
+import { toApiError } from "@/lib/apiError";
 import { getChatConfig } from "@/lib/storage";
 import { useChatStore } from "@/stores/chatStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -62,14 +63,24 @@ export default function ChatPage() {
   }, []);
   const recorder = useVoiceRecorder(handleTranscribed);
 
-  const handleFirstRunComplete = () => {
-    completeFirstRun();
+  const handleFirstRunComplete = async () => {
     const config = getChatConfig();
-    if (config.apiKey || config.ttsApiKey) {
-      api.syncConfig(config).catch((e: unknown) => {
-        console.warn("[FirstRun] syncConfig failed:", e);
-        useUiStore.getState().pushToast("配置同步失败，请确认后端已启动", "error");
-      });
+    if (!config.apiKey && !config.ttsApiKey) {
+      completeFirstRun();
+      return;
+    }
+    try {
+      // FE-09：向导的「完成」以后端真的收下配置为准。
+      // 旧写法先 set("hasCompletedSetup") 再 fire-and-forget syncConfig ——
+      // 后端没起来时向导照样宣告完成、再也不出现，而第一条消息必然报错。
+      await api.syncConfig(config);
+      completeFirstRun();
+    } catch (e) {
+      console.warn("[FirstRun] syncConfig failed:", e);
+      useUiStore.getState().pushToast(
+        `配置还没同步到后端：${toApiError(e).userMessage}。向导先留着，后端起来后点一次「完成配置」即可`,
+        "error"
+      );
     }
   };
 
@@ -90,7 +101,10 @@ export default function ChatPage() {
   // 首屏不再渲染整页「加载中」白屏：主界面直接铺出来（背景与布局骨架先到位），
   // 首次运行时引导层自带全屏遮罩叠在上面，等 localStorage 读完再决定要不要显示。
   return (
-    <main className="flex h-screen overflow-hidden relative">
+    // 高度用 100dvh（移动端地址栏收起/展开时 dvh 才等于真实可视高度；
+    // 旧版 h-screen=100vh 在 iOS 上会把输入 dock 顶到地址栏后面）。
+    // supports- 前缀保证老浏览器仍走 100vh，不会拿不到高度。
+    <main className="relative flex h-screen overflow-hidden supports-[height:100dvh]:h-[100dvh]">
       {/* 背景光晕 */}
       <div className="fixed inset-0 pointer-events-none z-0">
         <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-gradient-to-bl from-accent-1/40 to-transparent rounded-full blur-3xl" />
@@ -100,21 +114,27 @@ export default function ChatPage() {
       <button
         className="md:hidden fixed top-4 left-4 z-50 p-2 bg-surface-1/80 text-content-primary rounded-full shadow-lg"
         onClick={() => setSidebarOpen(!isSidebarOpen)}
+        aria-label={isSidebarOpen ? "关闭角色面板" : "打开角色面板"}
+        aria-expanded={isSidebarOpen}
       >
         <Menu size={24} />
       </button>
 
       {/* 侧边栏：角色面板（玻璃卡片悬浮，桌面 360px） */}
       <div
+        role="dialog"
+        aria-modal={isSidebarOpen || undefined}
+        aria-label="小爱的状态"
         className={`fixed md:static inset-y-0 left-0 z-40 w-full md:w-[360px] md:shrink-0 bg-surface-1/80 md:bg-transparent backdrop-blur-xl md:backdrop-blur-none transition-transform duration-300 transform ${
           isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
-        } p-4 md:p-6 md:pr-0 flex flex-col`}
+        } p-4 pt-[calc(1rem+env(safe-area-inset-top))] md:p-6 md:pr-0 flex flex-col`}
       >
         <CharacterPanel currentActivity={currentActivity} />
         {isSidebarOpen && (
           <button
             className="absolute top-4 right-4 p-2 text-content-secondary md:hidden"
             onClick={() => setSidebarOpen(false)}
+            aria-label="关闭角色面板"
           >
             <X size={20} />
           </button>
@@ -126,7 +146,15 @@ export default function ChatPage() {
         <ChatToolbar />
         <BackendOfflineBanner />
 
-        <div ref={listRef} className="flex-1 overflow-y-auto p-4 md:p-6">
+        <div
+          ref={listRef}
+          className="flex-1 overflow-y-auto p-4 md:p-6"
+          // 流式正文对读屏是「会变的内容」：polite 让它在用户停下时才播报，
+          // 不抢打断（aria-live 挂在容器上，逐条挂会每次新增都念一遍）
+          aria-live="polite"
+          aria-relevant="additions"
+          aria-label="和小爱的对话"
+        >
           <div className="mx-auto w-full max-w-3xl space-y-6">
             {messages.length === 0 && !isLoading && (
               <WelcomeMessage onQuickStart={sendMessage} />

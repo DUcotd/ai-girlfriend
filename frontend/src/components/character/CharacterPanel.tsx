@@ -7,6 +7,7 @@ import AffinityHearts from "./AffinityHearts";
 import AffinityReason from "./AffinityReason";
 import CharacterAvatar from "./CharacterAvatar";
 import EmotionBadges from "./EmotionBadges";
+import EmotionTimeline from "./EmotionTimeline";
 import PadStateBars from "./PadStateBars";
 import StageProgress from "./StageProgress";
 import { emotionLabels, normalizeEmotion } from "./emotionMap";
@@ -93,6 +94,9 @@ export default function CharacterPanel({ currentActivity }: CharacterPanelProps)
             />
 
             {emotionalState && <PadStateBars emotionalState={emotionalState} />}
+
+            {/* 情绪走势（REQ-10）：数据点数不够时组件自己不出场，面板不会多一块空框 */}
+            <EmotionTimeline />
         </Card>
     );
 }

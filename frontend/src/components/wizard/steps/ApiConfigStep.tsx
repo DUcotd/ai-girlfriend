@@ -72,8 +72,10 @@ export default function ApiConfigStep({
                 )}
 
                 <Note tone="info" className="p-3">
-                    💡 <strong>提示</strong>：API 密钥仅保存在本地浏览器中，不会上传到任何服务器。
-                    你可以在设置中随时修改这些配置。
+                    💡 <strong>提示</strong>：API 密钥保存在<strong>本机浏览器</strong>的
+                    localStorage 里，关掉页面也还在；它会被发给<strong>你填写的那个模型服务商</strong>
+                    （以及本机后端进程用于转发请求），不会上传到别的地方。
+                    你可以在设置中随时修改或清除这些配置。
                 </Note>
             </div>
 

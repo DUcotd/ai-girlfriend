@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { Send } from "lucide-react";
 import AudioVisualizer from "../voice/AudioVisualizer";
 import QuickReplies from "./QuickReplies";
@@ -36,7 +37,20 @@ export default function ChatInput({
     recorder,
 }: ChatInputProps) {
     const isLoading = useChatStore((s) => s.isLoading);
-    const { isRecording, recordingTime, mediaStream, toggleRecording } = recorder;
+    const { isRecording, startedAt, mediaStream, toggleRecording } = recorder;
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    /**
+     * 她说完话就把光标还给输入框（FE-15）。
+     * 只在 isLoading 由 true→false 的那一次聚焦，且**不抢首帧**：
+     * 页面刚打开、语音模式正在听的时候抢焦点都会打扰用户。
+     */
+    const prevLoadingRef = useRef(isLoading);
+    useEffect(() => {
+        const finished = prevLoadingRef.current && !isLoading;
+        prevLoadingRef.current = isLoading;
+        if (finished && !isRecording) inputRef.current?.focus();
+    }, [isLoading, isRecording]);
 
     return (
         <div className="mx-auto w-full max-w-3xl">
@@ -67,7 +81,7 @@ export default function ChatInput({
 
                 <RecordButton
                     isRecording={isRecording}
-                    recordingTime={recordingTime}
+                    startedAt={startedAt}
                     disabled={isLoading}
                     onToggle={toggleRecording}
                 />

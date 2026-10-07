@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Settings, MessageSquare, Mic, Brain, Palette, ShieldAlert, Bell } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -10,11 +10,14 @@ import Dialog from "../ui/Dialog";
 import { useToast } from "../ui/Toast";
 import { api } from "@/lib/api";
 import { toApiError } from "@/lib/apiError";
-import { get, getAdvancedChatConfig, getCompanionConfig, remove, set, setAdvancedChatConfig, DEFAULT_ENABLED_PROACTIVE_TYPES } from "@/lib/storage";
+import { get, getAdvancedChatConfig, getCompanionConfig, remove, set, setAdvancedChatConfig, DEFAULT_ENABLED_PROACTIVE_TYPES, StorageKeys } from "@/lib/storage";
 import type { CompanionConfig } from "@/lib/storage";
 import { DEFAULT_PROVIDER } from "@/lib/providers";
 import { getMemoryConfig } from "@/lib/storage";
 import { normalizeAdvancedConfig } from "@/lib/chatParams";
+import { dialogCanClose, setDialogDirtyGuard } from "@/lib/dialogGuard";
+import { parseNotifyPrivacy } from "@/lib/notifyPrivacy";
+import type { NotifyPrivacy } from "@/lib/notifyPrivacy";
 import type { AdvancedChatConfig } from "@/lib/chatParams";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { usePersonality } from "@/hooks/usePersonality";
@@ -34,6 +37,38 @@ interface SettingsDialogProps {
 }
 
 type SettingsTab = "general" | "voice" | "memory" | "personality" | "proactive" | "advanced";
+
+/**
+ * 「保存全部配置」会写进 localStorage 的全部键。
+ * 列出来的理由在 handleSave 里：后端拒了就要按这份清单**逐项回滚**本地镜像。
+ */
+const LOCAL_CONFIG_KEYS = [
+    "apiKey",
+    "baseUrl",
+    "modelName",
+    "ttsApiKey",
+    "ttsEngine",
+    "embApiKey",
+    "embBaseUrl",
+    "embModelName",
+    "memoryFactsEnabled",
+    "memoryRetrievalMode",
+    "userEmotionEnabled",
+    "narrativeEnabled",
+    "triggerEnabled",
+    "proactiveEnabled",
+    "frequencyLevel",
+    "customDailyLimit",
+    "enabledTypes",
+] as const;
+
+/** 上表里属于「主动消息配置」的那几项（对应 `POST /config/proactive` 这一步） */
+const PROACTIVE_LOCAL_KEYS = [
+    "proactiveEnabled",
+    "frequencyLevel",
+    "customDailyLimit",
+    "enabledTypes",
+] as const;
 
 /**
  * 把保存失败的原因说清楚。
@@ -135,7 +170,101 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
     const [availableTypes, setAvailableTypes] = useState<ProactiveTypeInfo[]>([]);
     const [availableGroups, setAvailableGroups] = useState<ProactiveGroupInfo[]>([]);
 
+    /**
+     * 通知/朗读隐私是**纯浏览器偏好**（不进后端、不参与「保存全部配置」）：
+     * 立刻写 localStorage 立刻生效，所以刻意不放进下面的 dirty 快照里。
+     */
+    const [notifyPrivacy, setNotifyPrivacy] = useState<NotifyPrivacy>(() =>
+        parseNotifyPrivacy(get("notifyPrivacy"))
+    );
+    const [speakProactive, setSpeakProactive] = useState<boolean>(
+        () => get("speakProactive") !== "false"
+    );
+    const handleNotifyPrivacyChange = (next: NotifyPrivacy) => {
+        setNotifyPrivacy(next);
+        set("notifyPrivacy", next);
+    };
+    const handleSpeakProactiveChange = (next: boolean) => {
+        setSpeakProactive(next);
+        set("speakProactive", next ? "true" : "false");
+    };
+
+    /**
+     * 「有未保存改动」判定（FE-07）。
+     *
+     * 旧写法里弹窗的 X / Esc / 遮罩三条关闭路径都会**静默丢掉**刚填的 Key 和刚改的开关，
+     * 而用户看到过 toast 说「已保存」的那次是上一次保存，不是这次改动。
+     * 快照取当前全部表单字段（用归一化后的高级参数，避免钳制值造成假 dirty）。
+     */
+    const currentSnapshot = useMemo(
+        () =>
+            JSON.stringify({
+                apiKey,
+                baseUrl,
+                modelName,
+                ttsApiKey,
+                ttsEngine,
+                embApiKey,
+                embBaseUrl,
+                embModelName,
+                memoryFactsEnabled,
+                memoryRetrievalMode,
+                advanced: normalizeAdvancedConfig(advanced),
+                companion,
+                proactiveEnabled,
+                frequencyLevel,
+                customDailyLimit,
+                enabledTypes: [...enabledTypes].sort(),
+            }),
+        [
+            apiKey,
+            baseUrl,
+            modelName,
+            ttsApiKey,
+            ttsEngine,
+            embApiKey,
+            embBaseUrl,
+            embModelName,
+            memoryFactsEnabled,
+            memoryRetrievalMode,
+            advanced,
+            companion,
+            proactiveEnabled,
+            frequencyLevel,
+            customDailyLimit,
+            enabledTypes,
+        ]
+    );
+    const [savedSnapshot, setSavedSnapshot] = useState(currentSnapshot);
+    const isDirty = currentSnapshot !== savedSnapshot;
+    /** 后端真值回写界面时要把基准一起挪：否则「打开设置什么都没做」也会显示未保存 */
+    const serverTruthRef = useRef(false);
+    useEffect(() => {
+        if (!serverTruthRef.current) return;
+        serverTruthRef.current = false;
+        setSavedSnapshot(currentSnapshot);
+    }, [currentSnapshot]);
+
+    /** 第二次关闭请求放行（「再点一次就放弃改动」），改动本身被丢弃时才重置 */
+    const allowDiscardRef = useRef(false);
+    useEffect(() => {
+        allowDiscardRef.current = false;
+    }, [isDirty]);
+
     const showToast = useToast();
+
+    // 声明必须在 showToast 之后：闸门回调里要弹提示（react-hooks 也拒绝提前引用）
+    useEffect(
+        () =>
+            setDialogDirtyGuard(() => {
+                if (!isDirty) return true;
+                if (allowDiscardRef.current) return true;
+                allowDiscardRef.current = true;
+                showToast("有未保存的配置改动：再点一次关闭就会放弃这些改动", "info");
+                return false;
+            }),
+        [isDirty, showToast]
+    );
 
     // 挂载后用服务端配置覆盖本地值。
     // setState 放在异步回调里，避免 effect 同步体内 setState 造成级联渲染。
@@ -144,6 +273,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         api.getProactiveConfig()
             .then((data) => {
                 if (cancelled) return;
+                serverTruthRef.current = true;   // 后端真值回写，重设 dirty 基准
                 if (data.config) {
                     setProactiveEnabled(data.config.enabled);
                     setFrequencyLevel(data.config.frequencyLevel);
@@ -171,6 +301,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
      */
     const applyConfigStatus = useCallback(
         (data: Awaited<ReturnType<typeof api.getConfigStatus>>) => {
+            serverTruthRef.current = true;   // 同上：后端真值不是用户改动
             setLiveConfig({
                 configured: !!data.isConfigured,
                 baseUrl: data.baseUrl ?? null,
@@ -220,6 +351,25 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         // 保存前再钳一次：输入框失焦已钳过，这里是防「改完直接点保存」的漏网值
         const safeAdvanced = normalizeAdvancedConfig(advanced);
 
+        /*
+         * FE-07：本地镜像是「乐观副本」，写之前先拍一份，后端拒绝时按**失败的那一步**回滚。
+         * 全量回滚是错的：/config 已经成功、只有 /config/proactive 失败时把 Key 也抹掉，
+         * 下次开机就不会再回灌 Key，表现成「设置明明填过却又要重填」。
+         */
+        const prevLocal = Object.fromEntries(
+            LOCAL_CONFIG_KEYS.map((k) => [k, get(k)])
+        ) as Record<string, string | null>;
+        const prevAdvanced = getAdvancedChatConfig();
+        const restoreLocal = (keys: readonly string[], withAdvanced: boolean) => {
+            for (const k of keys) {
+                const v = prevLocal[k];
+                if (v === null || v === undefined) remove(k as keyof typeof StorageKeys);
+                else set(k as keyof typeof StorageKeys, v);
+            }
+            if (withAdvanced) setAdvancedChatConfig(prevAdvanced);
+        };
+        let configPushed = false;
+
         // 保存到本地
         setAdvancedChatConfig(safeAdvanced);
         set("apiKey", apiKey);
@@ -261,6 +411,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 ...companion,
                 ...safeAdvanced,
             });
+            configPushed = true;
 
             await api.updateProactiveConfig({
                 enabled: proactiveEnabled,
@@ -271,6 +422,10 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
 
             // 通知运行时（useSpeech 等订阅方）引擎已切换
             useSettingsStore.getState().setTtsEngine(ttsEngine);
+            // 性格是即时提交的，但滑块可能还停在 300ms 窗口里：关闭前必须 flush
+            personality.flush();
+            // 保存成功 = 当前表单值成为新基准（此后关闭不再算「未保存改动」）
+            setSavedSnapshot(currentSnapshot);
 
             // 保存后立刻用后端真值刷新「当前生效」，让界面说的就是进程里的事实
             try {
@@ -289,6 +444,9 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
             showToast("设置已保存并同步! ✨", "success");
             onClose();
         } catch (error) {
+            // 后端没收下这次保存 → 本地镜像退回改动前的值（见上面的分步说明）
+            if (configPushed) restoreLocal(PROACTIVE_LOCAL_KEYS, false);
+            else restoreLocal(LOCAL_CONFIG_KEYS, true);
             showToast(saveFailureMessage(error), "error");
         } finally {
             setIsLoading(false);
@@ -301,6 +459,28 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         setShowPersonalityResetConfirm(false);
         if (ok) showToast("已恢复默认预设 🌸", "success");
     };
+
+    /**
+     * 切换预设的二次确认（FE-09）。
+     * 预设切换会**清零当前浮动**（她这几天被你养出来的那点变化当场消失），
+     * 而且 usePersonality 里没有撤销路径（后端没有浮动账本可回滚），
+     * 所以只能点之前问一次。
+     */
+    const [pendingPresetId, setPendingPresetId] = useState<string | null>(null);
+    const pendingPresetName = useMemo(() => {
+        const preset = personality.state?.presets?.find((p) => p.id === pendingPresetId);
+        return preset?.name ?? pendingPresetId ?? "";
+    }, [pendingPresetId, personality.state]);
+
+    /**
+     * 统一关闭出口：X / Esc / 遮罩三条路径都先过闸门，再 flush 性格改动。
+     * 直接把 uiStore 的 closeDialog 传下去会让 Esc 和遮罩绕开这两件事。
+     */
+    const requestClose = useCallback(() => {
+        if (!dialogCanClose()) return;
+        personality.flush();
+        onClose();
+    }, [onClose, personality]);
 
     const handleResetAll = async () => {
         try {
@@ -329,7 +509,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
             <Dialog
                 title="系统设置"
                 icon={<Settings size={22} className="animate-spin-slow" />}
-                onClose={onClose}
+                onClose={requestClose}
                 widthClassName="w-[520px]"
                 className="overflow-hidden"
                 bodyClassName="flex flex-col p-0 md:flex-row"
@@ -428,6 +608,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                                 <SettingsPersonalityTab
                                     personality={personality}
                                     onRequestReset={() => setShowPersonalityResetConfirm(true)}
+                                    onRequestPreset={setPendingPresetId}
                                 />
                             )}
 
@@ -443,6 +624,10 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                                     onEnabledTypesChange={setEnabledTypes}
                                     availableTypes={availableTypes}
                                     availableGroups={availableGroups}
+                                    notifyPrivacy={notifyPrivacy}
+                                    onNotifyPrivacyChange={handleNotifyPrivacyChange}
+                                    speakProactive={speakProactive}
+                                    onSpeakProactiveChange={handleSpeakProactiveChange}
                                 />
                             )}
 
@@ -494,6 +679,26 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
                 type="danger"
                 onConfirm={handlePersonalityReset}
                 onCancel={() => setShowPersonalityResetConfirm(false)}
+            />
+
+            {/* 切换预设的二次确认：和上面两个确认框一样必须是 Dialog 的兄弟节点（遮罩嵌套会错位） */}
+            <ConfirmDialog
+                isOpen={pendingPresetId !== null}
+                title="切换预设性格"
+                message={
+                    `切换到「${pendingPresetName}」会把她这几天在聊天里养出来的性格浮动清零，` +
+                    `回到该预设的基线。这个操作撤销不了。\n\n` +
+                    "好感度、记忆与对话记录不受影响。"
+                }
+                confirmText="确认切换"
+                cancelText="取消"
+                type="warning"
+                onConfirm={() => {
+                    const id = pendingPresetId;
+                    setPendingPresetId(null);
+                    if (id) personality.applyPreset(id);
+                }}
+                onCancel={() => setPendingPresetId(null)}
             />
         </>
     );

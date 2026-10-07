@@ -13,6 +13,12 @@ interface SettingsPersonalityTabProps {
   personality: PersonalityController;
   /** 请求打开「恢复默认预设」确认框——ConfirmDialog 必须渲染在 Dialog 兄弟层级，由 SettingsDialog 持有 */
   onRequestReset: () => void;
+  /**
+   * 请求「切换预设」的二次确认（FE-09）。
+   * 预设切换会把当前性格浮动清零且无法撤销，必须由外壳弹确认框，
+   * 页签自己不能嵌一层 Modal（遮罩嵌套会错位）。
+   */
+  onRequestPreset: (presetId: string) => void;
 }
 
 /**
@@ -25,6 +31,7 @@ interface SettingsPersonalityTabProps {
 export default function SettingsPersonalityTab({
   personality,
   onRequestReset,
+  onRequestPreset,
 }: SettingsPersonalityTabProps) {
   const { state, loading, loadFailed } = personality;
 
@@ -69,8 +76,8 @@ export default function SettingsPersonalityTab({
         presetName={state.presetName}
         customized={state.customized}
         customizedCount={state.customizedCount}
-        onSelect={personality.applyPreset}
-        onRestore={() => personality.applyPreset(state.presetId)}
+        onSelect={onRequestPreset}
+        onRestore={() => onRequestPreset(state.presetId)}
       />
 
       {/* ② 七维滑块区（顺序以后端 dims 的 order 为准；拖的是 baseline，current 由后端跟随） */}

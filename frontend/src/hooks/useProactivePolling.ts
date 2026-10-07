@@ -3,14 +3,28 @@
 import { useEffect, useRef } from "react";
 import { speakBus } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
+import { toApiError } from "@/lib/apiError";
+import { LOCAL_ERROR_CODES } from "@/lib/errorCodes";
+import { get } from "@/lib/storage";
+import {
+  notificationBody,
+  parseNotifyPrivacy,
+  type NotifyPrivacy,
+} from "@/lib/notifyPrivacy";
 import { playNotificationSound } from "@/lib/notifySound";
-import { useUiStore } from "@/stores/uiStore";
+import { shouldSpeakProactive } from "@/lib/proactiveDisplay";
+import { useUiStore, toast } from "@/stores/uiStore";
 import type { ProactiveMessage } from "@/types";
 
 const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
 const ACTIVE_INTERVAL_MS = 15_000;
 const IDLE_INTERVAL_MS = 60_000;
 
+/**
+ * 主动消息类型 → 通知图标。
+ * ⚠️ 必须覆盖 proactiveTypes.js 里的全部 id：漏一个就显示成兜底图标，
+ * 而「跃迁」「纪念日回顾」这些恰恰是最该一眼认出来的。
+ */
 const REASON_ICONS: Record<string, string> = {
   morning_greeting: "🌅",
   night_greeting: "🌙",
@@ -20,6 +34,10 @@ const REASON_ICONS: Record<string, string> = {
   random_chat: "✨",
   memory_share: "💭",
   life_update: "🏡",
+  emotion_resonance: "🫂",
+  anniversary_recall: "🎂",
+  promise_followup: "🔔",
+  stage_transition: "💞",
 };
 
 /**
@@ -57,6 +75,8 @@ export function useProactivePolling({
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
+    /** 401 只提示一次：轮询每 15 秒撞一次「令牌不对」会变成弹窗轰炸（FE-08） */
+    let authHintShown = false;
 
     const poll = async () => {
       if (cancelled) return;
@@ -65,26 +85,47 @@ export function useProactivePolling({
       // 两者互相矛盾——通知代码永不可达，整个功能实际不存在
       try {
         const message = await api.fetchProactiveMessage();
-        if (message) {
-          onMessageRef.current(message);
-          // 语音朗读只对看得见的页面播：页面隐藏时宁可静默，等用户回来自己看
-          if (useUiStore.getState().voiceMode && !document.hidden) {
-            speakBus.speak(message.content);
-          }
+        if (!message) return;
+        onMessageRef.current(message);
 
-          // 页面不可见时发桌面通知 + 提示音
-          if (document.hidden && "Notification" in window && Notification.permission === "granted") {
-            new Notification(`${REASON_ICONS[message.reason] || "Xiao Ai"} 小爱`, {
-              body: message.content,
-              icon: "/favicon.ico",
-              tag: "proactive-message",
-            });
-          }
-          // 提示音：WebAudio 即时合成（此前是 404 的 /notification.mp3）
-          playNotificationSound();
+        // 朗读：页面可见 + 总朗读开 + 「主动消息朗读」单独开关没被关掉（FE-15）
+        if (
+          shouldSpeakProactive({
+            voiceMode: useUiStore.getState().voiceMode,
+            speakProactive: get("speakProactive") !== "false",
+            hidden: document.hidden,
+          })
+        ) {
+          speakBus.speak(message.content);
         }
-      } catch {
-        // 后端未连接时静默重试
+
+        // 页面不可见时发桌面通知 + 提示音。
+        // 锁屏默认不露正文（P8）：她说的话可能写着「你昨天说和谁吃了饭」，
+        // 落在锁屏上就是隐私事故；要预览正文得在设置里显式打开。
+        if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+          const mode: NotifyPrivacy = parseNotifyPrivacy(get("notifyPrivacy"));
+          new Notification(`${REASON_ICONS[message.reason] ?? "💕"} 小爱`, {
+            body: notificationBody(message.content, mode),
+            icon: "/favicon.ico",
+            tag: "proactive-message",
+          });
+        }
+        // 提示音：WebAudio 即时合成（此前是 404 的 /notification.mp3）
+        playNotificationSound();
+      } catch (e) {
+        const err = toApiError(e);
+        // 后端要求访问令牌 / 令牌不对：这是**用户能自己修**的失败，
+        // 静默重试等于让它每 15 秒失败一次而界面永远不说为什么（FE-08）
+        const isAuth =
+          err.code === LOCAL_ERROR_CODES.UNAUTHORIZED_TOKEN ||
+          err.code === LOCAL_ERROR_CODES.UNAUTHORIZED_MISSING ||
+          err.code === LOCAL_ERROR_CODES.UNAUTHORIZED_OPEN;
+        if (isAuth && !authHintShown) {
+          authHintShown = true;
+          toast("后端要求访问令牌：请在 设置 → 系统 里填写访问令牌", "error");
+          return;
+        }
+        // 其余（后端未连接等）静默重试：离线横幅已经负责说这件事
       }
     };
 

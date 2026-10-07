@@ -31,8 +31,10 @@ interface MemoryDialogProps {
     onClose: () => void;
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-    identity: "身份",
+/** 撤销条停留时长：够读完并点一次，又不至于变成永远挂着的幽灵操作（FE-09） */
+const UNDO_WINDOW_MS = 6000;
+
+const CATEGORY_LABELS: Record<string, string> = {    identity: "身份",
     preference: "偏好",
     relationship: "人际",
     habit: "习惯",
@@ -90,6 +92,11 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
     const [editContent, setEditContent] = useState("");
     const [editImportance, setEditImportance] = useState(3);
     const [busyId, setBusyId] = useState<string | null>(null);
+    /** 刚删掉、还可以撤销的事实（FE-09 撤销条的数据源） */
+    const [undoFact, setUndoFact] = useState<FactItem | null>(null);
+    /** 等待二次确认的回忆（不可重建，所以只确认不给撤销） */
+    const [pendingEpisodeDelete, setPendingEpisodeDelete] = useState<EpisodeItem | null>(null);
+    const [savingSettings, setSavingSettings] = useState(false);
 
     const showToast = useToast();
 
@@ -169,25 +176,66 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
             const { fact } = await api.updateFact(editingId, { content, importance: editImportance });
             setFacts((prev) => prev.map((f) => (f.id === fact.id ? fact : f)));
             setEditingId(null);
-        } catch {
-            showToast("保存失败", "error");
+        } catch (e) {
+            // 后端为什么拒（内容太长？id 已不存在？）只有它知道，照抄它的中文 detail
+            showToast(`保存失败：${toApiError(e).userMessage}`, "error");
         } finally {
             setBusyId(null);
         }
     };
 
+    /**
+     * 删除一条记忆。
+     *
+     * FE-09 分级：事实删除给**撤销条**（能重建：内容 + 重要度重新入库），
+     * 情节回忆删除改**二次确认**——后端没有「重新写回一条回忆」的入口，
+     * 给一个做不到的撤销比不给更糟（按了撤销却发现什么也没回来）。
+     */
     const handleDelete = async (id: string, kind: "fact" | "episode") => {
         setBusyId(id);
+        const factSnapshot = kind === "fact" ? facts.find((f) => f.id === id) ?? null : null;
         try {
             await api.deleteMemory(id);
-            if (kind === "fact") setFacts((prev) => prev.filter((f) => f.id !== id));
-            else setEpisodes((prev) => prev.filter((e) => e.id !== id));
-        } catch {
-            showToast("删除失败", "error");
+            if (kind === "fact") {
+                setFacts((prev) => prev.filter((f) => f.id !== id));
+                if (factSnapshot) setUndoFact(factSnapshot);
+            } else {
+                setEpisodes((prev) => prev.filter((e) => e.id !== id));
+            }
+        } catch (e) {
+            showToast(`删除失败：${toApiError(e).userMessage}`, "error");
         } finally {
             setBusyId(null);
         }
     };
+
+    /** 撤销删除：把刚删掉的事实重新教给小爱（id 会变，内容和重要度原样恢复） */
+    const handleUndoDeleteFact = async () => {
+        if (!undoFact) return;
+        const snapshot = undoFact;
+        setUndoFact(null);
+        try {
+            const { fact } = await api.addFact(snapshot.content, snapshot.importance);
+            setFacts((prev) => (prev.some((f) => f.id === fact.id) ? prev : [...prev, fact]));
+            showToast("已经找回来了", "success");
+        } catch (e) {
+            const err = toApiError(e);
+            // 撤销撞在「重复事实」上说明这条其实还在库里，直接把列表刷新成真值
+            showToast(
+                err.code === LOCAL_ERROR_CODES.DUPLICATE_FACT
+                    ? "这条记忆还在，没被删掉"
+                    : `撤销失败：${err.userMessage}`,
+                err.code === LOCAL_ERROR_CODES.DUPLICATE_FACT ? "info" : "error"
+            );
+        }
+    };
+
+    // 撤销条超时自动收起：过了这几秒就不再承诺可撤销（避免幽灵操作）
+    useEffect(() => {
+        if (!undoFact) return;
+        const id = setTimeout(() => setUndoFact(null), UNDO_WINDOW_MS);
+        return () => clearTimeout(id);
+    }, [undoFact]);
 
     const handleClearMemories = async () => {
         try {
@@ -202,17 +250,24 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
     };
 
     const handleSaveSettings = async () => {
-        if (affinity === null) return;
+        if (affinity === null || savingSettings) return;
+        setSavingSettings(true);
         // 同步到会话状态（好感度心心/进度条立即刷新），再落后端
+        const prevAffinity = useChatStore.getState().affinity;
         useChatStore.getState().setAffinity(affinity);
         try {
             await api.updateState({ affinity, nickname });
             onClose();
         } catch (e) {
-            // 保存失败必须可见：此前先关弹窗再静默吞错，用户误以为已保存，
-            // 本地 UI 与后端持久化分叉直到刷新才暴露
+            // FE-07 乐观更新回滚：后端没收下这个数，界面就必须退回原来的数。
+            // 不回滚的后果是「心心显示 88、后端其实还是 52」，而且本地镜像已经被
+            // setAffinity 写成 88，用户刷新前完全看不出这是假的。
+            useChatStore.getState().setAffinity(prevAffinity);
             console.error("Save failed", e);
-            showToast("保存失败，请检查后端连接", "error");
+            const err = toApiError(e);
+            showToast(`保存失败：${err.userMessage || "请检查后端连接"}`, "error");
+        } finally {
+            setSavingSettings(false);
         }
     };
 
@@ -258,6 +313,31 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
                             <div className="py-8 text-center text-status-danger">加载失败，请检查后端连接后重开弹窗</div>
                         ) : (
                             <div className="space-y-4">
+                                {/* 撤销条：刚删掉的事实还能原样找回（FE-09） */}
+                                {undoFact && (
+                                    <div
+                                        role="status"
+                                        aria-live="polite"
+                                        className="flex items-center justify-between gap-2 rounded-xl border border-accent-1/30 bg-accent-1/10 px-3 py-2 text-xs"
+                                    >
+                                        <span className="min-w-0 flex-1 truncate text-content-secondary">
+                                            已删除「{undoFact.content}」
+                                        </span>
+                                        <button
+                                            onClick={handleUndoDeleteFact}
+                                            className="shrink-0 rounded-lg px-2 py-1 font-bold text-accent-strong transition-colors hover:bg-accent-1/15 dark:text-accent-1"
+                                        >
+                                            撤销
+                                        </button>
+                                        <button
+                                            onClick={() => setUndoFact(null)}
+                                            aria-label="收起撤销提示"
+                                            className="shrink-0 rounded-lg px-1.5 py-1 text-content-muted transition-colors hover:bg-surface-2"
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                )}
                                 {/* 搜索 */}
                                 <div className="relative">
                                     <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-content-muted" />
@@ -378,7 +458,7 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
                                                         <div className="mt-2 flex items-center justify-between">
                                                             <p className="text-xs text-content-muted">{formatTime(mem.timestamp)}</p>
                                                             <button
-                                                                onClick={() => handleDelete(mem.id, "episode")}
+                                                                onClick={() => setPendingEpisodeDelete(mem)}
                                                                 disabled={busyId === mem.id}
                                                                 aria-label="删除这条回忆"
                                                                 className="rounded-lg p-1 text-content-muted opacity-0 transition-all hover:bg-status-danger/10 hover:text-status-danger group-hover:opacity-100 disabled:opacity-40"
@@ -461,8 +541,8 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
                                 />
                             </div>
 
-                            <Button onClick={handleSaveSettings} className="w-full py-2.5">
-                                保存设置
+                            <Button onClick={handleSaveSettings} disabled={savingSettings} className="w-full py-2.5">
+                                {savingSettings ? "保存中..." : "保存设置"}
                             </Button>
                         </div>
                     )}
@@ -478,6 +558,26 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
                 type="warning"
                 onConfirm={handleClearMemories}
                 onCancel={() => setShowClearConfirm(false)}
+            />
+
+            {/* 回忆删除的二次确认：情节记忆删掉就重建不回来（后端没有「写回一条回忆」的入口），
+                所以这里只给确认、不给撤销（FE-09） */}
+            <ConfirmDialog
+                isOpen={pendingEpisodeDelete !== null}
+                title="删除这条回忆"
+                message={
+                    `确定让小爱忘掉这段回忆？\n\n「${(pendingEpisodeDelete?.text ?? "").slice(0, 60)}」\n\n` +
+                    "回忆删除后无法找回（事实记忆删除可以在 6 秒内撤销）。"
+                }
+                confirmText="确认删除"
+                cancelText="取消"
+                type="danger"
+                onConfirm={async () => {
+                    const target = pendingEpisodeDelete;
+                    setPendingEpisodeDelete(null);
+                    if (target) await handleDelete(target.id, "episode");
+                }}
+                onCancel={() => setPendingEpisodeDelete(null)}
             />
         </>
     );

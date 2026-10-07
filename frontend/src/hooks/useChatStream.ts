@@ -30,6 +30,12 @@ export interface StreamHandlers {
   markGhosting: () => void;
   /** 应用情绪/好感度/PAD 元数据 */
   applyMeta: (data: Partial<ChatResponse>) => void;
+  /**
+   * 60s 超时专用：请调用方**强制重同步一次状态**（FE-08）。
+   * 超时往往意味着后端在另一半时间里已经把这一轮结算完了（只是回包没到），
+   * 界面留着旧的分数就是在说一件没发生的事。
+   */
+  resyncAfterTimeout?: () => void;
 }
 
 /** Applies a task action returned with the completed chat response. */
@@ -120,5 +126,6 @@ export async function streamSendMessage(
           ? "⚠️ 连不上后端（默认 8000 端口），小爱暂时听不到你说话"
           : err.userMessage || "⚠️ 连接中断..."
     );
+    if (isTimeout) handlers.resyncAfterTimeout?.();
   }
 }

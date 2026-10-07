@@ -171,6 +171,29 @@ router.get('/state/user-emotion', (req, res) => {
     res.json({ ...engine.getState(), timeline: engine.getTimeline() });
 });
 
+/**
+ * 她自己的情绪结算历史（REQ-10，B2-10 那条「写了没接线」的残件正式接上）。
+ *
+ * `EmotionEngine.history` 每次 applyDelta 都写盘（上限 50 条），
+ * 但此前只有 `_saveState` 的落盘字段和 getStatus 里的**条数**被读到过，界面从来没消费过它。
+ * 挂根路径（app.js 已 app.use('/', stateRoutes)），没有 /api 前缀；引擎缺失时回空结构不报错。
+ */
+router.get('/state/emotion-history', (req, res) => {
+    const engine = aiGirlfriend.emotionEngine;
+    if (!engine) {
+        res.json({ history: [], state: null, baseline: null, count: 0 });
+        return;
+    }
+    const history = Array.isArray(engine.history) ? engine.history : [];
+    res.json({
+        history,
+        state: engine.state ?? null,
+        baseline: engine.baseline ?? null,
+        count: history.length,
+        emotion: engine.getEmotionLabel(),
+    });
+});
+
 router.post('/state', (req, res) => {
     const { affinity, nickname } = req.body;
     // 与 chat.js / tasks.js 同一套校验惯例：类型不对回 400，而不是静默忽略还报 updated

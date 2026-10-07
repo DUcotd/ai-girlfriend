@@ -8,6 +8,7 @@ import Switch from "@/components/ui/Switch";
 import ProactiveStatusStrip from "@/components/settings/proactive/ProactiveStatusStrip";
 import TypeToggleCard from "@/components/settings/proactive/TypeToggleCard";
 import { cn } from "@/lib/cn";
+import type { NotifyPrivacy } from "@/lib/notifyPrivacy";
 import type { ProactiveGroupInfo, ProactiveTypeInfo } from "@/types";
 
 interface SettingsProactiveTabProps {
@@ -22,6 +23,12 @@ interface SettingsProactiveTabProps {
     availableTypes: ProactiveTypeInfo[];
     /** 后端下发的分组定义（缺失时退化成单组） */
     availableGroups?: ProactiveGroupInfo[];
+    /** 桌面通知是否显示正文（FE-15，纯浏览器偏好，改动即时生效、不进「保存全部配置」） */
+    notifyPrivacy: NotifyPrivacy;
+    onNotifyPrivacyChange: (value: NotifyPrivacy) => void;
+    /** 主动消息是否朗读（可与打字回复的朗读分开关） */
+    speakProactive: boolean;
+    onSpeakProactiveChange: (value: boolean) => void;
 }
 
 /** 频率档位的「量化」说明：把冷却与上限的倍率直接摆出来，别只给形容词 */
@@ -62,6 +69,10 @@ export default function SettingsProactiveTab({
     onEnabledTypesChange,
     availableTypes,
     availableGroups = [],
+    notifyPrivacy,
+    onNotifyPrivacyChange,
+    speakProactive,
+    onSpeakProactiveChange,
 }: SettingsProactiveTabProps) {
     /** 按分组归拢类型（分组顺序以后端下发为准，未知分组排在最后） */
     const groupedTypes = useMemo(() => {
@@ -260,6 +271,38 @@ export default function SettingsProactiveTab({
                     </div>
                 </motion.div>
             )}
+
+            {/* 隐私与朗读（FE-15）：这两个是浏览器偏好，改了立刻生效，不需要点「保存全部配置」 */}
+            <div className="space-y-2 rounded-2xl border border-line-subtle bg-surface-1/50 p-4">
+                <h4 className="text-sm font-bold text-content-primary">通知与朗读隐私</h4>
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <p className="text-xs font-bold text-content-secondary">锁屏通知显示正文</p>
+                        <p className="mt-0.5 text-[10px] leading-relaxed text-content-muted">
+                            关闭时通知只写「小爱给你发来一条消息」，正文要打开页面才看得到；
+                            打开后她说的原话会出现在锁屏、通知中心和其他人的预览里。
+                        </p>
+                    </div>
+                    <Switch
+                        checked={notifyPrivacy === "preview"}
+                        onChange={(checked) => onNotifyPrivacyChange(checked ? "preview" : "hidden")}
+                        label="锁屏通知显示正文"
+                    />
+                </div>
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <p className="text-xs font-bold text-content-secondary">她主动发消息时朗读出来</p>
+                        <p className="mt-0.5 text-[10px] leading-relaxed text-content-muted">
+                            只影响**主动消息**的语音；打字回复的朗读跟着顶部语音开关走。
+                        </p>
+                    </div>
+                    <Switch
+                        checked={speakProactive}
+                        onChange={onSpeakProactiveChange}
+                        label="主动消息朗读"
+                    />
+                </div>
+            </div>
 
             <Note tone="accent">
                 💝 主动消息让小爱更加主动关心你！她会在合适的时间发送问候、想念消息和情绪关怀。

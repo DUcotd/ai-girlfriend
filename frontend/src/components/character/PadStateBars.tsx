@@ -4,10 +4,12 @@ import { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import ProgressBar from "../ui/ProgressBar";
 import { cn } from "@/lib/cn";
+import { readPadAxes } from "@/lib/padState";
 import type { EmotionalState } from "@/types";
 
 interface PadStateBarsProps {
-    emotionalState: EmotionalState;
+    /** 允许缺省：脏 payload 不该让这个展示面板把整页打白屏（FE-11） */
+    emotionalState?: EmotionalState | null;
 }
 
 /**
@@ -16,7 +18,9 @@ interface PadStateBarsProps {
  */
 export default function PadStateBars({ emotionalState }: PadStateBarsProps) {
     const [expanded, setExpanded] = useState(true);
-    const { P, A, D } = emotionalState.current;
+    // 旧写法直接 emotionalState.current 解构：后端重启窗口里 /state 的半截响应
+    // 缺 current 字段就是 undefined.toFixed() → 整页白屏。现在统一归一成有限数字。
+    const { P, A, D } = readPadAxes(emotionalState?.current);
 
     const axes = [
         {

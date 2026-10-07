@@ -48,6 +48,10 @@ const KEYS = {
   enabledTypes: "enabledTypes",
   /** 通知权限是否已问过（只问一次，避免每次进页面都弹） */
   notificationAsked: "notificationAsked",
+  /** 桌面通知是否显示正文（缺省 hidden = 只显示「小爱给你发来一条消息」） */
+  notifyPrivacy: "notifyPrivacy",
+  /** 主动消息是否朗读（关闭不影响打字回复的朗读；缺省开） */
+  speakProactive: "speakProactive",
   // 记忆设置（设置页 → 记忆）：事实提取开关与检索模式
   memoryFactsEnabled: "memoryFactsEnabled",
   memoryRetrievalMode: "memoryRetrievalMode",
