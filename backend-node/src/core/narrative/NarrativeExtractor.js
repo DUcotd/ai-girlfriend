@@ -220,9 +220,10 @@ export class NarrativeExtractor {
             // 「这个日期是她记得的，还是她猜的」——透出来源，界面与 prompt 才不用假装确定
             occurredAtSource: date.source,
             // B2-10：这三个字段以前在抽取层被**整段丢掉**，于是 store 的 normalizeNarrative
-            // 永远收到空值 —— 「写了没接线」的典型形状。标签与笑点触发词让她能
-            // 「按标签联想」（最后一轮已接上 AssociationRecall），sourceEpisodeId 让故事
-            // 能回溯到当初那段对话。
+            // 永远收到空值 —— 「写了没接线」的典型形状。现在 tags 与 jokeTrigger 已经是
+            // **召回信号**（AssociationRecall：用户说到线索词/那句暗号 → 这条故事排到注入段第一），
+            // sourceEpisodeId 仍只是**写路径**（记着「这事来自哪段对话」，回溯展示是下一轮的事，
+            // 现在没有任何消费者，别把它当成已经能用）。
             tags: clampTags(add.tags),
             jokeTrigger: clampJokeTrigger(add.jokeTrigger),
             sourceEpisodeId: typeof add.sourceEpisodeId === 'string' && add.sourceEpisodeId.trim()

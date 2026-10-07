@@ -16,7 +16,7 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'aigf-final-'));
 process.env.AI_GIRLFRIEND_DATA_DIR = sandbox;
 
 const { createHarness } = await import('./lib/testKit.mjs');
-const t = createHarness('test-audit-final', { expect: 47 });
+const t = createHarness('test-audit-final', { expect: 54 });
 const { check, finish } = t;
 
 // 固定基准：2026-10-07 14:30 本地（周三）。所有相对说法都围着它算。
@@ -225,6 +225,40 @@ config.narrative.associationMaxInject = prevCap;
 check('F-3 空库与空话都不炸',
     retriever.matchAssociations('').length === 0
     && new NarrativeRetriever({ store: { narratives: [] } }).matchAssociations('月落乌啼').length === 0);
+
+
+// ==================== F-4：约定追问计数不会再被重启抹掉 ====================
+
+const follow = store.addNarrative({ title: '约定：周五交方案', summary: '用户说周五交方案，让小爱提醒', type: 'promise', occurredAt: NOW, occurredAtSource: DATE_SOURCE.stated, importance: 4 });
+follow.followupCount = 3;
+follow.lastFollowupAt = NOW;
+store.scheduleSave();
+check('F-4 去抖落盘在 flush() 后真的进盘（B0-6 契约：flush 回传写盘结果）', store.flush() === true);
+const reloaded = new NarrativeStore();
+check('F-4 追问计数落盘 + 重启读回（改前：normalizeNarrative 的键表没这两个字段，每次重启归零）',
+    reloaded.narratives.length >= 3 && reloaded.getById(follow.id).followupCount === 3);
+check('F-4 lastFollowupAt 同样读回', reloaded.getById(follow.id).lastFollowupAt === NOW);
+check('F-4 API 透出 followupCount（上限判定不再只能靠日志看）',
+    reloaded.publicNarrative(reloaded.getById(follow.id)).followupCount === 3);
+fs.writeFileSync(path.join(sandbox, 'narrative.json'), JSON.stringify({
+    version: 1,
+    narratives: [{ id: 'dirty', type: 'promise', title: '脏计数', summary: '字符串不是次数', occurredAt: NOW, followupCount: '3', lastFollowupAt: 'x' }],
+    stats: {},
+}, null, 2));
+const dirtyStore = new NarrativeStore();
+check('F-4 非数字的计数按 0 处理（不让一条脏数据永久占掉追问额度）',
+    dirtyStore.getById('dirty').followupCount === 0 && dirtyStore.getById('dirty').lastFollowupAt === null);
+
+// ==================== F-5：事件规格表与发布方对得上 ====================
+
+const { TRIGGER_EVENT_SCHEMAS, TRIGGER_EVENTS } = await import('../src/core/triggerEvents.js');
+const milestoneSchema = TRIGGER_EVENT_SCHEMAS[TRIGGER_EVENTS.NARRATIVE_MILESTONE];
+check('F-5 里程碑事件规格写的是发布方真正发的 daysUntil（以前只写 daysAgo，两侧都对不上）',
+    milestoneSchema.daysUntil === 'number' && milestoneSchema.daysAgo === 'number');
+const milestoneCandidate = (await import('../src/core/triggers/anniversaryTrigger.js')).default
+    .evaluate({ type: 'anniversary', narrativeId: 'n9', title: '在一起一周年', daysUntil: 0, occurredAt: NOW }, { now: NOW });
+check('F-5 触发源对 daysUntil 与 daysAgo 两种写法都认（别名兼容没写反）',
+    !!milestoneCandidate && milestoneCandidate.data.daysUntil === 0);
 
 // ==================== 文档一致性：新旋钮必须有说明 ====================
 

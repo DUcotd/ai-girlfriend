@@ -245,6 +245,67 @@ export interface MemoriesResponse {
   stats: MemoryStats;
 }
 
+/* ==================== 我们的故事（REQ-03 共同经历叙事） ====================
+ * 后端 GET /state/narratives 的契约（NarrativeStore.publicNarrative 逐字段的公开视图，
+ * embedding 大字段后端已剥离，所以这里没有它）。
+ *
+ * ⚠️⚠️ 时间口径与记忆层**不同**：本结构的 occurredAt/createdAt/updatedAt/lastRecalledAt
+ * 全是 epoch **毫秒**（NarrativeStore.normalizeNarrative 取 Date.now()），
+ * 而 EpisodeItem.timestamp 是**秒**。混用时不做校正的后果是把 2026 年显示成 1970-01-20，
+ * 格式化一律走 lib/storyDisplay 的 toMillis 归一，别在组件里 new Date(ts)。
+ */
+
+/** 一条共同经历叙事；type 的中文标签见 lib/storyDisplay 的镜像表（跨端测试钉住） */
+/** 与后端 core/narrative/narrativeDate.js 的 DATE_SOURCE 取值一一对应（跨端测试钉住） */
+export type NarrativeDateSource = "stated" | "relative" | "month-day" | "fallback";
+
+export interface NarrativeItem {
+  id: string;
+  /** first_time | anniversary | promise | inside_joke | milestone | shared_event */
+  type: string;
+  title: string;
+  summary: string;
+  /** 事件实际发生时间（毫秒） */
+  occurredAt: number;
+  /**
+   * 这个日期的来源：'stated'（她记得）| 'relative'（由「昨天/三天前」推出）
+   * | 'month-day'（只记得月日，年份补的）| 'fallback'（后端补的抽取当天）| null（改造前入库）。
+   * ⚠️ 显示日期前必须看它：fallback/null 的 occurredAt 是**统计口径**不是回忆，
+   * 照着念出来就成了「我们 10 月 7 日第一次互道晚安」这种编造（后端 prompt 层同一口径）。
+   */
+  occurredAtSource?: NarrativeDateSource | null;
+  /** 她已经就这条约定追问过几次（上限 3 次由后端 promiseFollowupTrigger 判） */
+  followupCount?: number;
+  /** 1-5，5 最重要 */
+  importance: number;
+  /** 纪念日循环信息；非纪念日为 null */
+  recurring: {
+    isAnniversary: boolean;
+    anniversaryDate: string;
+    anniversaryType: string;
+  } | null;
+  /** 专属梗的那句暗号；非梗类为 null 或空串 */
+  jokeTrigger: string | null;
+  tags: string[];
+  recallCount: number;
+  /** 她上次主动想起这条故事的时间（毫秒）；从没想起过为 null */
+  lastRecalledAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface NarrativeStats {
+  total: number;
+  /** 三层节流的状态；后端引擎缺失时整个 stats 只剩 total，故为可选 */
+  lastExtractTurn?: number;
+  lastExtractAt?: number;
+}
+
+export interface NarrativesResponse {
+  narratives: NarrativeItem[];
+  stats: NarrativeStats;
+}
+
 export interface CurrentActivity {
   activity: string;
   emoji: string;

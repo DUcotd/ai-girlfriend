@@ -10,6 +10,7 @@ import type {
   CurrentActivity,
   FactItem,
   MemoriesResponse,
+  NarrativesResponse,
   PersonalityLedgerEntry,
   PersonalityState,
   PersonalityUpdatePayload,
@@ -317,6 +318,21 @@ export const api = {
 
   clearMemories: () =>
     request<{ status: string }>("/memories", { method: "DELETE" }),
+
+  /**
+   * 我们的故事（REQ-03 共同经历叙事）：{ narratives, stats }，后端按「重要度→新近」排好序。
+   * ⚠️ 时间字段是**毫秒**，与 /memories 的 episodes（秒）不同口径，见 types 的 NarrativeItem。
+   */
+  getNarratives: () => request<NarrativesResponse>("/state/narratives"),
+
+  /**
+   * 删除一条叙事。
+   * ⚠️ 后端只有 GET / DELETE 两个入口，**没有「重新写回一条叙事」的 POST**
+   * （narrative 是从 episodes 派生的，由抽取链路生成），所以这里的删除不可撤销 ——
+   * 界面对应的是二次确认而不是撤销条（MemoryDialog FE-09 分级）。
+   */
+  deleteNarrative: (id: string) =>
+    request<{ status: string }>(`/state/narratives/${id}`, { method: "DELETE" }),
 
   updateState: (payload: { affinity?: number; nickname?: string }) =>
     request<AppState & { status: string }>("/state", {

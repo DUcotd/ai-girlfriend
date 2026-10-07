@@ -64,7 +64,11 @@ export const TRIGGER_EVENT_SCHEMAS = Object.freeze({
         title: 'string',       // 标题（如「第一次说晚安」）
         occurredAt: 'number',  // 原始事件发生时间（毫秒）
         anniversary: 'boolean',// 是否为周年类里程碑
-        daysAgo: 'number',     // 距今天数
+        // F-5：发布方（AiGirlfriend._publishNarrativeMilestones）发的是 **daysUntil**
+        // （还有 daysAgo 只作为兼容别名被 anniversaryTrigger 读）。规格表以前只写 daysAgo，
+        // 于是「供发布方与触发源对齐」这句话对不上任何一侧 —— 两个字段都留，注明谁是正主。
+        daysUntil: 'number',   // 距纪念日还有几天（0=今天，负=已过）
+        daysAgo: 'number',     // 兼容别名：daysUntil 的相反数，消费端两者都认
     }),
     // topic_open / topic_close 为预留事件，payload 暂不定形（P1 扩展）
     [TRIGGER_EVENTS.TOPIC_OPEN]: Object.freeze({}),

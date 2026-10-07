@@ -79,6 +79,17 @@ export function normalizeNarrative(raw) {
         updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : now,
         recallCount: Number.isFinite(raw.recallCount) ? raw.recallCount : 0,
         lastRecalledAt: Number.isFinite(raw.lastRecalledAt) ? raw.lastRecalledAt : null,
+        /**
+         * 约定追问计数（F-4，审计「写了没接线」的新样本）：
+         * `recordNarrativeFollowup` 每追问一次 +1，`promiseFollowupTrigger` 拿它和
+         * `maxFollowups`（3 次）比 —— 但 normalizeNarrative 的键表里没有这两个字段，
+         * 于是**每次重启/导入档案都把计数抹回 0**，磁盘上明明写着 3，内存里又是 0，
+         * 她会对同一个约定没完没了地追问（用户体感：「这件事我已经说过三遍了」）。
+         * 落盘是照原对象写的（`_saveNow` 直接序列化 narratives），所以数据一直都在，
+         * 只是加载时被自己的白名单丢了。
+         */
+        followupCount: Number.isFinite(raw.followupCount) ? raw.followupCount : 0,
+        lastFollowupAt: Number.isFinite(raw.lastFollowupAt) ? raw.lastFollowupAt : null,
     };
 }
 
@@ -335,6 +346,8 @@ export class NarrativeStore {
             tags: n.tags,
             recallCount: n.recallCount,
             lastRecalledAt: n.lastRecalledAt,
+            // 约定追问计数：界面用它说明「她已经问过几次」（没有它，上限判定只能靠日志看）
+            followupCount: Number.isFinite(n.followupCount) ? n.followupCount : 0,
             createdAt: n.createdAt,
             updatedAt: n.updatedAt,
         };

@@ -14,6 +14,8 @@ import {
     Star,
     Sparkles,
     MessageCircle,
+    BookOpen,
+    Smile,
 } from "lucide-react";
 import Button from "../ui/Button";
 import ConfirmDialog from "../ui/ConfirmDialog";
@@ -24,8 +26,18 @@ import { useToast } from "../ui/Toast";
 import { api } from "@/lib/api";
 import { toApiError } from "@/lib/apiError";
 import { LOCAL_ERROR_CODES } from "@/lib/errorCodes";
+import {
+    filterStories,
+    storyDateLine,
+    groupStoriesByRecency,
+    storyCountLabel,
+    storyJokeTrigger,
+    storyRecallLine,
+    storyTags,
+    storyTypeMeta,
+} from "@/lib/storyDisplay";
 import { useChatStore } from "@/stores/chatStore";
-import type { EpisodeItem, FactItem, MemoryStats } from "@/types";
+import type { EpisodeItem, FactItem, MemoryStats, NarrativeItem } from "@/types";
 
 interface MemoryDialogProps {
     onClose: () => void;
@@ -67,20 +79,48 @@ function ImportancePicker({ value, onChange }: { value: number; onChange: (v: nu
 }
 
 /**
+ * 重要度星星的**只读**版本（故事列表用）。
+ *
+ * 不复用 ImportancePicker 的按钮版：那里五个「点了什么都不发生」的假按钮会把键盘用户
+ * 困在每张卡片里（本项目有一批 a11y 修复，别再往回退）。展示型星就是一个带 aria-label 的图形。
+ */
+function ImportanceStars({ value }: { value: number }) {
+    const filled = Math.min(5, Math.max(0, Math.round(value)));
+    return (
+        <span className="flex items-center gap-0.5" role="img" aria-label={`重要度 ${filled} 星`}>
+            {[1, 2, 3, 4, 5].map((n) => (
+                <Star
+                    key={n}
+                    size={13}
+                    className={n <= filled ? "fill-amber-400 text-amber-400" : "text-content-muted/40"}
+                />
+            ))}
+        </span>
+    );
+}
+
+/**
  * 记忆弹窗：完整记忆管理。
  * - 事实记忆（小爱了解的）：手动添加 / 编辑 / 删除，含重要度与分类
  * - 情节记忆（对话回忆）：查看 + 单条删除
- * 数据来自后端 schema v2（GET /memories → {facts, episodes, stats}）。
+ * - 我们的故事（REQ-03 共同经历叙事）：查看 + 单条删除，含类型/专属梗/回忆次数
+ * 数据来自后端 schema v2（GET /memories → {facts, episodes, stats}）
+ * 与 GET /state/narratives → {narratives, stats}。
  */
 export default function MemoryDialog({ onClose }: MemoryDialogProps) {
     const [facts, setFacts] = useState<FactItem[]>([]);
     const [episodes, setEpisodes] = useState<EpisodeItem[]>([]);
     const [stats, setStats] = useState<MemoryStats | null>(null);
+    /** 我们的故事（后端已按「重要度→新近」排好，前端不再重排主序） */
+    const [stories, setStories] = useState<NarrativeItem[]>([]);
+    /** 故事单独降级：它挂了不影响记忆 tab（见挂载处的 Promise.all 注释） */
+    const [storiesFailed, setStoriesFailed] = useState(false);
+    const [retryingStories, setRetryingStories] = useState(false);
     const [affinity, setAffinity] = useState<number | null>(null);
     const [nickname, setNickname] = useState("");
     const [isLoading, setIsLoading] = useState(true);
     const [loadFailed, setLoadFailed] = useState(false);
-    const [activeTab, setActiveTab] = useState<"memories" | "settings">("memories");
+    const [activeTab, setActiveTab] = useState<"memories" | "stories" | "settings">("memories");
     const [showClearConfirm, setShowClearConfirm] = useState(false);
 
     // 记忆管理本地状态（初始值一律常量，挂载后异步填充，防 hydration mismatch）
@@ -96,6 +136,8 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
     const [undoFact, setUndoFact] = useState<FactItem | null>(null);
     /** 等待二次确认的回忆（不可重建，所以只确认不给撤销） */
     const [pendingEpisodeDelete, setPendingEpisodeDelete] = useState<EpisodeItem | null>(null);
+    /** 等待二次确认的故事：理由与回忆同一条——后端没有「写回一条叙事」的入口，给不了撤销 */
+    const [pendingStoryDelete, setPendingStoryDelete] = useState<NarrativeItem | null>(null);
     const [savingSettings, setSavingSettings] = useState(false);
 
     const showToast = useToast();
@@ -104,12 +146,24 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
     // setState 全部放进异步回调（而非 effect 同步体），避免触发级联渲染。
     useEffect(() => {
         let cancelled = false;
-        Promise.all([api.getMemories(), api.getState()])
-            .then(([memories, state]) => {
+        Promise.all([
+            api.getMemories(),
+            api.getState(),
+            // 第三个请求自己把失败咽成 null：Promise.all 是一票否决的，
+            // 叙事层（REQ-03「锦上添花」）读失败若让整个 all reject，就会连带把
+            // 本来好着的记忆 tab 一起标成「加载失败」——降级只该降它自己那一格。
+            api.getNarratives().catch((e) => {
+                console.error("Failed to fetch narratives", e);
+                return null;
+            }),
+        ])
+            .then(([memories, state, narratives]) => {
                 if (cancelled) return;
                 setFacts(memories.facts);
                 setEpisodes(memories.episodes);
                 setStats(memories.stats);
+                if (narratives) setStories(narratives.narratives);
+                else setStoriesFailed(true);
                 // ?? 而非 ||：0 是合法好感度，|| 会把它显示成 35，保存时再把 0 覆写成 35
                 setAffinity(typeof state.affinity === "number" ? state.affinity : 35);
                 setNickname(state.nickname || "");
@@ -122,6 +176,12 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
                 setIsLoading(false);
                 // 拉取失败必须可见：否则网络错误被渲染成「暂无记忆」，误导用户记忆已空
                 showToast("记忆加载失败，请检查后端连接", "error");
+                // 同一次挂载里 Promise.all 被记忆/状态那一票否掉时，故事的返回值根本走不到 then，
+                // 于是故事格也标成失败态而不是「还没有故事」——后者是在谎报「她没攒下经历」。
+                // 重试按钮只重跑叙事请求，成功就正常显示，不依赖记忆那边是否 recover
+                setStoriesFailed(true);
+                // 故事这边不再补一条 toast：同一场后端离线弹两条提示是重复噪音，
+                // 而故事 tab 自己有「故事加载失败 + 重试」的落地位置
             });
         return () => {
             cancelled = true;
@@ -138,6 +198,9 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
         () => (keyword ? episodes.filter((e) => e.text.toLowerCase().includes(keyword)) : episodes),
         [episodes, keyword]
     );
+    /** 故事按标题/梗概/标签匹配（换算规则集中在 lib/storyDisplay，便于单测） */
+    const filteredStories = useMemo(() => filterStories(stories, search), [stories, search]);
+    const storyGroups = useMemo(() => groupStoriesByRecency(filteredStories), [filteredStories]);
 
     const handleAddFact = async () => {
         const content = newFactContent.trim();
@@ -242,11 +305,55 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
             await api.clearMemories();
             setFacts([]);
             setEpisodes([]);
+            // 故意不动 stories：后端 DELETE /memories 不级联删叙事（REQ-03 A7 的明确决策），
+            // 前端替用户「顺手清空故事」等于做了后端没承诺的事
             showToast("记忆已清除！", "success");
         } catch {
             showToast("清除失败", "error");
         }
         setShowClearConfirm(false);
+    };
+
+    /** 故事 tab 的重试：只重跑叙事这一个请求，记忆那边好着，不该被牵连 */
+    const handleRetryStories = async () => {
+        if (retryingStories) return;
+        setRetryingStories(true);
+        try {
+            const data = await api.getNarratives();
+            setStories(data.narratives);
+            setStoriesFailed(false);
+        } catch (e) {
+            console.error("Retry narratives failed", e);
+            // 仍然失败就留在「故事加载失败」：把它换成「暂无故事」是谎报记忆已空
+            showToast(`故事加载失败：${toApiError(e).userMessage}`, "error");
+        } finally {
+            setRetryingStories(false);
+        }
+    };
+
+    /**
+     * 删除一条故事（我们的故事 tab）。
+     * 与回忆同款处置：后端没有重新写回叙事的入口，所以走二次确认、不给撤销条。
+     */
+    const handleDeleteNarrative = async (id: string) => {
+        setBusyId(id);
+        try {
+            await api.deleteNarrative(id);
+            setStories((prev) => prev.filter((n) => n.id !== id));
+            showToast("小爱忘掉了这段故事", "success");
+        } catch (e) {
+            const err = toApiError(e);
+            if (err.code === LOCAL_ERROR_CODES.NARRATIVE_NOT_FOUND) {
+                // 404 说明这条早就不在库里（另一个标签页删过 / 抽取链路已把它裁掉）：
+                // 列表跟着真值走，别对用户报「删除失败」
+                setStories((prev) => prev.filter((n) => n.id !== id));
+                showToast("这段故事已经不在了", "info");
+            } else {
+                showToast(`删除失败：${err.userMessage}`, "error");
+            }
+        } finally {
+            setBusyId(null);
+        }
     };
 
     const handleSaveSettings = async () => {
@@ -277,6 +384,86 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
 
     const hasSearchResults = filteredFacts.length > 0 || filteredEpisodes.length > 0;
 
+    /**
+     * 搜索框（记忆 tab 与故事 tab 共用同一个 `search` 状态）。
+     * 抽成一段 JSX 而不是复制两份：两份输入框各自的 placeholder/样式迟早漂移，
+     * 而且用户在两个 tab 间切换时不该被要求重新打一遍关键词。
+     */
+    const searchBox = (placeholder: string) => (
+        <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-content-muted" />
+            <Input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={placeholder}
+                aria-label={placeholder}
+                className="py-2 pl-8 text-sm"
+            />
+        </div>
+    );
+
+    /** 单条故事卡片：类型标签 + 日期 + 标题/梗概 + 重要度 + 标签 + 专属梗 + 回忆次数 */
+    const renderStory = (story: NarrativeItem) => {
+        const meta = storyTypeMeta(story.type);
+        const joke = storyJokeTrigger(story);
+        const tags = storyTags(story);
+        // 日期只在「来源可信」时显示：后端把想不起日子的故事补成抽取当天，那个数字看起来
+        // 和真日期一模一样，照显示就是替她编了一个纪念日（F-1 的同一口径，跨端测试钉住）
+        const date = storyDateLine(story);
+        return (
+            <div key={story.id} className="group rounded-xl bg-surface-2/60 p-3 text-sm">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                        <span className="shrink-0 rounded-full bg-accent-1/15 px-2 py-0.5 text-[10px] font-bold text-accent-strong dark:text-accent-1">
+                            {meta.emoji} {meta.label}
+                        </span>
+                        {date && <span className="shrink-0 text-[10px] text-content-muted">{date}</span>}
+                        <ImportanceStars value={story.importance} />
+                    </div>
+                    <button
+                        onClick={() => setPendingStoryDelete(story)}
+                        disabled={busyId === story.id}
+                        aria-label="删除这段故事"
+                        className="shrink-0 rounded-lg p-1 text-content-muted opacity-0 transition-all hover:bg-status-danger/10 hover:text-status-danger group-hover:opacity-100 group-focus-within:opacity-100 coarse:opacity-100 disabled:opacity-40"
+                    >
+                        {busyId === story.id ? (
+                            <Loader2 size={13} className="animate-spin" />
+                        ) : (
+                            <Trash2 size={13} />
+                        )}
+                    </button>
+                </div>
+                <p className="font-medium text-content-primary">{story.title}</p>
+                {story.summary && story.summary !== story.title && (
+                    <p className="mt-0.5 whitespace-pre-wrap text-content-secondary">{story.summary}</p>
+                )}
+                {/* 专属梗单独一格：它是「只有你俩懂」的那句话，混进梗概里就没人认得出它是梗 */}
+                {joke && (
+                    <p className="mt-1.5 flex items-start gap-1 rounded-lg bg-accent-2/15 px-2 py-1 text-xs text-accent-strong">
+                        <Smile size={12} className="mt-0.5 shrink-0" />
+                        <span>
+                            专属梗「{joke}」
+                        </span>
+                    </p>
+                )}
+                {tags.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                        {tags.map((tag) => (
+                            <span
+                                key={tag}
+                                className="rounded-full bg-surface-1/80 px-2 py-0.5 text-[10px] text-content-muted"
+                            >
+                                #{tag}
+                            </span>
+                        ))}
+                    </div>
+                )}
+                <p className="mt-1.5 text-[10px] text-content-muted">{storyRecallLine(story)}</p>
+            </div>
+        );
+    };
+
     return (
         <>
             <Dialog
@@ -297,6 +484,7 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
                     className="mb-4"
                     options={[
                         { value: "memories", label: "记忆" },
+                        { value: "stories", label: "我们的故事" },
                         { value: "settings", label: "设置" },
                     ]}
                     value={activeTab}
@@ -339,16 +527,7 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
                                     </div>
                                 )}
                                 {/* 搜索 */}
-                                <div className="relative">
-                                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-content-muted" />
-                                    <Input
-                                        type="text"
-                                        value={search}
-                                        onChange={(e) => setSearch(e.target.value)}
-                                        placeholder="搜索记忆..."
-                                        className="py-2 pl-8 text-sm"
-                                    />
-                                </div>
+                                {searchBox("搜索记忆...")}
 
                                 {!hasSearchResults ? (
                                     <div className="py-8 text-center text-content-secondary">
@@ -507,6 +686,57 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
                                 )}
                             </div>
                         )
+                    ) : activeTab === "stories" ? (
+                        <div className="space-y-4">
+                            {searchBox("搜索故事...")}
+                            {storiesFailed ? (
+                                /* 只有这一格降级：记忆/回忆上面已经加载成功，不该被叙事层的失败牵连 */
+                                <div className="rounded-xl border border-status-danger/30 bg-status-danger/5 p-4 text-center">
+                                    <p className="text-sm text-status-danger">故事加载失败</p>
+                                    <p className="mt-1 text-xs text-content-muted">
+                                        记忆与对话回忆不受影响，只有「我们的故事」这一格没读到
+                                    </p>
+                                    <Button
+                                        onClick={handleRetryStories}
+                                        disabled={retryingStories}
+                                        className="mt-3 px-3 py-1.5 text-xs"
+                                    >
+                                        {retryingStories ? (
+                                            <Loader2 size={14} className="animate-spin" />
+                                        ) : (
+                                            <BookOpen size={14} />
+                                        )}
+                                        重试
+                                    </Button>
+                                </div>
+                            ) : filteredStories.length === 0 ? (
+                                <div className="py-8 text-center text-content-secondary">
+                                    {keyword ? "没有匹配的故事" : "还没有故事"}
+                                    {/* 空状态要说清「怎么才会有」，否则用户以为这个功能坏了 */}
+                                    {!keyword && (
+                                        <p className="mt-1 text-xs text-content-muted">
+                                            聊出「第一次 / 纪念日 / 专属梗」这类共同经历后，小爱会自己把它记下来
+                                        </p>
+                                    )}
+                                </div>
+                            ) : (
+                                storyGroups.map((group) => (
+                                    <section key={group.key} className="space-y-2">
+                                        <h4 className="flex items-center gap-1.5 text-xs font-bold text-content-muted">
+                                            <BookOpen size={13} className="text-accent-1" />
+                                            {group.label}（{group.items.length}）
+                                        </h4>
+                                        {group.items.map(renderStory)}
+                                    </section>
+                                ))
+                            )}
+                            {!storiesFailed && filteredStories.length > 0 && (
+                                <p className="text-center text-[10px] text-content-muted">
+                                    {storyCountLabel(filteredStories.length)}
+                                    {filteredStories.length !== stories.length && `（全部 ${stories.length} 个）`}
+                                </p>
+                            )}
+                        </div>
                     ) : affinity === null ? (
                         <div className="py-8 text-center text-status-danger">状态加载失败，请检查后端连接后重开弹窗</div>
                     ) : (
@@ -578,6 +808,27 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
                     if (target) await handleDelete(target.id, "episode");
                 }}
                 onCancel={() => setPendingEpisodeDelete(null)}
+            />
+
+            {/* 故事删除的二次确认，与回忆同一档待遇：
+                后端只给了 GET / DELETE 两个叙事入口（没有「重新写回一条故事」的 POST），
+                撤销按钮点了什么也不会回来 —— 那就不能给它（FE-09） */}
+            <ConfirmDialog
+                isOpen={pendingStoryDelete !== null}
+                title="删掉这段故事"
+                message={
+                    `确定让小爱忘掉这段「我们的故事」？\n\n「${(pendingStoryDelete?.title ?? "").slice(0, 40)}」\n\n` +
+                    "故事删除后无法找回（事实记忆删除可以在 6 秒内撤销）。"
+                }
+                confirmText="确认删除"
+                cancelText="取消"
+                type="danger"
+                onConfirm={async () => {
+                    const target = pendingStoryDelete;
+                    setPendingStoryDelete(null);
+                    if (target) await handleDeleteNarrative(target.id);
+                }}
+                onCancel={() => setPendingStoryDelete(null)}
             />
         </>
     );
