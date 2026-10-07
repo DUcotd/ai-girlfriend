@@ -20,10 +20,10 @@ const TOKEN = 'smoke-token-1234';
 process.env.AI_GIRLFRIEND_TOKEN = TOKEN;
 
 const { createApp } = await import('../src/app.js');
-const { aiGirlfriend } = await import('../src/services/container.js');
+const { aiGirlfriend, eventBus, triggerRegistry } = await import('../src/services/container.js');
 const { createHarness } = await import('./lib/testKit.mjs');
 
-const t = createHarness('boot-smoke', { expect: 18 });
+const t = createHarness('boot-smoke', { expect: 23 });
 const check = t.check;
 
 const app = createApp();
@@ -101,6 +101,27 @@ console.log('== 未匹配路径与 500 ==');
     check('500 的堆栈进了日志（旧实现只打一行 message，成因查不到）',
         captured.some((l) => l.includes('boom') && /at\s/.test(l)),
         captured.join(' | ').slice(0, 160));
+}
+
+console.log('== 事件层在真实装配里确实是通电的 ==');
+{
+    // 这一节专门对付「代码写了但没接线」：单元测试各自 new 引擎都能过，
+    // 只有 container 才代表服务进程里真实的那一套对象图。
+    check('AiGirlfriend 持有 eventBus（情绪转折/叙事里程碑才有地方发出去）',
+        typeof aiGirlfriend.eventBus?.emit === 'function');
+    check('user_emotion_turn 有订阅者（不是发进一条空总线）',
+        eventBus.listenerCount('user_emotion_turn') > 0,
+        `count=${eventBus.listenerCount('user_emotion_turn')}`);
+    check('narrative_milestone 有订阅者',
+        eventBus.listenerCount('narrative_milestone') > 0,
+        `count=${eventBus.listenerCount('narrative_milestone')}`);
+    const delivered = eventBus.emit('user_emotion_turn', {
+        valence: 0, arousal: 0, intensity: 0, label: '中性', turned: false,
+        trend: { avgValence: 0, slope: 0, declining: false }, ts: Date.now(),
+    });
+    check('真的 emit 一次能派发到订阅者（订阅不是死代码）', delivered >= 1, `delivered=${delivered}`);
+    check('触发源注册数量为 4（REQ-04 三源 + B6-α 的关系跃迁）',
+        triggerRegistry.triggers.size === 4, `size=${triggerRegistry.triggers.size}`);
 }
 
 server.closeAllConnections?.();

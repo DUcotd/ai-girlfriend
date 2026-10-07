@@ -302,7 +302,8 @@ node scripts/verify-thinking-split.mjs    # 终端 2
 cd backend-node
 npm run check      # 语法解析（src + scripts）+ 真导入冒烟（scripts/smoke-import.mjs）
 npm run lint       # 零依赖静态检查 R1~R5（全局遮蔽 / 重复 export default / 空 catch / 调试残留 / 未用 import）
-npm test           # 20 套测试：跑完全部再汇总，全程写沙盒数据目录
+npm test           # 全部测试套件：跑完全部再汇总，全程写沙盒数据目录；
+                   # 套件清单与 scripts/ 目录逐一对账，新写的 test-*.mjs 忘了登记会直接失败
 
 # 前端
 cd frontend

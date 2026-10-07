@@ -41,7 +41,30 @@ const SUITES = [
     'test-audit-b6.mjs',
     'test-audit-b3.mjs',
     'test-audit-b5b.mjs',
+    'test-audit-qa.mjs',
 ];
+
+/**
+ * 防「套件写了但永远不会跑」：SUITES 是手抄的第二份真相，磁盘上每个 test-*.mjs
+ * 都必须登记在这里，反过来登记的每个文件都必须存在。
+ * （同一类事故：jsonStore.LEGACY_FILES 长期落后于实际数据文件，旧库里的 5 个文件
+ *   从来没被迁移过 —— 清单一旦手写就必须被核对。）
+ */
+{
+    const onDisk = fs.readdirSync(__dirname)
+        .filter((f) => /^test-.+\.mjs$/.test(f))
+        .sort();
+    const unregistered = onDisk.filter((f) => !SUITES.includes(f));
+    const missing = SUITES.filter((f) => !onDisk.includes(f));
+    if (unregistered.length || missing.length) {
+        console.error(
+            `[run-tests] 套件清单与磁盘不一致：\n`
+            + `  未登记（写了却永远不进 CI）：${unregistered.join(', ') || '无'}\n`
+            + `  登记了但文件不存在：${missing.join(', ') || '无'}`
+        );
+        process.exit(2);
+    }
+}
 
 const filter = process.argv[2];
 const suites = filter ? SUITES.filter((s) => s.includes(filter)) : SUITES;

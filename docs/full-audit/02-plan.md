@@ -235,6 +235,7 @@
 | 2026-10-07 | **B5**（工程基建，除档案导出与依赖升级）：`GET /health` + 零依赖 logger（时间戳/级别/堆栈）、启动脚本改探 `/health`、`npm run check` 补真导入冒烟、零依赖静态检查 `npm run lint`、`testKit` 让「用例没跑」也判失败、`.env.example`（86 个旋钮分 10 组）+ 文档一致性测试、CI 补 lint/build/boot smoke、`.gitattributes`、engines 对齐 20.9。后端 **20 套**全绿、前端 typecheck/lint/test/build 全绿 | `1a68590` |
 | 2026-10-07 | **B5-12**（全量档案导出/导入/自动快照）+ **B0-6 后半**（四个去抖 flush 回传写盘结果）：`/backup/{status,export,import,snapshot,restore}`、11 个数据文件的唯一清单与逐个热加载、`POST /reset` 前自动快照、设置页「数据与备份」面板。新增 `test-audit-b5b.mjs` 65 项 → 后端 **21 套**全绿、前端 **94 例**全绿 | `7e8d5b3` `46a03bb` `960d2d8` |
 | 2026-10-07 | **B3-3 前端半格（B3 就此收完）**：设置页在**输入时**就显示 baseUrl 分级（ok 不占版面 / warn 琥珀 / block 红），文案与后端 `normalizeBaseUrl()` 逐字同源；新增 `lib/baseUrlGrade.ts` + `baseUrlGrade.test.ts`（36 例，**直接 import 后端模块**逐样本比对分级、放行/拒绝与告警文案，不再用正则抄）；「后端当前生效：…」一行暴露表单值≠生效值（含后端重启后 Key 未回灌）；`POST /config` 的 `warnings` 存进表单并在保存后展示、弹窗不关；保存失败提示由「请检查后端连接」改成后端 `detail` 原文，后端离线才提网络。前端 **10 套 / 130 例**全绿、后端 21 套全绿 | `cde4201` |
+| 2026-10-07 | **两份 QA 散件收编**（`_qa_w1_probe.mjs` / `_qa_w2_verify.mjs` 删除）：它们的断言是独立编写的、有价值，外壳有害（直接 import 真 container、直接读写 `data/user_emotion_state.json`、不带沙盒、不声明断言条数）。grep 核对后只把**其它套件都没覆盖**的行为搬进新套件 `test-audit-qa.mjs`（35 项：`fuse()` 对畸形 LLM 输出的容错、timeline 封顶与「去抖≠永不落盘」、EventBus 异常隔离与入参校验、叙事写入去重、词表极端输入、事件驱动类型规格），container 级的通电实证搬进 `test-boot-smoke.mjs`（+5 项 → 23）。顺带给 `run-tests.mjs` 加「清单 vs 磁盘对账」守卫（新写 `test-*.mjs` 忘了登记 → 退出码 2，已反向验证）。后端 **22 套**全绿 | `待提交` |
 
 **B3-3 前端落地要点（2026-10-07）**：
 
@@ -283,7 +284,7 @@
 cd backend-node
 npm audit --audit-level=high
 npm install multer@^2               # 1.x 是历史 CVE 线；diskStorage/fileFilter API 基本兼容，limits 字段不变
-npm install openai@^5 && npm test   # 主要风险：流式 chunk 形状与错误类型；跑 npm test 20 套 + 手动发一条消息
+npm install openai@^5 && npm test   # 主要风险：流式 chunk 形状与错误类型；跑全套 npm test + 手动发一条消息
 npm install express@^5 && npm test  # 变化最大：req.body 解析、路由通配符、res.status().json() 不变但错误处理签名要求四参数
 git add -A && git commit            # 任一步 npm test 红就回退这一步，别混在一个提交里
 ```
@@ -363,7 +364,7 @@ warnings 已经落地（`lib/baseUrlGrade.ts` + `ApiConfigForm`），401 那格�
 B6-β（REQ-05/07/09）与 PRD §5 的 Q1~Q5 一起等拍板。
 依赖升级（`multer`/`openai`/`express`）按上面的命令在有快网络时做。
 
-**开工前必做的健康检查**：`cd backend-node && npm run check && npm run lint && npm test`（**21 套**）与
+**开工前必做的健康检查**：`cd backend-node && npm run check && npm run lint && npm test`（**22 套**）与
 `cd frontend && npm run typecheck && npm run lint && npm run test`（**10 个文件 / 130 例**）；发版前再加 `npm run build`。
 测试全程写沙盒目录，不会碰 `backend-node/data/`。
 判断服务活没活：`curl http://127.0.0.1:8000/health` 看 `ok` 与 `llmConfigured`。
