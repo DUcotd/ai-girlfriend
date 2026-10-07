@@ -27,13 +27,16 @@ const aiBubbleClasses =
 function ThoughtIcon({ text }: { text: string }) {
   return (
     <div className="group relative flex self-start">
-      <span
+      {/* 用 button 而不是 tabIndex 的 span：触屏上非交互元素点一下不会获得焦点，
+          「心声」就只有 hover 一条路 —— 手机用户永远打不开它（FE-10） */}
+      <button
+        type="button"
         tabIndex={0}
         aria-label="查看小爱的内心独白"
-        className="mt-1 flex h-6 w-6 cursor-help items-center justify-center rounded-full bg-surface-1/90 text-accent-1 shadow-sm ring-1 ring-accent-1/30 transition hover:bg-accent-1/10 focus:outline-none focus:ring-2 focus:ring-accent-1/50"
+        className="mt-1 flex h-6 w-6 cursor-help items-center justify-center rounded-full bg-surface-1/90 text-accent-1 shadow-sm ring-1 ring-accent-1/30 transition hover:bg-accent-1/10 focus:outline-none focus:ring-2 focus:ring-accent-1/50 focus-visible:ring-accent-1"
       >
         <Brain size={14} />
-      </span>
+      </button>
       <div className="pointer-events-none absolute left-1/2 top-8 z-20 hidden w-60 -translate-x-1/2 rounded-xl bg-surface-1 p-3 text-xs leading-relaxed text-content-secondary shadow-lg ring-1 ring-line-subtle group-hover:block group-focus-within:block">
         <div className="mb-1 text-[11px] font-medium text-accent-1">小爱的心声</div>
         {text}
