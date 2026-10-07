@@ -200,6 +200,28 @@ framer-motion 经 MotionConfig reducedMotion="user" 跟随）。
   自动快照只会落进沙盒，不会在仓库里留下任何真实对话的副本；想放到别处用
   `AI_GIRLFRIEND_BACKUP_DIR` 指定。
 
+## 错误契约（界面按码分支，不按文案）
+
+所有非 2xx 响应都只有一种形状：
+
+```json
+{ "detail": "给用户看的中文", "error_code": "invalid_config", "errors": ["逐条原因（可选）"] }
+```
+
+- `detail` 是**唯一**的用户可见文案来源，写在后端；前端不复制一份中文，因此不会出现
+  「两处文案各改各的」。前端只回答「用户下一步做什么」：去设置页 / 稍后再试 / 用哪种语气。
+- `error_code` 是对外契约。两张码表：`backend-node/src/utils/upstreamError.js`（上游模型服务
+  的鉴权、限流、超时、上下文超长等）与 `backend-node/src/utils/errorCodes.js`（本机业务：
+  配置非法、资源不存在、凭证、语音未配置、备份导入导出等）。
+  前端镜像在 `frontend/src/lib/errorCodes.ts` + `apiError.ts`（`ApiError.status/code/errors/action`）。
+- 漏传 code 时按状态码兜底（`codeFor(status)`），所以「有错误体却没有码」这种状态不可能出现；
+  这条不变量由 `backend-node/scripts/test-audit-b7.mjs`（112 项，逐路由）与
+  `frontend/src/lib/__tests__/errorCodes.test.ts`（直接 import 后端两张表逐值比对）钉住。
+- 连不上后端与「后端拒了这个请求」是两种提示：前者 `status === null` + `network_error`，
+  界面说「连不上后端（8000 端口）」；后者照抄后端 detail，绝不把两者混成一句「请检查后端连接」。
+- 流式（SSE）也一样：`{type:'error', detail, error_code}`，HTTP 状态是 200（头已发出），
+  分支靠码。旧的消费型 `GET /chat/proactive` 现在固定回 405 + `method_not_allowed` + `allow`。
+
 ## API 一览
 
 | 方法 | 路径 | 说明 |

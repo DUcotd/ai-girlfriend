@@ -17,6 +17,8 @@ import lifeRoutes from './routes/life.js';
 import personalityRoutes from './routes/personalityRoutes.js';
 import backupRoutes from './routes/backup.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { failWith } from './middleware/validate.js';
+import { ERROR_CODES } from './utils/errorCodes.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 
 /**
@@ -114,7 +116,7 @@ export function createApp() {
     // 未匹配路径的 JSON 兜底：Express 默认回 HTML「Cannot GET /x」，前端 api.ts 会对
     // HTML 做 JSON.parse，用户看到的是一条语法类报错而不是「接口不存在」。
     app.use((req, res) => {
-        res.status(404).json({ detail: `Not found: ${req.method} ${req.path}` });
+        failWith(res, 404, `Not found: ${req.method} ${req.path}`, ERROR_CODES.NOT_FOUND);
     });
 
     app.use(errorHandler);

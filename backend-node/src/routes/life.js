@@ -6,6 +6,8 @@
  */
 import { Router } from 'express';
 import { proactiveEngine } from '../services/container.js';
+import { failWith } from '../middleware/validate.js';
+import { ERROR_CODES } from '../utils/errorCodes.js';
 
 const router = Router();
 
@@ -15,7 +17,7 @@ const router = Router();
  */
 function lifeSimulatorOrNull(res) {
     if (!proactiveEngine?.lifeSimulator) {
-        res.status(503).json({ detail: "LifeSimulator 还没就绪，请稍后再试" });
+        failWith(res, 503, "LifeSimulator 还没就绪，请稍后再试", ERROR_CODES.SERVICE_NOT_READY);
         return null;
     }
     return proactiveEngine.lifeSimulator;

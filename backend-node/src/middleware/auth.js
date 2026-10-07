@@ -24,6 +24,8 @@
  * 否则 req.ip / req.socket 尚未就绪、且预检 OPTIONS 会被误拦。
  */
 import crypto from 'crypto';
+import { failWith } from './validate.js';
+import { ERROR_CODES } from '../utils/errorCodes.js';
 
 /** 环境变量名：鉴权 token 的唯一来源。 */
 export const TOKEN_ENV = 'AI_GIRLFRIEND_TOKEN';
@@ -150,10 +152,10 @@ export function createAuthMiddleware(options = {}) {
         // 2) 未配置 token → 本机守卫：仅回环地址放行（静态资源在此模式下同样只对本机开放）
         if (!resolvedToken) {
             if (isLoopbackRequest(req)) return next();
-            return res.status(401).json({
-                detail: 'Unauthorized: 后端未配置访问令牌，且请求来自非本机地址。'
-                    + `请在环境变量 ${TOKEN_ENV} 中配置访问令牌。`,
-            });
+            return failWith(res, 401,
+                'Unauthorized: 后端未配置访问令牌，且请求来自非本机地址。'
+                + `请在环境变量 ${TOKEN_ENV} 中配置访问令牌。`,
+                ERROR_CODES.UNAUTHORIZED_OPEN);
         }
 
         // 3) 已配置 token → 校验 Bearer token；静态资源额外允许 ?token= 查询串
@@ -161,12 +163,14 @@ export function createAuthMiddleware(options = {}) {
         const provided = extractBearerToken(req)
             ?? (isStaticPath(req) ? extractQueryToken(req) : null);
         if (provided === null) {
-            return res.status(401).json({
-                detail: 'Unauthorized: 缺少 Authorization: Bearer <token> 头。',
-            });
+            // 码分三档给前端：没配 token / 没带 token / 带了但不对。
+            // 后两者界面能直接给出「去设置页填凭证」的可操作提示（B7-①）
+            return failWith(res, 401,
+                'Unauthorized: 缺少 Authorization: Bearer <token> 头。',
+                ERROR_CODES.UNAUTHORIZED_MISSING);
         }
         if (!safeTokenEquals(provided, resolvedToken)) {
-            return res.status(401).json({ detail: 'Unauthorized: 访问令牌无效。' });
+            return failWith(res, 401, 'Unauthorized: 访问令牌无效。', ERROR_CODES.UNAUTHORIZED_TOKEN);
         }
         return next();
     };

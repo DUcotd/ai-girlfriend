@@ -22,6 +22,8 @@ import Input from "../ui/Input";
 import SegmentedControl from "../ui/SegmentedControl";
 import { useToast } from "../ui/Toast";
 import { api } from "@/lib/api";
+import { toApiError } from "@/lib/apiError";
+import { LOCAL_ERROR_CODES } from "@/lib/errorCodes";
 import { useChatStore } from "@/stores/chatStore";
 import type { EpisodeItem, FactItem, MemoryStats } from "@/types";
 
@@ -142,7 +144,11 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
             showToast("小爱记住了！", "success");
         } catch (e) {
             console.error("Add fact failed", e);
-            showToast(e instanceof Error && e.message.includes("409") ? "已有类似记忆" : "添加失败", "error");
+            // 按稳定码分支，不再匹配文案（旧写法是 e.message.includes("409")，
+            // 后端把状态码写进别处或改文案就会静默失效，用户对着「添加失败」一头雾水）
+            const err = toApiError(e);
+            const isDuplicate = err.code === LOCAL_ERROR_CODES.DUPLICATE_FACT;
+            showToast(err.userMessage || "添加失败", isDuplicate ? "info" : "error");
         } finally {
             setAddingFact(false);
         }

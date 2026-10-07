@@ -4,6 +4,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
 import { BACKEND_ROOT, config } from '../config.js';
+import { ERROR_CODES } from '../utils/errorCodes.js';
 
 dotenv.config();
 
@@ -68,9 +69,12 @@ class VoiceEngine {
 
     async textToSpeech(text) {
         if (!this.openai) {
-            // 带 status 抛出：errorHandler 会透传 status + message，前端才能给出可操作提示
-            const err = new Error("OpenAI API Key not configured");
+            // 带 status + errorCode 抛出：errorHandler 原样透传，前端才能给可操作提示。
+            // detail 会被界面直接显示，所以必须是中文（B4-5 之后全站用户可见文案中文，
+            // 英文原文只在日志里）
+            const err = new Error("还没配置语音服务的 API Key，朗读和转写暂时用不了");
             err.status = 400;
+            err.errorCode = ERROR_CODES.VOICE_NOT_CONFIGURED;
             throw err;
         }
         // 纵深防御：路由层已经拦过类型，这里再守一道 —— 旧写法 `text.slice(...)`
@@ -78,6 +82,7 @@ class VoiceEngine {
         if (typeof text !== 'string' || !text.trim()) {
             const err = new Error("text 必须是非空字符串");
             err.status = 400;
+            err.errorCode = ERROR_CODES.INVALID_REQUEST;
             throw err;
         }
 
@@ -103,8 +108,10 @@ class VoiceEngine {
         } catch (e) {
             // 捕获 OpenAI 特定错误并剥离敏感信息
             if (e.status === 401) {
-                const err = new Error("Invalid OpenAI API Key. Please check your settings.");
+                // 中文 detail + 指明去哪一格改（设置 → 语音），界面不用再自己编一份文案
+                const err = new Error("语音服务的 API Key 无效或额度不足，请在设置页「语音」里检查");
                 err.status = 401;
+                err.errorCode = ERROR_CODES.VOICE_AUTH_FAILED;
                 throw err;
             }
             throw e;
@@ -113,8 +120,11 @@ class VoiceEngine {
 
     async speechToText(filePath) {
         if (!this.openai) {
-            const err = new Error("OpenAI API Key not configured");
+            // detail 会被界面直接显示，所以必须是中文（B4-5 之后全站用户可见文案中文，
+            // 英文原文只在日志里）；带 status + errorCode 抛出，errorHandler 原样透传
+            const err = new Error("还没配置语音服务的 API Key，朗读和转写暂时用不了");
             err.status = 400;
+            err.errorCode = ERROR_CODES.VOICE_NOT_CONFIGURED;
             throw err;
         }
 

@@ -2,7 +2,8 @@
  * 任务路由：/tasks CRUD + 摘要 + 到期查询
  */
 import { Router } from 'express';
-import { fail } from '../middleware/validate.js';
+import { fail, failWith } from '../middleware/validate.js';
+import { ERROR_CODES } from '../utils/errorCodes.js';
 import TaskManager from '../core/TaskManager.js';
 import { parseDueTime } from '../core/taskTime.js';
 import { config } from '../config.js';
@@ -57,12 +58,12 @@ router.put('/tasks/:id', (req, res) => {
         || tooLongError(req.body, 'description', config.textLimits.taskDescription);
     if (fail(res, !!tooLong, tooLong)) return;
     const task = TaskManager.updateTask(req.params.id, req.body);
-    task ? res.json(task) : res.status(404).json({ detail: "Task not found" });
+    task ? res.json(task) : failWith(res, 404, "Task not found", ERROR_CODES.TASK_NOT_FOUND);
 });
 
 router.delete('/tasks/:id', (req, res) => {
     const task = TaskManager.deleteTask(req.params.id);
-    task ? res.json(task) : res.status(404).json({ detail: "Task not found" });
+    task ? res.json(task) : failWith(res, 404, "Task not found", ERROR_CODES.TASK_NOT_FOUND);
 });
 
 router.get('/tasks/summary', (req, res) => {

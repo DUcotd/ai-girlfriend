@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Volume2, Loader2, Square } from "lucide-react";
 import { api, BACKEND_URL } from "@/lib/api";
+import { toApiError } from "@/lib/apiError";
 import { speakLocal } from "@/lib/speech";
 import { isTtsConfigured } from "@/lib/storage";
 import { toast } from "@/stores/uiStore";
@@ -78,19 +79,12 @@ export default function VoiceButton({ text, size = 16, engine = "openai" }: Voic
                 setState("idle");
             }
         } catch (e) {
-            // 后端现在会把 4xx 的 detail（key 未配置/无效）原样透传，关键字分支可以命中；
-            // 其余（网络错误等）也必须有反馈，不能让用户点了没任何反应
-            const msg = (e instanceof Error ? e.message : "").toLowerCase();
-            if (
-                msg.includes("api key") ||
-                msg.includes("invalid") ||
-                msg.includes("not configured")
-            ) {
-                toast("语音功能需要 OpenAI 官方 API 密钥，请在设置中配置有效且有余量的 TTS 密钥 ✨", "error");
-            } else {
-                console.error("TTS failed", e);
-                toast("语音服务暂时不可用，请稍后再试", "error");
-            }
+            // 按稳定码给提示，不再匹配英文原文：旧写法靠 msg.includes("api key") 命中，
+            // 后端把那句文案换成中文的那一刻分支就静默失效，用户点了像没反应。
+            // 文案本体来自后端 detail（唯一来源），前端只决定语气与是否指引去设置
+            const err = toApiError(e);
+            console.error("TTS failed", e);
+            toast(err.userMessage || "语音服务暂时不可用，请稍后再试", err.action.tone);
             setState("idle");
         }
     };

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { speakBus } from "@/hooks/useChatStream";
 import { api, BACKEND_URL } from "@/lib/api";
+import { toApiError } from "@/lib/apiError";
 import { speakLocal } from "@/lib/speech";
 import { isTtsConfigured } from "@/lib/storage";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -61,11 +62,13 @@ export function useSpeech() {
       } catch (e: unknown) {
         setIsSpeaking(false);
         // 云端 TTS 失败此前完全静默：key 未配置/无效/无额度时用户点了没任何反应。
-        // 语音模式自动朗读与主动消息朗读也走这里，必须给一条可感知的提示
-        console.warn("[Speech] TTS failed:", e);
+        // 语音模式自动朗读与主动消息朗读也走这里，必须给一条可感知的提示。
+        // 文案本体来自后端 detail（已经中文并指明「设置 → 语音」），前端只定语气
+        const err = toApiError(e);
+        console.warn("[Speech] TTS failed:", err.code ?? err.status, err.detail);
         useUiStore.getState().pushToast(
-          e instanceof Error && e.message ? `朗读失败：${e.message}` : "朗读失败",
-          "error",
+          err.userMessage ? `朗读失败：${err.userMessage}` : "朗读失败",
+          err.action.tone,
         );
       }
     },

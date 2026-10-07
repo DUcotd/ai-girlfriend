@@ -9,6 +9,8 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { api } from "@/lib/api";
+import { apiErrorFrom } from "@/lib/apiError";
+import { UPSTREAM_ERROR_CODES } from "@/lib/errorCodes";
 import { streamSendMessage } from "@/hooks/useChatStream";
 import type { ChatResponse } from "@/types";
 
@@ -66,7 +68,41 @@ describe("streamSendMessage 的回退契约（审计 FE-04）", () => {
 
     expect(mockedSend).not.toHaveBeenCalled();
     // 已经流出来的那一轮不能再用非流式重跑一遍，只能给中断提示
-    expect(String(handlers.finishWith.mock.calls[0]?.[0])).toContain("连接中断");
+    expect(String(handlers.finishWith.mock.calls[0]?.[0])).toContain("连不上后端");
+  });
+
+  it("失败原因按稳定码说话：Key 被拒时气泡直接教用户去设置页（B7-①）", async () => {
+    mockedStream.mockRejectedValue(
+      apiErrorFrom(401, {
+        detail: "模型服务拒绝了这次请求（API Key 无效或过期）。",
+        error_code: UPSTREAM_ERROR_CODES.AUTH,
+      })
+    );
+    const handlers = makeHandlers();
+
+    await streamSendMessage("你好", handlers);
+
+    const bubble = String(handlers.finishWith.mock.calls[0]?.[0]);
+    expect(bubble).toContain("API Key 无效或过期");
+    expect(bubble).toContain("设置");
+    // 有明确原因时不许退化成万能的「连接中断」
+    expect(bubble).not.toContain("连接中断");
+  });
+
+  it("后端在流里发的错误事件也带码：入队失败这类「稍后再试」不该指向设置页", async () => {
+    mockedStream.mockRejectedValue(
+      apiErrorFrom(200, {
+        detail: "模型那边有点忙，我先停一下——过一会儿再说好吗？",
+        error_code: UPSTREAM_ERROR_CODES.RATE_LIMITED,
+      })
+    );
+    const handlers = makeHandlers();
+
+    await streamSendMessage("你好", handlers);
+
+    const bubble = String(handlers.finishWith.mock.calls[0]?.[0]);
+    expect(bubble).toContain("过一会儿");
+    expect(bubble).not.toContain("设置 → 通用");
   });
 
   it("一个 delta 都没收到才回退 /chat（后端不支持流式的场景）", async () => {

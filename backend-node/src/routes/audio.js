@@ -14,6 +14,7 @@ import path from 'path';
 import multer from 'multer';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { fail } from '../middleware/validate.js';
+import { ERROR_CODES } from '../utils/errorCodes.js';
 import { voiceEngine } from '../services/container.js';
 import { config } from '../config.js';
 
@@ -42,10 +43,12 @@ export function pickAudioExtension(originalname) {
     return ALLOWED_AUDIO_EXTENSIONS.includes(ext) ? ext : null;
 }
 
-/** 带 status 的上传错误：errorHandler 会把 4xx 的 message 透传给用户 */
-function uploadError(status, message) {
+/** 带 status 与稳定码的上传错误：errorHandler 会把 4xx 的 message + error_code 透传给用户 */
+function uploadError(status, message, code = null) {
     const err = new Error(message);
     err.status = status;
+    // 不写 errorCode 时 errorHandler 仍会按状态码兜底，这里显式给码是为了语义更准
+    err.errorCode = code;
     return err;
 }
 
@@ -90,7 +93,8 @@ const upload = multer({
         if (!ext) {
             cb(uploadError(415,
                 `只接受音频文件（${ALLOWED_AUDIO_EXTENSIONS.join('/')}），收到：` +
-                String(file.originalname ?? '').slice(0, 60)));
+                String(file.originalname ?? '').slice(0, 60),
+                ERROR_CODES.UPLOAD_REJECTED));
             return;
         }
         cb(null, true);
@@ -104,21 +108,23 @@ const upload = multer({
     },
 });
 
-/** multer 的原始错误码翻成用户看得懂的中文 + 正确 HTTP 状态码 */
+/** multer 的原始错误码翻成用户看得懂的中文 + 正确 HTTP 状态码 + 对外稳定码 */
 const uploadHandler = upload.single('file');
 function receiveAudio(req, res, next) {
     uploadHandler(req, res, (err) => {
         if (!err) return next();
         if (err.code === 'LIMIT_FILE_SIZE') {
             return next(uploadError(413,
-                `录音文件超过上限 ${(config.upload.maxFileSize / 1024 / 1024).toFixed(0)}MB，请缩短后再发送`));
+                `录音文件超过上限 ${(config.upload.maxFileSize / 1024 / 1024).toFixed(0)}MB，请缩短后再发送`,
+                ERROR_CODES.PAYLOAD_TOO_LARGE));
         }
         if (err.code === 'LIMIT_UNEXPECTED_FILE') {
-            return next(uploadError(400, '只允许上传一个名为 file 的音频部件'));
+            return next(uploadError(400, '只允许上传一个名为 file 的音频部件',
+                ERROR_CODES.UPLOAD_REJECTED));
         }
         if (typeof err.status === 'number') return next(err);   // fileFilter 抛的可操作提示原样透传
         console.error(`[Audio] 上传解析失败: ${err.message || err}`);
-        return next(uploadError(400, '上传请求格式不正确'));
+        return next(uploadError(400, '上传请求格式不正确', ERROR_CODES.UPLOAD_REJECTED));
     });
 }
 
@@ -133,7 +139,7 @@ router.post('/audio/speak', asyncHandler(async (req, res) => {
 }));
 
 router.post('/audio/transcribe', receiveAudio, asyncHandler(async (req, res) => {
-    if (fail(res, !req.file, 'File is required')) return;
+    if (fail(res, !req.file, 'File is required', ERROR_CODES.UPLOAD_REJECTED)) return;
     const tempPath = req.file.path;
     try {
         const text = await voiceEngine.current.speechToText(tempPath);

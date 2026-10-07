@@ -18,6 +18,8 @@ import type {
   Task,
 } from "@/types";
 import type { ReasoningEffort } from "./chatParams";
+import { apiErrorFrom, networkError } from "./apiError";
+import type { ApiErrorBody } from "./apiError";
 
 export const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -143,7 +145,8 @@ export function toBackendConfigPayload(cfg: UiChatConfig) {
 /**
  * 统一请求封装：
  * - 自动带 Content-Type 与鉴权 Authorization 头
- * - 区分「业务 4xx」与「网络错误」，失败时抛出带 detail 的 Error
+ * - 业务 4xx/5xx 抛 `ApiError`（带 status / error_code / errors，界面按码分支）
+ * - 连不上后端抛 `network_error` 的 ApiError（与「后端拒了」区分开，别再一起说「请检查后端连接」）
  */
 async function request<T>(
   path: string,
@@ -154,14 +157,21 @@ async function request<T>(
   const mergedHeaders = raw
     ? headers
     : { "Content-Type": "application/json", ...headers };
-  const res = await fetch(`${BACKEND_URL}${path}`, {
-    ...rest,
-    headers: withAuth(mergedHeaders),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BACKEND_URL}${path}`, {
+      ...rest,
+      headers: withAuth(mergedHeaders),
+    });
+  } catch (e) {
+    // 主动中止（超时/用户取消）不是「网络故障」，原样抛给调用方判断
+    if (e instanceof Error && e.name === "AbortError") throw e;
+    throw networkError(e);
+  }
 
   if (!res.ok && !raw) {
     const data = await res.json().catch(() => null);
-    throw new Error(data?.detail || `Request failed: ${res.status}`);
+    throw apiErrorFrom(res.status, data as ApiErrorBody | null);
   }
 
   return raw ? ((await res) as unknown as T) : res.json();
@@ -346,9 +356,14 @@ export const api = {
       signal,
     });
 
-    if (!res.ok || !res.body) {
+    if (!res.ok) {
       const data = await res.json().catch(() => null);
-      throw new Error(data?.detail || `Stream failed: ${res.status}`);
+      // 队列满（429）、没配 Key（400 not_configured）都在这一支：必须带码抛出，
+      // 否则界面只能对着「连接中断」这句自己编的文案猜原因
+      throw apiErrorFrom(res.status, data as ApiErrorBody | null);
+    }
+    if (!res.body) {
+      throw networkError(new Error("当前浏览器不支持流式响应"));
     }
 
     const reader = res.body.getReader();
@@ -405,7 +420,9 @@ export const api = {
             taskResult: payload.taskResult ?? null,
           };
         } else if (payload.type === "error") {
-          throw new Error(payload.detail || "stream failed");
+          // 流内错误事件带 error_code（{type:'error', detail, error_code}）：
+          // 状态码是 200（头已经发了），但码必须在 —— 界面靠它区分「没配 Key」和「上游抖动」
+          throw apiErrorFrom(res.status, payload as ApiErrorBody);
         }
       }
     }

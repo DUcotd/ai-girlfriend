@@ -3,7 +3,8 @@
  */
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { fail } from '../middleware/validate.js';
+import { fail, failWith } from '../middleware/validate.js';
+import { ERROR_CODES } from '../utils/errorCodes.js';
 import { aiGirlfriend, proactiveEngine, triggerRegistry } from '../services/container.js';
 import { config } from '../config.js';
 import { PROACTIVE_TYPE_IDS } from '../core/proactiveTypes.js';
@@ -100,10 +101,9 @@ function chatResponsePayload(result) {
 router.post('/chat', asyncHandler(async (req, res) => {
     const { message } = req.body;
     if (!aiGirlfriend.apiKey) {
-        return res.status(400).json({
-            detail: classifiedByCode(UPSTREAM_ERROR_CODES.NOT_CONFIGURED).message,
-            error_code: UPSTREAM_ERROR_CODES.NOT_CONFIGURED,
-        });
+        return failWith(res, 400,
+            classifiedByCode(UPSTREAM_ERROR_CODES.NOT_CONFIGURED).message,
+            UPSTREAM_ERROR_CODES.NOT_CONFIGURED);
     }
     if (fail(res, typeof message !== 'string' || !message.trim(), 'message is required and must be a non-empty string')) return;
     if (fail(res, typeof message === 'string' && message.length > config.chat.maxMessageLength,
@@ -113,7 +113,7 @@ router.post('/chat', asyncHandler(async (req, res) => {
     // 队列已满：直接 429，而不是让请求在串行链上无限排队（审计 HTTP-19）
     if (aiGirlfriend.isQueueSaturated()) {
         const busy = classifiedByCode(UPSTREAM_ERROR_CODES.BUSY);
-        return res.status(busy.status).json({ detail: busy.message, error_code: busy.code });
+        return failWith(res, busy.status, busy.message, busy.code);
     }
     const result = await aiGirlfriend.chat(message);
     res.json(chatResponsePayload(result));
@@ -133,23 +133,18 @@ router.post('/chat/stream', (req, res) => {
     const { message } = req.body;
 
     if (!aiGirlfriend.apiKey) {
-        return res.status(400).json({
-            detail: classifiedByCode(UPSTREAM_ERROR_CODES.NOT_CONFIGURED).message,
-            error_code: UPSTREAM_ERROR_CODES.NOT_CONFIGURED,
-        });
+        return failWith(res, 400,
+            classifiedByCode(UPSTREAM_ERROR_CODES.NOT_CONFIGURED).message,
+            UPSTREAM_ERROR_CODES.NOT_CONFIGURED);
     }
-    if (typeof message !== 'string' || !message.trim()) {
-        return res.status(400).json({ detail: 'message is required and must be a non-empty string' });
-    }
-    if (typeof message === 'string' && message.length > config.chat.maxMessageLength) {
-        return res.status(400).json({
-            detail: `message is required and must be under ${config.chat.maxMessageLength} characters`
-        });
-    }
+    if (fail(res, typeof message !== 'string' || !message.trim(),
+        'message is required and must be a non-empty string')) return;
+    if (fail(res, typeof message === 'string' && message.length > config.chat.maxMessageLength,
+        `message is required and must be under ${config.chat.maxMessageLength} characters`)) return;
     // 队列已满：必须在**写 SSE 头之前**拒，否则客户端收到一个 200 的空流
     if (aiGirlfriend.isQueueSaturated()) {
         const busy = classifiedByCode(UPSTREAM_ERROR_CODES.BUSY);
-        return res.status(busy.status).json({ detail: busy.message, error_code: busy.code });
+        return failWith(res, busy.status, busy.message, busy.code);
     }
 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -208,10 +203,10 @@ router.post('/chat/stream', (req, res) => {
  * 保留路由是为了让旧客户端**明确失败**（而不是悄悄变成只读、反复显示同一条）。
  */
 router.get('/chat/proactive', (req, res) => {
-    res.status(405).json({
-        detail: '取主动消息请改用 POST /chat/proactive/consume（GET 不再消耗队列）',
-        allow: ['POST'],
-    });
+    failWith(res, 405,
+        '取主动消息请改用 POST /chat/proactive/consume（GET 不再消耗队列）',
+        ERROR_CODES.METHOD_NOT_ALLOWED,
+        { allow: ['POST'] });
 });
 
 /**
@@ -264,11 +259,10 @@ router.post('/chat/proactive/trigger', asyncHandler(async (req, res) => {
     // trigger() 在 LLM 挂/队列满/同类在途时返回 false：失败必须让前端知道，
     // 而不是回 200 让用户对着一个永远不会出现的消息等
     if (!ok) {
-        return res.status(503).json({
-            status: "failed",
-            reason: safeReason,
-            detail: "触发失败：总开关已关闭、同类消息生成中或队列已满，请稍后再试",
-        });
+        return failWith(res, 503,
+            "触发失败：总开关已关闭、同类消息生成中或队列已满，请稍后再试",
+            ERROR_CODES.PROACTIVE_TRIGGER_FAILED,
+            { status: "failed", reason: safeReason });
     }
     res.json({ status: "triggered", reason: safeReason, queueSize: proactiveEngine.messageQueue.length });
 }));

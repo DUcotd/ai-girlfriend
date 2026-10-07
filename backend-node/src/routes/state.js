@@ -9,7 +9,8 @@
  */
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { fail } from '../middleware/validate.js';
+import { fail, failWith } from '../middleware/validate.js';
+import { ERROR_CODES } from '../utils/errorCodes.js';
 import { aiGirlfriend } from '../services/container.js';
 import { config } from '../config.js';
 
@@ -100,7 +101,10 @@ router.post('/memories/facts', asyncHandler(async (req, res) => {
         res.json({ status: "added", fact });
     } catch (e) {
         if (e.code === 'DUPLICATE_FACT') {
-            res.status(409).json({ detail: e.message });
+            // 引擎给的 DUPLICATE_FACT 是内部标记，对外翻成稳定码：
+            // 界面靠它显示「已有类似记忆」而不是「添加失败」（B7-① 修掉的就是
+            // 前端那句 message.includes("409") —— 文案一改就静默失效的匹配）
+            failWith(res, 409, e.message, ERROR_CODES.DUPLICATE_FACT);
             return;
         }
         throw e;
@@ -126,7 +130,7 @@ router.patch('/memories/facts/:id', asyncHandler(async (req, res) => {
         category: category?.trim(),
     });
     if (!fact) {
-        res.status(404).json({ detail: 'fact not found' });
+        failWith(res, 404, 'fact not found', ERROR_CODES.FACT_NOT_FOUND);
         return;
     }
     res.json({ status: "updated", fact });
@@ -138,7 +142,7 @@ router.patch('/memories/facts/:id', asyncHandler(async (req, res) => {
 router.delete('/memories/:id', (req, res) => {
     const type = aiGirlfriend.deleteMemory(req.params.id);
     if (!type) {
-        res.status(404).json({ detail: 'memory not found' });
+        failWith(res, 404, 'memory not found', ERROR_CODES.MEMORY_NOT_FOUND);
         return;
     }
     res.json({ status: "deleted", type });
@@ -211,7 +215,7 @@ router.get('/state/narratives', (req, res) => {
 router.delete('/state/narratives/:id', (req, res) => {
     const ok = aiGirlfriend.deleteNarrative ? aiGirlfriend.deleteNarrative(req.params.id) : false;
     if (!ok) {
-        res.status(404).json({ detail: 'narrative not found' });
+        failWith(res, 404, 'narrative not found', ERROR_CODES.NARRATIVE_NOT_FOUND);
         return;
     }
     res.json({ status: 'deleted' });

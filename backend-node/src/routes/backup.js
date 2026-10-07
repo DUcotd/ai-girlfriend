@@ -11,6 +11,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { failWith } from '../middleware/validate.js';
+import { ERROR_CODES } from '../utils/errorCodes.js';
 import { config } from '../config.js';
 import { dataDir } from '../utils/jsonStore.js';
 import { backupServices } from '../services/container.js';
@@ -46,13 +47,13 @@ router.get('/backup/export', asyncHandler(async (req, res) => {
     const leaks = scanForSecrets(archive);
     if (leaks.length) {
         // 宁可不出档案，也不能把凭据写进一个必然被到处复制的文件里
-        return failWith(res, 500, `导出被中止：档案里检出疑似敏感信息（${leaks.join('；')}）`, 'backup_secret_leak');
+        return failWith(res, 500, `导出被中止：档案里检出疑似敏感信息（${leaks.join('；')}）`, ERROR_CODES.BACKUP_SECRET_LEAK);
     }
 
     const stamp = (archive.exportedAt || '').replace(/[:.]/g, '-');
     const body = pretty ? JSON.stringify(archive, null, 2) : JSON.stringify(archive);
     if (Buffer.byteLength(body, 'utf-8') > MAX_ARCHIVE_BYTES) {
-        return failWith(res, 413, `档案体积超过 ${config.backup.maxExportMb}MB 上限，请先清理旧记忆再导出`, 'backup_too_large');
+        return failWith(res, 413, `档案体积超过 ${config.backup.maxExportMb}MB 上限，请先清理旧记忆再导出`, ERROR_CODES.BACKUP_TOO_LARGE);
     }
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="ai-girlfriend-archive-${stamp}.json"`);
@@ -70,11 +71,11 @@ router.post('/backup/snapshot', (req, res) => {
 router.post('/backup/import', asyncHandler(async (req, res) => {
     const { errors, warnings, files } = validateArchive(req.body);
     if (errors.length) {
-        return failWith(res, 400, `档案校验未通过：${errors.join('；')}`, 'backup_invalid');
+        return failWith(res, 400, `档案校验未通过：${errors.join('；')}`, ERROR_CODES.BACKUP_INVALID);
     }
     const report = applyArchive(files, backupServices, { reason: 'import' });
     const partial = report.writeFailed.length > 0;
-    res.status(partial ? 500 : 200).json({
+    const body = {
         status: partial ? 'partial' : 'imported',
         snapshot: report.snapshot.dir,
         written: report.written,
@@ -84,15 +85,24 @@ router.post('/backup/import', asyncHandler(async (req, res) => {
         reloadFailed: report.reloadFailed,
         restartRecommended: report.reloadFailed.length > 0,
         warnings,
-    });
+    };
+    if (partial) {
+        // 500 也要走同一个错误出口：全站不变量是「非 2xx 必有 error_code」，
+        // 界面按码决定是「报成功」还是「报写了一半并要求重启」
+        return failWith(res, 500,
+            `档案已快照，但有 ${report.writeFailed.length} 个数据文件没写进去：`
+            + `${report.writeFailed.join('、')}`,
+            ERROR_CODES.BACKUP_PARTIAL, body);
+    }
+    res.json(body);
 }));
 
 /** 从某份快照恢复（等价于把那份快照当档案导入，同样会先做 pre-restore 快照） */
 router.post('/backup/restore', asyncHandler(async (req, res) => {
     const id = typeof req.body?.id === 'string' ? req.body.id : '';
-    if (!id) return failWith(res, 400, '缺少快照 id（先用 GET /backup/status 看有哪些）', 'backup_bad_request');
+    if (!id) return failWith(res, 400, '缺少快照 id（先用 GET /backup/status 看有哪些）', ERROR_CODES.BACKUP_BAD_REQUEST);
     const known = listSnapshots().some((s) => s.id === id);
-    if (!known) return failWith(res, 404, `找不到快照 ${id}`, 'backup_snapshot_not_found');
+    if (!known) return failWith(res, 404, `找不到快照 ${id}`, ERROR_CODES.BACKUP_SNAPSHOT_NOT_FOUND);
     const { applied, restoredFrom } = restoreSnapshot(id, backupServices);
     res.json({
         status: applied.writeFailed.length ? 'partial' : 'restored',

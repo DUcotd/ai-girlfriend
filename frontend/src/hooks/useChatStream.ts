@@ -1,4 +1,6 @@
 import { api } from "@/lib/api";
+import { toApiError } from "@/lib/apiError";
+import { CLIENT_ONLY_ERROR_CODES } from "@/lib/errorCodes";
 import { useTaskStore } from "@/stores/taskStore";
 import { toast, useUiStore } from "@/stores/uiStore";
 import type { ChatResponse } from "@/types";
@@ -93,7 +95,8 @@ export async function streamSendMessage(
     settle(data);
     return;
   } catch (error) {
-    const isTimeout = error instanceof Error && error.name === "AbortError";
+    const err = toApiError(error);
+    const isTimeout = err.code === CLIENT_ONLY_ERROR_CODES.ABORTED;
     clearTimeout(timeoutId);
 
     // 只在「一个 delta 都没收到」时回退非流式：那种情况下服务端确实什么都没做。
@@ -108,8 +111,14 @@ export async function streamSendMessage(
       }
     }
 
+    // 气泡里优先给后端那句中文分类文案（稳定码那套），而不是不分青红皂白一句「连接中断」：
+    // 「没配 Key」「Key 过期」「上游限流」「后端没起来」用户要做的事完全不同（B7-①）
     handlers.finishWith(
-      isTimeout ? "⏰ 响应时间过长，请重试..." : "⚠️ 连接中断..."
+      isTimeout
+        ? "⏰ 响应时间过长，请重试..."
+        : err.isNetworkError
+          ? "⚠️ 连不上后端（默认 8000 端口），小爱暂时听不到你说话"
+          : err.userMessage || "⚠️ 连接中断..."
     );
   }
 }

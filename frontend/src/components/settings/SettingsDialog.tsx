@@ -9,6 +9,7 @@ import ConfirmDialog from "../ui/ConfirmDialog";
 import Dialog from "../ui/Dialog";
 import { useToast } from "../ui/Toast";
 import { api } from "@/lib/api";
+import { toApiError } from "@/lib/apiError";
 import { get, getAdvancedChatConfig, getCompanionConfig, remove, set, setAdvancedChatConfig, DEFAULT_ENABLED_PROACTIVE_TYPES } from "@/lib/storage";
 import type { CompanionConfig } from "@/lib/storage";
 import { DEFAULT_PROVIDER } from "@/lib/providers";
@@ -37,17 +38,15 @@ type SettingsTab = "general" | "voice" | "memory" | "personality" | "proactive" 
 /**
  * 把保存失败的原因说清楚。
  *
- * 后端业务 4xx 的 `detail` 已经被 `request()` 放进 Error.message（地址不合规、
- * 未知主动消息类型……），而后端离线时 fetch 抛的是 "Failed to fetch"。
- * 两者必须分开提示 —— 一律写成「请检查后端连接」会指挥用户去查网络，
- * 而真正的问题是他们刚填的那个地址。
+ * 靠匹配错误文案（`/failed to fetch/`）来区分「后端拒了」与「后端没起来」是猜：
+ * 文案一改就静默退化成其中一种。现在读 `ApiError` 的结构化字段：
+ * `status === null` 才是连不上后端，其余照抄后端 detail（并可提示去设置页哪一格）。
  */
 function saveFailureMessage(error: unknown): string {
-    const raw = error instanceof Error ? error.message.trim() : "";
-    if (!raw || /failed to fetch|networkerror|network request failed|load failed/i.test(raw)) {
-        return "保存失败：连不上后端（默认 8000 端口），请确认后端已启动后重试";
-    }
-    return `保存失败：${raw}`;
+    const err = toApiError(error);
+    if (err.isNetworkError) return err.userMessage;
+    const extra = err.errors.length > 1 ? `（共 ${err.errors.length} 条，其余见后端日志）` : "";
+    return `保存失败：${err.userMessage}${extra}`;
 }
 
 const tabs: { id: SettingsTab; label: string; icon: LucideIcon }[] = [

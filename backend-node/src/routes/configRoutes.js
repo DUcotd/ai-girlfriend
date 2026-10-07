@@ -6,6 +6,8 @@ import { aiGirlfriend, proactiveEngine, updateVoiceEngine } from '../services/co
 import { PROACTIVE_TYPES, PROACTIVE_GROUPS, toPublicTypeInfo, PROACTIVE_TYPE_IDS } from '../core/proactiveTypes.js';
 import { FREQUENCY_LEVELS } from '../core/ProactiveEngine.js';
 import { configFieldRules, proactiveFieldRules, validateConfigBody } from '../utils/configValidation.js';
+import { failWith } from '../middleware/validate.js';
+import { ERROR_CODES } from '../utils/errorCodes.js';
 import { REASONING_EFFORTS } from '../config.js';
 
 const router = Router();
@@ -16,12 +18,12 @@ const PROACTIVE_TYPE_INFOS = PROACTIVE_TYPES.map(toPublicTypeInfo);
 
 /** 校验失败统一响应：errors 逐条给原因，界面与排障脚本都能直接显示给用户 */
 function reject(res, errors) {
-    res.status(400).json({
+    // `status: 'invalid_config'` 是历史字段（脚本与旧界面在读），保留；
+    // 新契约看 error_code —— 两者同值，前端从此不需要匹配中文文案（B7-①）
+    return failWith(res, 400, errors[0], ERROR_CODES.INVALID_CONFIG, {
         status: 'invalid_config',
-        detail: errors[0],
         errors,
     });
-    return true;
 }
 
 router.post('/config', (req, res) => {

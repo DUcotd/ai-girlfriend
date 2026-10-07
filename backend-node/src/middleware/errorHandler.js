@@ -10,6 +10,8 @@
  * 堆栈只进日志，绝不进响应体 —— 响应里出现路径与栈就是信息泄漏。
  */
 import { logError } from '../utils/logger.js';
+import { codeFor, ERROR_CODES } from '../utils/errorCodes.js';
+import { failWith } from './validate.js';
 
 export function errorHandler(err, req, res, _next) {
     const status = typeof err?.status === 'number' && err.status >= 400 && err.status < 600
@@ -21,13 +23,13 @@ export function errorHandler(err, req, res, _next) {
     logError(`${req.method} ${req.path}`, err, `(${status})`);
 
     if (isClientError) {
-        return res.status(status).json({
-            detail: err.message || '请求不合法',
-            // 只透传**应用自己的稳定码**（utils/upstreamError.js 那一套），
-            // 不读 err.code —— Node/中间件的 code（ENOENT、LIMIT_FILE_SIZE…）是内部细节，
-            // 出现在响应里等于把实现暴露给调用方（审计 HTTP-14 的同一条边界）
-            ...(err.errorCode ? { error_code: err.errorCode } : {}),
-        });
+        // 只透传**应用自己的稳定码**（utils/errorCodes.js 与 utils/upstreamError.js 那一套），
+        // 不读 err.code —— Node/中间件的 code（ENOENT、LIMIT_FILE_SIZE…）是内部细节，
+        // 出现在响应里等于把实现暴露给调用方（审计 HTTP-14 的同一条边界）。
+        // 没标码的按状态码兜底，保证错误体永远有 error_code（B7-① 的不变量）。
+        return failWith(res, status, err.message || '请求不合法',
+            typeof err?.errorCode === 'string' ? err.errorCode : codeFor(status));
     }
-    return res.status(500).json({ detail: 'Internal server error' });
+    // 5xx 的 detail 永远是同一句通用文案：堆栈与成因只在日志里
+    return failWith(res, 500, 'Internal server error', ERROR_CODES.INTERNAL_ERROR);
 }

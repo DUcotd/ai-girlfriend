@@ -204,7 +204,7 @@
 
 **结论**：陪伴感下一轮的地基不是「再加子系统」，而是 **B0（不丢数据）+ B2（模型给的数不骗人）+ B9（关得掉）+ B4（prompt 说得上话）**。REQ-02 是这批做完后性价比最高的一件，因为它 90% 已经写好，只是没接线。
 
-## 剩余清单（2026-10-07 B3 收完后核对，共约 11 项）
+## 剩余清单（2026-10-07 B7-① 完成后核对，共约 10 项）
 
 | 批次 | 剩余 | 重点项 |
 |---|---|---|
@@ -213,12 +213,12 @@
 | B2 | 0.5 | B2-10 尾巴：`EmotionEngine.history` 无消费者（留给 REQ-10）、narrative 的 `tags/jokeTrigger/sourceEpisodeId` 无写路径（REQ-05 前置） |
 | B3 | 0 | （已收完：baseUrl 分级在**输入时**就显示，`POST /config` 的 warnings 与保存失败的后端 `detail` 都进了界面。`error_code` 的全站消费留给 B7） |
 | B5 | 1.5 | 只剩依赖升级（`multer` 1.x→2.x、`openai` 4→5、`express` 4→5）：本机出网只有几十 KB/s，**留到有快网络时按下面的命令做**。B5-3「全迁 node:test」有意收窄为 `scripts/lib/testKit.mjs` |
-| B7 | 16 | 主动消息 FIFO 与串气泡、后端离线态与重试、乐观更新回滚、**401/稳定码可操作提示 + token 输入框**、向导提前置完成、a11y 基线、触屏 hover-only、类型收口、移动端视口与 safe-area、IME 回车误发 |
+| B7 | 15 | 主动消息 FIFO 与串气泡、后端离线态与重试、乐观更新回滚、**401 时的 token 输入框**（码已能区分三种凭证失败，缺的是界面入口）、向导提前置完成、a11y 基线（实测：发送按钮无可访问名）、触屏 hover-only、类型收口、移动端视口与 safe-area、IME 回车误发（实测：`ChatInput` 的 Enter 没判 `isComposing`，中文没选完字就发出去了） |
 | B8 | 6 | `memory.json` 15 MB 反复重写、总 prompt 预算裁剪、tasks/dedupeSeen/正文长度无界、每轮 9-13 次同步写盘、system 消息位置 |
 | B9 | 0 | （已随 B9 批次全部完成） |
 | B6 | β | α 已完成；β = REQ-05 话题闭环 / REQ-07 自适应节奏 / REQ-09 冷落分层，需 PRD §5 的 Q1~Q3 拍板 |
 
-**已完成**：B0 **全部**、B2（除 2 个尾巴）、**B9 全部**、**B4 全部（除 B4-8 后半）**、**B6-α 全部**、**B3 全部**、**B5 除依赖升级全部（含 B5-12 档案导出/导入/快照）**、B1-3。
+**已完成**：B0 **全部**、B2（除 2 个尾巴）、**B9 全部**、**B4 全部（除 B4-8 后半）**、**B6-α 全部**、**B3 全部**、**B5 除依赖升级全部（含 B5-12 档案导出/导入/快照）**、B1-3、**B7-①（全站稳定错误码：后端发码 + 前端按码分支）**。
 **已取消**：B1-1（事实提取节流 / 省钱模式）—— 成本不作为削减理由。
 **有意收窄**：B5-3「把 10 个脚本整体迁到 `node:test`」。现有脚本各自带着「备份/还原真实 `data/*.json`、动态 import 顺序、沙盒目录」的装配逻辑，全量搬迁的风险大于收益；真正要解决的问题（INFRA-01/02：测试必须能失败）已经由 `scripts/lib/testKit.mjs` 的 `expect` 机制达成，并配了反向验证。
 
@@ -235,7 +235,21 @@
 | 2026-10-07 | **B5**（工程基建，除档案导出与依赖升级）：`GET /health` + 零依赖 logger（时间戳/级别/堆栈）、启动脚本改探 `/health`、`npm run check` 补真导入冒烟、零依赖静态检查 `npm run lint`、`testKit` 让「用例没跑」也判失败、`.env.example`（86 个旋钮分 10 组）+ 文档一致性测试、CI 补 lint/build/boot smoke、`.gitattributes`、engines 对齐 20.9。后端 **20 套**全绿、前端 typecheck/lint/test/build 全绿 | `1a68590` |
 | 2026-10-07 | **B5-12**（全量档案导出/导入/自动快照）+ **B0-6 后半**（四个去抖 flush 回传写盘结果）：`/backup/{status,export,import,snapshot,restore}`、11 个数据文件的唯一清单与逐个热加载、`POST /reset` 前自动快照、设置页「数据与备份」面板。新增 `test-audit-b5b.mjs` 65 项 → 后端 **21 套**全绿、前端 **94 例**全绿 | `7e8d5b3` `46a03bb` `960d2d8` |
 | 2026-10-07 | **B3-3 前端半格（B3 就此收完）**：设置页在**输入时**就显示 baseUrl 分级（ok 不占版面 / warn 琥珀 / block 红），文案与后端 `normalizeBaseUrl()` 逐字同源；新增 `lib/baseUrlGrade.ts` + `baseUrlGrade.test.ts`（36 例，**直接 import 后端模块**逐样本比对分级、放行/拒绝与告警文案，不再用正则抄）；「后端当前生效：…」一行暴露表单值≠生效值（含后端重启后 Key 未回灌）；`POST /config` 的 `warnings` 存进表单并在保存后展示、弹窗不关；保存失败提示由「请检查后端连接」改成后端 `detail` 原文，后端离线才提网络。前端 **10 套 / 130 例**全绿、后端 21 套全绿 | `cde4201` |
-| 2026-10-07 | **两份 QA 散件收编**（`_qa_w1_probe.mjs` / `_qa_w2_verify.mjs` 删除）：它们的断言是独立编写的、有价值，外壳有害（直接 import 真 container、直接读写 `data/user_emotion_state.json`、不带沙盒、不声明断言条数）。grep 核对后只把**其它套件都没覆盖**的行为搬进新套件 `test-audit-qa.mjs`（35 项：`fuse()` 对畸形 LLM 输出的容错、timeline 封顶与「去抖≠永不落盘」、EventBus 异常隔离与入参校验、叙事写入去重、词表极端输入、事件驱动类型规格），container 级的通电实证搬进 `test-boot-smoke.mjs`（+5 项 → 23）。顺带给 `run-tests.mjs` 加「清单 vs 磁盘对账」守卫（新写 `test-*.mjs` 忘了登记 → 退出码 2，已反向验证）。后端 **22 套**全绿 | `341a1b7` |
+| 2026-10-07 | **两份 QA 散件收编**（`_qa_w1_probe.mjs` / `_qa_w2_verify.mjs` 删除） / `_qa_w2_verify.mjs` 删除）：它们的断言是独立编写的、有价值，外壳有害（直接 import 真 container、直接读写 `data/user_emotion_state.json`、不带沙盒、不声明断言条数）。grep 核对后只把**其它套件都没覆盖**的行为搬进新套件 `test-audit-qa.mjs`（35 项：`fuse()` 对畸形 LLM 输出的容错、timeline 封顶与「去抖≠永不落盘」、EventBus 异常隔离与入参校验、叙事写入去重、词表极端输入、事件驱动类型规格），container 级的通电实证搬进 `test-boot-smoke.mjs`（+5 项 → 23）。顺带给 `run-tests.mjs` 加「清单 vs 磁盘对账」守卫（新写 `test-*.mjs` 忘了登记 → 退出码 2，已反向验证）。后端 **22 套**全绿 | `341a1b7` |
+| 2026-10-07 | **B7-①（全站稳定错误码）**：后端新增 `utils/errorCodes.js`（本机业务码表）并让 `fail/failWith` 按状态码兜底，鉴权/错误处理/8 个路由的每个非 2xx 都带 `error_code`；前端新增 `apiError.ts`（`ApiError.status/code/errors/action`）+ `errorCodes.ts`（码镜像 + 码→行动），`request`/`streamChat` 全部改抛 ApiError，`MemoryDialog` 的 `message.includes("409")`、`VoiceButton` 的英文文案匹配、`SettingsDialog` 的正则猜网络错误、`useChatStream` 万能的「连接中断」全部改成按码分支。语音模块的两条英文 detail 中文化（文案唯一来源在后端）。新增 `test-audit-b7.mjs`（112 项，逐路由）+ 前端 `errorCodes.test.ts`/`apiError.test.ts`（26 例，跨端逐值比对后端两张表）。实测：后端重启后发消息，气泡从「⚠️ 连接中断...」变成「请先配置 API Key 才能和小爱聊天哦~」。后端 **23 套**、前端 **12 文件 / 156 例**全绿 | `待提交` |
+
+**B7-① 落地要点（2026-10-07）**：
+
+| 点 | 做法 |
+|---|---|
+| 码分两张表，别混 | `upstreamError.js` 管**上游模型服务**（鉴权/限流/超时/上下文超长），新增的 `errorCodes.js` 管**本机业务**（配置非法、资源不存在、凭证、语音未配、备份）。`internal_error` 两边都要用，做法是本机表**别名引用**上游值，不允许各写一遍字符串 |
+| 漏传也一定有码 | `failWith(res, status, detail, code?)` 缺 code 时用 `codeFor(status)` 兜底。「重要的错误带码、其余只给文案」是半吊子契约：只要有一个分支没码，前端就得留着一条文案匹配，而那条分支会在某次改文案时静默失效 |
+| 附加字段不丢 | `failWith` 多接一个 `extra`（405 的 `allow`、`invalid_config` 的 `errors[]`、导入的 `writeFailed` 报告），避免为了统一出口把老字段挤掉 |
+| 前端不复制文案 | `ApiError.userMessage` 直接用后端 `detail`，前端只补「（设置 → 通用）」这种行动指引，且后端文案里已有「设置/配置/检查/稍后/重试」或以括号收尾时**不再追加**（否则一句话挂两个括号） |
+| 「后端拒了」≠「后端没起来」 | `status === null` 才是网络故障。以前两处都在匹配错误文字（`/failed to fetch/`、`includes("api key")`），文案一改就把用户支去查网络，而问题是他刚填的地址 |
+| 5xx 的码也是契约 | 500 统一 `internal_error`、503 按来源给 `service_not_ready` / `proactive_trigger_failed`；导入部分失败从「200 + 没人看得懂的 report」改成 500 + `backup_partial`（写了一半必须算失败） |
+| 跨端怎么钉 | 前端测试直接 `await import()` 后端两张表做**集合相等**比对（新增码没登记、删了码前端还留着，都会红）；后端 `test-audit-b7.mjs` 逐路由打接口断言「非 2xx 必有码 + 码在表里」，含鉴权三个分支与 stub 出来的 `duplicate_fact`、503、500 |
+| 顺带发现（留给 B7 后项） | ① 发送按钮无可访问名（自动化里只能靠图标找，屏幕阅读器同样读不出）；② `ChatInput` 的 Enter 没判 `isComposing` —— 中文输入法选词途中回车会把半截话发出去 |
 
 **B3-3 前端落地要点（2026-10-07）**：
 
@@ -364,8 +378,8 @@ warnings 已经落地（`lib/baseUrlGrade.ts` + `ApiConfigForm`），401 那格�
 B6-β（REQ-05/07/09）与 PRD §5 的 Q1~Q5 一起等拍板。
 依赖升级（`multer`/`openai`/`express`）按上面的命令在有快网络时做。
 
-**开工前必做的健康检查**：`cd backend-node && npm run check && npm run lint && npm test`（**22 套**）与
-`cd frontend && npm run typecheck && npm run lint && npm run test`（**10 个文件 / 130 例**）；发版前再加 `npm run build`。
+**开工前必做的健康检查**：`cd backend-node && npm run check && npm run lint && npm test`（**23 套**）与
+`cd frontend && npm run typecheck && npm run lint && npm run test`（**12 个文件 / 156 例**）；发版前再加 `npm run build`。
 测试全程写沙盒目录，不会碰 `backend-node/data/`。
 判断服务活没活：`curl http://127.0.0.1:8000/health` 看 `ok` 与 `llmConfigured`。
 
