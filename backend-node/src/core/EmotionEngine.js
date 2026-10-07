@@ -8,6 +8,7 @@
  */
 
 import { readJson, writeJson } from '../utils/jsonStore.js';
+import { withDebouncedSave } from '../utils/microtaskSave.js';
 import { RELATIONSHIP_STAGES, getStageForAffinity } from './relationshipStages.js';
 import {
     anyIncludes, DEEP_INTIMACY, MILD_INTIMACY, PRAISE, CRITICISM, TEASING,
@@ -66,6 +67,8 @@ class EmotionEngine {
         this.relationshipStage = null;
         this.relationshipLabel = '未知';
 
+        // B8-5：一轮内多处状态变更合并成一次落盘（契约照抄 MemoryStore）
+        withDebouncedSave(this, 'emotion');
         this._loadState();
     }
 
@@ -112,7 +115,8 @@ class EmotionEngine {
             console.log(`[Emotion] Tier changed: ${oldStage} → ${tier.stage}, nudge applied. New state: P=${this.state.P.toFixed(2)} A=${this.state.A.toFixed(2)} D=${this.state.D.toFixed(2)}`);
         }
 
-        this._saveState();
+        // B8-5：同一轮还会 applyDelta / decay，各自同步写一次 = 一轮三次全量重写
+        this.scheduleSave();
         return { baseline: { ...this.baseline }, stage: tier.stage, label: tier.label, tierChanged };
     }
 
@@ -147,7 +151,7 @@ class EmotionEngine {
             this.history.shift();
         }
 
-        this._saveState();
+        this.scheduleSave();
 
         // delta 分量可能是 LLM 给的字符串数值（如 "P": "+0.1"），toFixed 会抛 TypeError
         // 并把整轮回复作废——这里只做展示，一律安全格式化
@@ -162,7 +166,7 @@ class EmotionEngine {
         this.state.P += (this.baseline.P - this.state.P) * rate;
         this.state.A += (this.baseline.A - this.state.A) * rate;
         this.state.D += (this.baseline.D - this.state.D) * rate * 0.5;
-        this._saveState();
+        this.scheduleSave();
     }
 
     setState(newState) {
@@ -402,7 +406,9 @@ ${style.guide}
         this.history = [];
         this.relationshipStage = null;
         this.relationshipLabel = '未知';
-        this._saveState();
+        // 重置必须同步落盘（B0-7 纪律）：写的就是重置后的真值；残留在微任务里的那次
+        // flush 要么因为不脏而 no-op、要么再写一次同样的真值，两种都不会复活旧状态。
+        this.saveNow();
         return { label: this.getEmotionLabel() };
     }
 

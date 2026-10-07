@@ -800,7 +800,10 @@ async function checkAsync(name, fn) {
 
 try {
     await checkAsync('TC-API-06 空账本 GET /personality/ledger 返回 []', async () => {
-        aiGirlfriend.personalityDrift = new PersonalityDrift(TEST_FILE);
+        // 用一个**没被任何用例写过的**夹具文件：原先复用 TEST_FILE 让这条断言依赖用例执行顺序，
+        // 而 B8-5 把落盘改成微任务去抖后，前一个用例残留的账本什么时候进文件不再确定 ——
+        // 断言必须与「谁先写盘」无关，所以这里给一个干净的实例。
+        aiGirlfriend.personalityDrift = new PersonalityDrift('personality_ledger_empty.json');
         const { status, json } = await apiCall('GET', '/personality/ledger');
         assert.strictEqual(status, 200);
         assert.deepStrictEqual(json, []);

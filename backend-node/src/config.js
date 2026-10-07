@@ -103,11 +103,21 @@ export const config = {
     chat: {
         // 单条消息长度上限，防止异常超长输入打爆 LLM 上下文
         maxMessageLength: 8000,
-        // 发送给 LLM 的最近历史条数。持久化仍保留 MAX_HISTORY 全量，
+        // 发送给 LLM 的最近历史条数。持久化仍保留 maxHistoryEntries 全量，
         // 但 prompt 只带最近这些条，显著降低 prefill 开销与生成耗时。
         maxPromptHistory: envNumber(process.env.CHAT_MAX_PROMPT_HISTORY, 30, 1, 500),
+        /**
+         * 持久化的对话条数上限（B8-7：修「设置项骗人」）。
+         * 旧值 200 是硬编码常量，而设置页的 maxPromptHistory 能选到 500、
+         * 「无限上下文」的注释也声称受它约束 —— 于是用户选 500 实际只有 199 生效。
+         * 现在把它做成真配置，并且默认值 >= maxPromptHistory 的可调上限（500），
+         * 界面那几个档位从此是真的。代价是 state.json 更大、每轮写盘更慢，
+         * 所以给了 envNumber 的上限 5000 而不是无界。
+         */
+        maxHistoryEntries: envNumber(process.env.CHAT_MAX_HISTORY_ENTRIES, 500, 10, 5000),
         // 无限上下文：true = 忽略 maxPromptHistory，每次请求带上全部保留的对话
-        // （仍受 MAX_HISTORY=200 条持久化上限约束，避免 token 无界膨胀）
+        // （仍受 chat.maxHistoryEntries 条数上限 + prompt.budget.maxHistoryChars 字符上限
+        //   双重约束，token/字符都不会无界膨胀 —— B8-3/B8-6）
         unlimitedContext: process.env.CHAT_UNLIMITED_CONTEXT === 'true',
         // 采样温度（设置页「高级选项」可调，运行时由 POST /config 覆盖）
         temperature: envNumber(process.env.CHAT_TEMPERATURE, 0.75, 0, 2),
@@ -122,6 +132,61 @@ export const config = {
         // 响应里回传「思考」字段（inner_thought 人设独白 / model_reasoning 原生思考）的
         // 最大字符数，超出截断。原生 CoT 可能上万字，不宜整个塞进 HTTP 响应。
         thinkingMaxChars: envNumber(process.env.CHAT_THINKING_MAX_CHARS, 2000, 100, 100_000),
+        /**
+         * 入库字符上限（B8-4，审计 CORE-20「history 的单条长度无上限」）。
+         * maxMessageLength 只管**用户**消息，模型侧一直是裸的：max_tokens 默认 0（不传），
+         * 一次 2 万字的回复会原样进 state.json 并在之后**每一轮**回灌进 prompt，
+         * 而 HTTP 层的 thinkingMaxChars 只截响应、不截磁盘 —— 于是脏数据永久留着。
+         * 这里截断而不是丢弃：正文是用户要看的，截总比没有好（丢弃等于吞掉回复）。
+         */
+        maxAssistantChars: envNumber(process.env.CHAT_MAX_ASSISTANT_CHARS, 4000, 100, 100_000),
+        // 内心独白入库上限：超过这个长度基本是模型把 CoT 灌进了 <monologue>
+        maxThoughtChars: envNumber(process.env.CHAT_MAX_THOUGHT_CHARS, 2000, 100, 100_000),
+    },
+    /**
+     * Prompt 注入预算（B8-3，审计 CORE-09「没有任何 token/字符预算护栏」）。
+     * 每条块各自有「单条上限」（retrieval.injectEpisodeMaxChars 等），
+     * 这里补的是**总量**与**总量超限后的裁剪顺序**：低价值的块先缩、先丢，
+     * 人设与【回复要求】这类核心块永不丢（服务端从头部静默截断时最先掉的就是它们）。
+     * 单位一律是字符（不是 token）：本地应用没有可靠的 tokenizer，
+     * 而字符数是可断言、可复现的下界，中文场景下约 1 字 ≈ 1 token 偏保守。
+     */
+    prompt: {
+        budget: {
+            // 【已知事实】+【相关回忆】整段上限
+            maxMemoryChars: envNumber(process.env.PROMPT_MAX_MEMORY_CHARS, 2400, 200, 200_000),
+            // 【我们的故事】整段上限（叙事层自己还有 injectMaxChars 的单段上限，这是总量兜底）
+            maxNarrativeChars: envNumber(process.env.PROMPT_MAX_NARRATIVE_CHARS, 1200, 100, 200_000),
+            // 【任务清单】+ 任务意图指令合计上限
+            maxTaskChars: envNumber(process.env.PROMPT_MAX_TASK_CHARS, 2400, 100, 200_000),
+            // 整条动态 system 块上限（含【回复要求】等固定骨架）
+            maxSystemChars: envNumber(process.env.PROMPT_MAX_SYSTEM_CHARS, 12_000, 500, 200_000),
+            // 对话窗口（历史消息正文）整段上限：unlimitedContext 也受它约束
+            maxHistoryChars: envNumber(process.env.PROMPT_MAX_HISTORY_CHARS, 24_000, 500, 2_000_000),
+            // 一次请求全部消息的总上限（最后一道闸：只裁历史窗口，绝不动人设/system/本轮提问）
+            maxRequestChars: envNumber(process.env.PROMPT_MAX_REQUEST_CHARS, 60_000, 2000, 4_000_000),
+        },
+    },
+    /**
+     * 待办清单容量（B8-4，审计 CORE-20）。
+     * maxActive = tasks.json 里的活跃条目上限；已完成的条目移出主文件、
+     * 归档到 tasks_completed.json（cap = maxCompleted，超出丢最旧）。
+     * 为什么分文件而不是加分区：tasks.json 的既有形状是**裸数组**（档案导入的
+     * 种子数据、老用户磁盘上的文件都是），改成对象会让每一条读取路径都要判形状。
+     */
+    tasks: {
+        maxActive: envNumber(process.env.TASKS_MAX_ACTIVE, 60, 5, 1000),
+        maxCompleted: envNumber(process.env.TASKS_MAX_COMPLETED, 50, 1, 2000),
+    },
+    /**
+     * 模型调用计数（B1-2）。目的是**排障与理解行为**：
+     * 一轮对话到底调了几次模型（主对话/事实提取/叙事抽取/嵌入/主动消息/TTS/ASR），
+     * 以前只能靠猜。窗口是滚动的、内存有界（环形缓冲，超容量丢最旧）。
+     */
+    llmCalls: {
+        windowMs: envNumber(process.env.LLM_CALLS_WINDOW_MS, 60 * 60 * 1000, 1000, 24 * 60 * 60 * 1000),
+        // 时间戳环形缓冲容量：单人应用每轮最多 ~5 次调用，512 条足够覆盖 100 轮
+        maxEvents: envNumber(process.env.LLM_CALLS_MAX_EVENTS, 512, 16, 100_000),
     },
     /**
      * 情绪模型（EmotionEngine）的输入约束。prompt 里已经告诉模型 emotion_delta 是
@@ -182,10 +247,23 @@ export const config = {
             inertia: envNumber(process.env.PROACTIVE_EMOTION_INERTIA, 0.55, 0, 0.95),
         },
     },
-    // 记忆检索用的 embedding：慢就快速降级为关键词检索，不拖垮主链路
+    /**
+     * 记忆检索用的 embedding。
+     * 这里的承诺（B1-4 之后才是真的）：「慢/坏就快速降级」——连续失败达到阈值即熔断，
+     * 冷却期内 available=false，检索直接走关键词，不再每轮白等两次 timeout。
+     * cacheMax 是**同一轮 query 嵌入只发一次网络往返**的有界 LRU（B1-5）：
+     * 这是延迟修复（首字更快），不是成本修复（省 token）——一次命中省下的是
+     * 一整趟 2500 ms 上限的往返，用户等的是第一个字，不是账单。
+     */
     embedding: {
         timeoutMs: envNumber(process.env.EMBEDDING_TIMEOUT_MS, 2500, 200, 60_000),
         maxRetries: 0,
+        // 熔断：连续失败多少次后打开（打开期间不再发起任何嵌入调用）
+        failureThreshold: envNumber(process.env.EMBEDDING_FAILURE_THRESHOLD, 3, 1, 50),
+        // 熔断冷却时长：到期后自动半开，下一次调用当探针（成功即清零）
+        cooldownMs: envNumber(process.env.EMBEDDING_COOLDOWN_MS, 5 * 60 * 1000, 1000, 6 * 60 * 60 * 1000),
+        // (model, text) → 向量的 LRU 容量。0 = 关掉 memoize
+        cacheMax: envNumber(process.env.EMBEDDING_CACHE_MAX, 128, 0, 4096),
     },
     /**
      * 记忆系统（core/memory/）：情节记忆（原始对话轮）+ 事实记忆（LLM 提取的持久信息）。
@@ -195,8 +273,16 @@ export const config = {
      *   auto      —— 配置了嵌入 Key 且库里有向量时用 embedding，否则 keyword
      */
     memory: {
-        // 情节记忆条数上限，超出丢最旧
-        maxEpisodes: envNumber(process.env.MEMORY_MAX_EPISODES, 500, 10, 100000),
+        /**
+         * 情节记忆条数上限，超出丢最旧。
+         * 上限（envNumber 的 max）从 100000 收到 5000（B8-4 / 审计 CORE-08）：
+         * 10 万条 × 1024 维向量的 memory.json 是 3 GB 级的一次性同步写盘，
+         * 会把进程按在事件循环上；5000 条在 B8-2 的紧凑编码下约 29 MB
+         * （默认 500 条约 2.9 MB），并且走去抖写盘而不是每轮同步重写。
+         * 默认仍是 500 —— 对单人应用足够，想要更长的回忆线请显式调高，
+         * 代价是每轮检索与落盘更慢。
+         */
+        maxEpisodes: envNumber(process.env.MEMORY_MAX_EPISODES, 500, 10, 5000),
         retrieval: {
             mode: ['auto', 'embedding', 'keyword'].includes(process.env.MEMORY_RETRIEVAL_MODE)
                 ? process.env.MEMORY_RETRIEVAL_MODE
@@ -217,6 +303,14 @@ export const config = {
             // 的原文，用户单条最长可达 chat.maxMessageLength(8000)，不设上限时
             // 3 条回忆就能把整段人设挤出请求（审计 CORE-09 的预算护栏）
             injectEpisodeMaxChars: envNumber(process.env.MEMORY_INJECT_EPISODE_MAX_CHARS, 300, 20, 4000),
+            /**
+             * 查询词项上限（B8-1）。8000 字的合法长消息会切出上千个 bigram 词项，
+             * 而 df/idf 是按「每词 × 每篇」算的 —— 不截查询，一条长消息就能把
+             * 请求路径按住几秒（审计 CORE-07 的实测：91 词 = 2888 ms）。
+             * ⚠️ 只截**查询**，绝不截**文档**：文档侧的分词与 df 是完整索引，
+             * 截查询只是丢掉最后一个（最远、信息量最低的）词项，召回排序不受影响。
+             */
+            maxQueryTerms: envNumber(process.env.MEMORY_RETRIEVAL_MAX_QUERY_TERMS, 64, 4, 1024),
         },
         // 检索结果去重：相邻入选记忆相似度超过该值视为重复丢弃（语义用余弦，关键词用 bigram Jaccard）
         dedupSimilarity: envNumber(process.env.MEMORY_DEDUP_SIMILARITY, 0.92, 0.5, 1),
@@ -233,6 +327,15 @@ export const config = {
             injectTopN: envNumber(process.env.MEMORY_FACTS_INJECT_TOP_N, 12, 1, 50),
             // 每条事实注入前的字符上限（事实由 LLM 生成，可能超长）
             injectFactMaxChars: envNumber(process.env.MEMORY_FACTS_INJECT_CHAR_LIMIT, 120, 20, 2000),
+            /**
+             * 后台提取队列的**合并**阈值（B1-6，审计 CORE-18）。
+             * 积压超过 mergeThreshold 轮时，不再一轮一次调模型，而是把最旧的
+             * 若干轮**合并成一次提取**——合并而不是丢弃：一次不落地扔掉用户的原话，
+             * 那些信息就永久丢了（这条链路的产出是长期事实库，丢一轮 = 丢一辈子）。
+             * mergeBatchMax = 单次合并的最多轮数（输入长度上限，避免一次塞进 200 轮）。
+             */
+            mergeThreshold: envNumber(process.env.MEMORY_FACTS_MERGE_THRESHOLD, 3, 1, 50),
+            mergeBatchMax: envNumber(process.env.MEMORY_FACTS_MERGE_BATCH_MAX, 12, 1, 50),
             // 提取用的模型：空 = 复用主对话模型
             extractModel: process.env.MEMORY_EXTRACT_MODEL || '',
             // 提取调用的采样温度（低温保证 JSON 输出稳定）
@@ -328,6 +431,15 @@ export const config = {
         anniversaryWithinDays: envNumber(
             process.env.NARRATIVE_ANNIVERSARY_WITHIN_DAYS,
             TRIGGER_THRESHOLDS.anniversary.queryWithinDays, 0, 365),
+    },
+    /**
+     * 主动消息（她主动找他说话）的运行时参数。
+     * 类型目录与冷却/配额在 core/proactiveTypes.js / ProactiveEngine 的档位表里，
+     * 这里只放「一次生成要带多少上下文」这类可调数值（B8-6：旧写法是代码里的裸 10）。
+     */
+    proactive: {
+        // 送给模型的最近对话条数（成对裁剪，与主对话同一实现）
+        historyEntries: envNumber(process.env.PROACTIVE_HISTORY_ENTRIES, 10, 1, 200),
     },
     /**
      * 事件层（REQ-04，docs/companion-upgrade/02-architecture.md §2.4）。

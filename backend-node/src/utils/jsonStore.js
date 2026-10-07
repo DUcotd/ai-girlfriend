@@ -111,6 +111,33 @@ export function readJson(filename, fallback = null) {
 }
 
 /**
+ * 写盘计数（B8-5 的验收口径）。
+ *
+ * 为什么开在这里而不是让测试去 monkey-patch：ESM 的具名导入是**只读活绑定**，
+ * 测试拿到 `import { writeJson }` 之后无法替换别的模块里的那份引用，
+ * 「数一轮对话写了几次盘」这件事在旧结构下根本无法断言 ——
+ * 而这正是审计 CORE-23 拖了四轮没人修的原因（没有可观测点，就没有回归）。
+ * 这里只记**次数与文件名**，绝不记内容（日志隐私规则，见 utils/log.js）。
+ */
+const writeStats = { total: 0, byFile: new Map(), failures: 0 };
+
+/** 当前写盘计数快照（测试与排障用；不影响任何业务路径） */
+export function getWriteStats() {
+    return {
+        total: writeStats.total,
+        failures: writeStats.failures,
+        byFile: Object.fromEntries(writeStats.byFile),
+    };
+}
+
+/** 清零写盘计数（测试逐段计数前调用） */
+export function resetWriteStats() {
+    writeStats.total = 0;
+    writeStats.failures = 0;
+    writeStats.byFile.clear();
+}
+
+/**
  * 原子写入 JSON 文件：先写临时文件再 rename。
  *
  * 三处加固（2026-10 审计 B0-6）：
@@ -121,12 +148,20 @@ export function readJson(filename, fallback = null) {
  *  3. Windows 上 rename 到已存在文件常因杀软/索引句柄抛 EPERM：此时退化为
  *     直接覆盖写目标文件，并保留临时文件供人工排查 —— 而不是静默丢这一次写盘。
  *
+ * @param {string} filename
+ * @param {any} data
+ * @param {{compact?: boolean}} [options] compact=true 时不缩进（B8-2）。
+ *   默认 false —— 其余 10 个数据文件的字节输出与改造前完全一致，
+ *   只有 memory.json 这种「体积由向量主导」的文件走紧凑路径，避免无谓 diff。
  * @returns {boolean} 是否真正落盘成功。调用方必须把它计入自己的失败面（见 resetAll）。
  */
-export function writeJson(filename, data) {
+export function writeJson(filename, data, options = {}) {
+    const compact = options?.compact === true;
     const filePath = dataPath(filename);
     const tmpPath = `${filePath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-    const payload = JSON.stringify(data, null, 2);
+    const payload = compact ? JSON.stringify(data) : JSON.stringify(data, null, 2);
+    writeStats.total++;
+    writeStats.byFile.set(filename, (writeStats.byFile.get(filename) || 0) + 1);
     try {
         const fd = fs.openSync(tmpPath, 'w');
         try {
@@ -145,6 +180,7 @@ export function writeJson(filename, data) {
         }
         return true;
     } catch (e) {
+        writeStats.failures++;
         console.error(`[jsonStore] Write error (${filename}):`, e.message);
         try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
         return false;

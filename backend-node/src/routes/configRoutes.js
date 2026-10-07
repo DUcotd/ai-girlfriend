@@ -87,6 +87,8 @@ router.get('/config/status', (req, res) => {
         memory: aiGirlfriend.getMemoryStatus(),
         // 陪伴感增强子系统开关（REQ-01 用户情绪 / REQ-03 叙事 / REQ-04 事件层）
         companion: aiGirlfriend.getCompanionStatus(),
+        // 模型调用计数（B1-2）：本轮 + 滚动窗口各通道次数，设置页直接渲染这份
+        llmCalls: aiGirlfriend.getLlmCalls(),
     });
 });
 

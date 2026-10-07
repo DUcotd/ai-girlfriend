@@ -122,9 +122,14 @@ export class TriggerRegistry {
                 Object.entries(data.dedupeSeen).filter(([, v]) => typeof v === 'number')
             );
         }
+        // B8-4：`_pruneDedupe` 以前全仓**只有定义、零调用**，于是 dedupeSeen 只增不减 ——
+        // 长跑几个月后 trigger_state.json 里全是永不再命中的历史 key，每次全量重写都更慢。
+        // 开机恢复完就清一次（过期标记留着没有任何用途），并在每次 _prune 时顺带清。
+        const pruned = this._pruneDedupe();
         console.log(
-            `[TriggerRegistry] Restored state (queue=${this.eventQueue.length}, cooldowns=${Object.keys(this.cooldowns).length})`
+            `[TriggerRegistry] Restored state (queue=${this.eventQueue.length}, cooldowns=${Object.keys(this.cooldowns).length}${pruned ? ', dedupe 已清理过期标记' : ''})`
         );
+        if (pruned) this.scheduleSave();
     }
 
     /** 去抖写盘（对照 MemoryStore.scheduleSave）：合并高频变更，禁止每轮全量重写 */
@@ -396,7 +401,9 @@ export class TriggerRegistry {
         const now = Date.now();
         const before = this.eventQueue.length;
         this.eventQueue = this.eventQueue.filter((q) => !q.expiresAt || q.expiresAt > now);
-        if (this.eventQueue.length !== before) this.scheduleSave();
+        // B8-4：过期候选与过期去重标记一起清（长跑进程里 dedupeSeen Previously 只增不减）
+        const prunedDedupe = this._pruneDedupe(now);
+        if (this.eventQueue.length !== before || prunedDedupe) this.scheduleSave();
     }
 
     /** 清理过老的去重标记，防 dedupeSeen 无界增长 */

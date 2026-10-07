@@ -5,6 +5,7 @@
  * 同步计算内容漂移、惰性每日结算、规则疲劳、变化账本和原子落盘。
  */
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
+import { withDebouncedSave } from '../utils/microtaskSave.js';
 import { dayKey } from '../utils/dayKey.js';
 import { DIM_KEYS, DIM_LABELS, DEFAULT_TRAITS, PERSONALITY_DIMS, isDimKey } from './personalityDims.js';
 import {
@@ -158,6 +159,9 @@ class PersonalityDrift {
             : STATE_FILE;
         this.statePath = dataPath(this.stateFile);
         this._initializeDefaults();
+        // B8-5：一轮里 settleDaily / recordUserTurn / markUserActive 都会改状态，
+        // 合并成一次落盘（契约照抄 MemoryStore.scheduleSave/flush）
+        withDebouncedSave(this, 'personality');
         this._loadState();
     }
 
@@ -259,7 +263,8 @@ class PersonalityDrift {
 
         this.stats.today = { dayKey: key, turns: 0, criticismCount: 0, sentiments: [] };
         this.lastSettledDay = key;
-        this._saveState(safeNow);
+        // B8-5：结算只标脏，落盘交给本轮收尾（settleDaily 每轮都会被 recordUserTurn 再调一次）
+        this.scheduleSave();
         console.log(`[Personality] settled ${key}: ${appliedChanges.length} change(s), ${moves.length} baseline move(s)`);
         return { settled: true, changes: appliedChanges, adapted: moves };
     }
@@ -309,7 +314,7 @@ class PersonalityDrift {
         }
 
         this._recordStats(signals, safeNow);
-        this._saveState(safeNow);
+        this.scheduleSave();
         return {
             current: cloneTraits(this.current),
             changes: appliedChanges,
@@ -439,7 +444,8 @@ class PersonalityDrift {
         this.adapt = {};
         this.ledger = [];
         this.lastSettledDay = dayKey(new Date(now));
-        this._saveState(now);
+        // 重置必须同步落盘（B0-7 纪律）：写的就是重置后的真值
+        this.saveNow();
         return { status: 'reset' };
     }
 
@@ -624,7 +630,11 @@ class PersonalityDrift {
         const key = dayKey(new Date(now));
         this._appendMissingDays(key);
         this._touchActivityClock(key);
-        return this._saveState(now);
+        // B8-5：ghosting 早退不走 _finalize（没有那次显式 flush），但微任务仍会在本轮
+        // 结束后落盘 —— 活跃时钟不会丢，只是不再单独占一次同步写盘
+        this.scheduleSave();
+        // 返回「活跃时钟已记账」；落盘在本轮结束时由微任务/显式 flush 完成
+        return true;
     }
 
     /** 为跨过但没有消息的自然日补 0，保证近 7 天日均与连续活跃口径准确。 */

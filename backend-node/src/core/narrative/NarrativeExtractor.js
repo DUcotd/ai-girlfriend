@@ -193,6 +193,18 @@ export class NarrativeExtractor {
             importance: clampImportance(add.importance, 3),
             recurring: add.recurring && typeof add.recurring === 'object' ? add.recurring : null,
             occurredAt: Number.isFinite(add.occurredAt) ? add.occurredAt : Date.now(),
+            // B2-10：这三个字段以前在抽取层被**整段丢掉**，于是 store 的 normalizeNarrative
+            // 永远收到空值 —— 「写了没接线」的典型形状。标签与笑点触发词让她能
+            // 「按标签联想」，sourceEpisodeId 让故事能回溯到当初那段对话。
+            tags: Array.isArray(add.tags)
+                ? add.tags.filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim().slice(0, 20)).slice(0, 8)
+                : [],
+            jokeTrigger: typeof add.jokeTrigger === 'string' && add.jokeTrigger.trim()
+                ? add.jokeTrigger.trim().slice(0, 40)
+                : null,
+            sourceEpisodeId: typeof add.sourceEpisodeId === 'string' && add.sourceEpisodeId.trim()
+                ? add.sourceEpisodeId.trim()
+                : null,
         };
     }
 

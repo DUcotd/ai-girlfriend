@@ -19,6 +19,15 @@ import { config } from '../config.js';
 import { parseDueTime, startOfLocalDay, toDate } from './taskTime.js';
 
 const TASKS_FILE = 'tasks.json';
+/**
+ * 已完成/超量任务的归档文件（B8-4）。
+ *
+ * 为什么单独一个文件而不是塞回 `tasks.json`：那个文件的形状是**裸数组**，
+ * 路由、备份清单、`reload()` 都按数组读；改成 `{tasks, archive}` 就是四处同改，
+ * 而这里要的只是「tasks.json 不再无界增长」（审计 CORE-20：无界集合 = 每次全量重写更慢）。
+ * 归档里放的是**被挤出去的未完成任务**，不是删除 —— 她的承诺不能因为一个容量数字就消失。
+ */
+const TASKS_ARCHIVE_FILE = 'tasks_archive.json';
 
 /** 分钟 → 毫秒 */
 const MIN = 60 * 1000;
@@ -122,6 +131,8 @@ class TaskManager {
     reload() {
         this.tasksPath = dataPath(TASKS_FILE);
         this.tasks = this._load();
+        // 归档缓存一起作废：档案导入之后必须重新读盘，否则内存里还是导入前那批归档条目
+        this._archive = null;
         return { tasks: this.tasks.length };
     }
 
@@ -166,6 +177,74 @@ class TaskManager {
 
     saveTasks() {
         return writeJson(TASKS_FILE, this.tasks);
+    }
+
+    /** 归档清单惰性读取（构造期不读，避免没归档时也多一次磁盘访问） */
+    _loadArchive() {
+        if (Array.isArray(this._archive)) return this._archive;
+        const data = readJson(TASKS_ARCHIVE_FILE, []);
+        this._archive = Array.isArray(data)
+            ? data.filter((t) => t && typeof t === 'object' && typeof t.id === 'string')
+            : [];
+        return this._archive;
+    }
+
+    saveArchive() {
+        return writeJson(TASKS_ARCHIVE_FILE, this._loadArchive());
+    }
+
+    /** 归档条数（只读，给 /tasks 元信息与测试用） */
+    getArchivedCount() {
+        return this._loadArchive().length;
+    }
+
+    /**
+     * 容量闸门（B8-4）：`tasks.json` 以前只增不减 —— 完成的任务永远留在同一个数组里，
+     * 每加一条任务都要全量重写整个文件（且每条都同步写盘）。
+     *
+     * 两条规则，方向不同：
+     *   ① 已完成超出 `config.tasks.maxCompleted` → 直接清掉最旧的（琐事完成记录不是承诺，
+     *      它们留在账本里的唯一作用是让文件越来越大）；
+     *   ② 未完成超出 `config.tasks.maxActive` → **转入归档文件**，不删除。
+     *      未完成的承诺被静默丢弃是不可接受的（她会答应一件事然后忘掉），
+     *      所以这里只是把它挪出活跃清单，历史仍然可查、可恢复。
+     *
+     * 两个上限都进 config（`envNumber`），不在这里写死数字。
+     * @returns {boolean} 是否有条目被移出活跃清单（调用方决定是否写归档文件）
+     */
+    _enforceCapacity() {
+        const maxCompleted = config.tasks.maxCompleted;
+        const maxActive = config.tasks.maxActive;
+        let evicted = false;
+
+        const completed = this.tasks.filter((t) => t.completed === true);
+        if (completed.length > maxCompleted) {
+            const drop = new Set(
+                completed
+                    .slice(0, completed.length - maxCompleted)
+                    .map((t) => t.id)
+            );
+            this.tasks = this.tasks.filter((t) => !drop.has(t.id));
+            console.log(`[TaskManager] 已完成任务超出上限 ${maxCompleted}，清出 ${drop.size} 条最旧的`);
+        }
+
+        const pending = this.tasks.filter((t) => t.completed !== true);
+        if (pending.length > maxActive) {
+            const overflow = pending.slice(0, pending.length - maxActive);
+            const ids = new Set(overflow.map((t) => t.id));
+            this.tasks = this.tasks.filter((t) => !ids.has(t.id));
+            const archive = this._loadArchive();
+            const stamp = new Date().toISOString();
+            for (const task of overflow) archive.push({ ...task, archivedAt: stamp });
+            // 归档自身也有界：超出 maxCompleted 的 4 倍就丢最旧的（仍然只丢「早就被挤出去」的）
+            const archiveCap = maxCompleted * 4;
+            if (archive.length > archiveCap) archive.splice(0, archive.length - archiveCap);
+            this._archive = archive;
+            evicted = true;
+            console.log(`[TaskManager] 未完成任务超出上限 ${maxActive}，最旧 ${ids.size} 条转入归档文件（未删除，可查）`);
+        }
+
+        return evicted;
     }
 
     /**
@@ -249,7 +328,10 @@ class TaskManager {
         };
 
         this.tasks.push(newTask);
+        // B8-4：加完就过闸门，活跃清单永远有界（归档写独立文件，未完成的承诺不丢）
+        const evicted = this._enforceCapacity();
         this.saveTasks();
+        if (evicted) this.saveArchive();
         console.log(
             `[TaskManager] Task added: ${newTask.id.slice(0, 8)} "${newTask.title || '(untitled)'}" ` +
             `(source=${newTask.source}, due=${newTask.dueTime || 'none'})`

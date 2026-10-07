@@ -45,6 +45,7 @@ export const ARCHIVE_FILES = Object.freeze([
     { file: 'life_log.json', owner: 'life', reload: (s) => s.proactiveEngine.lifeSimulator.reload(), label: '她这几小时在做什么' },
     { file: 'trigger_state.json', owner: 'trigger', reload: (s) => s.triggerRegistry.reload(), label: '事件队列与冷却/去重标记' },
     { file: 'tasks.json', owner: 'tasks', reload: (s) => s.taskManager.reload(), label: '待办任务' },
+    { file: 'tasks_archive.json', owner: 'tasksArchive', reload: (s) => s.taskManager.reload(), label: '被容量挤出去的未完成任务（B8-4 归档，不删）' },
 ]);
 
 export const ARCHIVE_FILE_NAMES = ARCHIVE_FILES.map((f) => f.file);

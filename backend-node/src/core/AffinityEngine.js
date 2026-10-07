@@ -14,6 +14,7 @@
  */
 
 import { readJson, writeJson } from '../utils/jsonStore.js';
+import { withDebouncedSave } from '../utils/microtaskSave.js';
 import { getStageForAffinity, buildStageMeta } from './relationshipStages.js';
 import { validateAffinityChange, AFFINITY_RULES } from './affinityRules.js';
 import { pruneGainEvents, recordGain } from './affinityFatigue.js';
@@ -38,6 +39,32 @@ const DECAY = {
 const clampAffinity = (v) =>
     Math.max(0, Math.min(100, Number.isFinite(v) ? Math.round(v) : DEFAULT_AFFINITY));
 
+/**
+ * 时间衰减的**唯一判定**（纯函数，B8-8 / 审计 CORE-21「decaying 与 settleDecay 同窗口」）。
+ *
+ * 旧写法 `getMeta()` 里的 `decaying` 用的是「idle ≥ START_MS 且 affinity > 阶段下沿」这一套
+ * **自己另写**的条件，而真正扣分的是 settleDecay 里的 `floor(idle / rate) ≥ 1` 那一套。
+ * 两把尺子的后果：面板可以连着几天显示「她正在和你生疏」，而实际每次结算都是 `applied:0`
+ * —— 用户看到的提示与磁盘上的账本是两件事。
+ * 现在两处都调这一个纯函数：**读那个标记不会改动任何状态**（也不消耗空闲时间）。
+ *
+ * @param {{affinity:number, lastUserActiveTime:number, now:number}} s
+ * @returns {{applied:number, steps:number, after:number, stage:string, rate:number|null}}
+ */
+export function computeDecay({ affinity, lastUserActiveTime, now }) {
+    const stage = getStageForAffinity(affinity);
+    const idle = now - lastUserActiveTime;
+    const rate = DECAY.HIGH_STAGES.includes(stage.stage) ? DECAY.RATE_MS_HIGH : DECAY.RATE_MS_LOW;
+    if (!Number.isFinite(idle) || idle < DECAY.START_MS || !Number.isFinite(rate) || rate <= 0) {
+        return { applied: 0, steps: 0, after: affinity, stage: stage.stage, rate: Number.isFinite(rate) ? rate : null };
+    }
+    const steps = Math.floor(idle / rate);
+    if (steps <= 0) return { applied: 0, steps: 0, after: affinity, stage: stage.stage, rate };
+    // 止损：不跌破当前阶段下沿（冷淡到「朋友」就停，不会一路掉回陌生人）
+    const after = Math.max(stage.min, affinity - steps);
+    return { applied: affinity - after, steps, after, stage: stage.stage, rate };
+}
+
 class AffinityEngine {
     /**
      * @param {string} stateFileName 状态文件名，默认 affinity_state.json（测试可传 .test.json）
@@ -56,6 +83,8 @@ class AffinityEngine {
         this.ledger = [];                                      // 变更账本（≤200）
 
         this._loadState();
+        // B8-5：一轮内 settleDecay + recordUserTurn 都改状态，合并成一次落盘
+        withDebouncedSave(this, 'affinity');
     }
 
     /**
@@ -125,44 +154,37 @@ class AffinityEngine {
      * @returns {{ affinity:number, applied:number, steps:number }}
      */
     settleDecay(now = Date.now()) {
-        const idle = now - this.lastUserActiveTime;
-        if (!Number.isFinite(idle) || idle < DECAY.START_MS) {
-            return { affinity: this._affinity, applied: 0, steps: 0 };
-        }
-
-        const stage = getStageForAffinity(this._affinity);
-        const rate = DECAY.HIGH_STAGES.includes(stage.stage) ? DECAY.RATE_MS_HIGH : DECAY.RATE_MS_LOW;
-        const steps = Math.floor(idle / rate);
-        if (steps <= 0) {
-            return { affinity: this._affinity, applied: 0, steps: 0 };
+        const { applied, steps, after, rate } = computeDecay({
+            affinity: this._affinity,
+            lastUserActiveTime: this.lastUserActiveTime,
+            now,
+        });
+        if (steps <= 0 || applied <= 0) {
+            return { affinity: this._affinity, applied: 0, steps };
         }
 
         const before = this._affinity;
-        const after = Math.max(stage.min, before - steps);   // 止损：不跌破阶段下沿
-        const applied = before - after;
-
         // 消耗已结算的整段空闲，避免下次调用重复扣分
         this.lastUserActiveTime += steps * rate;
-
-        if (applied > 0) {
-            this._affinity = after;
-            const finalChange = after - before;              // ≤ 0
-            this._appendLedger({
-                at: new Date(now).toISOString(),
-                // kind 让「时间衰减」与「真实一轮」在账本里可区分：两者共用同一条
-                // 不变量口径（rawChange + Σ(to-from) === finalChange），
-                // 但混在一起做审计会得出无意义的结论（CORE-16）
-                kind: 'decay',
-                before,
-                after,
-                rawChange: 0,
-                finalChange,
-                stage: stage.stage,
-                userInputDigest: null,
-                trace: [{ rule: 'time_decay', from: 0, to: finalChange, reason: '好久没联系，她和你有点生疏了' }],
-            });
-            this._saveState();
-        }
+        this._affinity = after;
+        const finalChange = after - before;              // ≤ 0
+        const stage = getStageForAffinity(before);
+        this._appendLedger({
+            at: new Date(now).toISOString(),
+            // kind 让「时间衰减」与「真实一轮」在账本里可区分：两者共用同一条
+            // 不变量口径（rawChange + Σ(to-from) === finalChange），
+            // 但混在一起做审计会得出无意义的结论（CORE-16）
+            kind: 'decay',
+            before,
+            after,
+            rawChange: 0,
+            finalChange,
+            stage: stage.stage,
+            userInputDigest: null,
+            trace: [{ rule: 'time_decay', from: 0, to: finalChange, reason: '好久没联系，她和你有点生疏了' }],
+        });
+        // B8-5：本轮稍后还有 recordUserTurn，两次同步全量重写合并成一次
+        this.scheduleSave();
 
         return { affinity: this._affinity, applied, steps };
     }
@@ -217,7 +239,8 @@ class AffinityEngine {
             userInputDigest: (userInput || '').slice(0, 40) || null,
             trace,
         });
-        this._saveState();
+        // B8-5：本轮的引擎写盘统一由 AiGirlfriend._finalize 末尾的一次显式 flush 收口
+        this.scheduleSave();
 
         console.log(`[Affinity] ${before} → ${after} (change ${credited > 0 ? '+' : ''}${credited}, stage ${getStageForAffinity(after).stage})`);
 
@@ -251,15 +274,19 @@ class AffinityEngine {
      */
     getMeta(now = Date.now()) {
         const meta = buildStageMeta(this._affinity);
-        const stage = getStageForAffinity(this._affinity);
         const lastChanged = this._lastChangedEntry();
         const recentChange = lastChanged ? lastChanged.finalChange : 0;
         const recentChangeReason = this._reasonFor(lastChanged);
-        const idle = now - this.lastUserActiveTime;
-        const decaying = idle >= DECAY.START_MS && this._affinity > stage.min;
+        // B8-8：decaying 由**结算的那个判定**给出（纯函数 computeDecay），不再另写一把尺子。
+        // 于是「面板说她正在生疏」与「结算真会扣分」是同一件事 —— 触底后不会再空转显示衰减中。
+        const decaying = computeDecay({
+            affinity: this._affinity,
+            lastUserActiveTime: this.lastUserActiveTime,
+            now,
+        }).applied > 0;
         // 日额度必须**读时也 roll**（审计 HTTP-19）：以前只有 recordUserTurn 写之前才 roll，
         // 于是过了零点还没说过话的用户，面板仍然显示「今日额度已满」——那是昨天的账。
-        // roll 本身幂等（同一天多次调用只归零一次），读路径调用它没有副作用。
+        // roll 本身幂等（同一天多次调用只归零一次），且只归零一个跨日计数器。
         const gainedToday = this._rollDayIfNeeded(now);
         const dailyCapReached = gainedToday >= AFFINITY_RULES.DAILY_POSITIVE_CAP;
 
@@ -273,7 +300,8 @@ class AffinityEngine {
         this.lastUserActiveTime = Date.now();
         this.daily = { dayKey: dayKey(), gained: 0 };
         this.ledger = [];
-        this._saveState();
+        // 重置同步落盘（B0-7 纪律）：写的就是重置后的真值，微任务里残留的 flush 只会重复它
+        this.saveNow();
         return { affinity: this._affinity };
     }
 

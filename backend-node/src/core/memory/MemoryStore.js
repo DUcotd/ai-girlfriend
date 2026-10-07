@@ -14,6 +14,8 @@ import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { dataPath, readJson, writeJson } from '../../utils/jsonStore.js';
 import { config } from '../../config.js';
+import { KeywordIndex } from './KeywordIndex.js';
+import { encodeVector } from './vectorCodec.js';
 
 const DB_FILE = 'memory.json';
 const V1_BACKUP_FILE = 'memory.json.v1.bak';
@@ -35,6 +37,10 @@ export function clipText(value, max) {
  * v1 裸数组 → v2 episodes。
  * v1 每条：{ id, text, embedding, embeddingModel, metadata:{emotionSnapshot}, emotionSnapshot, timestamp }
  * v2 顶层只保留一份 emotionSnapshot（旧版 metadata 里是冗余双写，迁移时清除）。
+ *
+ * embedding 一律过 encodeVector（B8-2）：旧的 `Array.isArray(...)` 定向判定会把
+ * 「已经是 base64」的合法值判成 null 并抹掉向量；encodeVector 两种形状都吃，
+ * 且对字符串幂等（不会二次编码）。
  */
 export function migrateV1ToV2(raw) {
     return raw
@@ -42,7 +48,7 @@ export function migrateV1ToV2(raw) {
         .map((e) => ({
             id: e.id || uuidv4(),
             text: e.text,
-            embedding: Array.isArray(e.embedding) ? e.embedding : null,
+            embedding: encodeVector(e.embedding),
             embeddingModel: e.embeddingModel || null,
             emotionSnapshot: e.emotionSnapshot || e.metadata?.emotionSnapshot || null,
             timestamp: typeof e.timestamp === 'number' ? e.timestamp : Date.now() / 1000,
@@ -67,7 +73,20 @@ export class MemoryStore {
         this.facts = [];
         this._saveTimer = null;
         this._dirty = false;
+        /**
+         * 关键词检索的增量索引（B8-1）+ 它的世代号。
+         * 任何让 episodes 内容发生增删改的路径都必须 _markIndexChanged()：
+         * addEpisode / removeEpisode / clearAll / _load / reload。
+         * 世代号让请求路径上的 sync 走 O(1) 快路径，绝不重新分词未变化的文档。
+         */
+        this.keywordIndex = new KeywordIndex('memory');
+        this.indexVersion = 0;
         this._load();
+    }
+
+    /** 情节集合变了（增/删/换）：下一次检索需要增量更新索引 */
+    _markIndexChanged() {
+        this.indexVersion++;
     }
 
     /**
@@ -84,7 +103,9 @@ export class MemoryStore {
         this._dirty = false;
         this.episodes = [];
         this.facts = [];
+        this.keywordIndex = new KeywordIndex('memory');
         this._load();
+        this._markIndexChanged();
         return { episodes: this.episodes.length, facts: this.facts.length };
     }
 
@@ -97,14 +118,20 @@ export class MemoryStore {
             this._backupV1();
             // 迁移结果立即落盘为 v2；失败也只在下次写入时重试，不阻塞启动
             this._dirty = true;
+            this._markIndexChanged();
             this.flush();
             console.log(`[Memory] Migrated v1 memory.json → v2: ${this.episodes.length} episodes`);
             return;
         }
 
         if (raw.version === 2) {
-            this.episodes = Array.isArray(raw.episodes) ? raw.episodes : [];
-            this.facts = Array.isArray(raw.facts) ? raw.facts : [];
+            // 老文件里的向量是纯数组：读回来顺手压成 base64（B8-2），
+            // 下一次落盘时文件就变小了。encodeVector 对已是 base64 的值是幂等的。
+            const episodes = Array.isArray(raw.episodes) ? raw.episodes : [];
+            this.episodes = episodes.map((e) => ({ ...e, embedding: encodeVector(e.embedding) }));
+            const facts = Array.isArray(raw.facts) ? raw.facts : [];
+            this.facts = facts.map((f) => ({ ...f, embedding: encodeVector(f.embedding) }));
+            this._markIndexChanged();
             console.log(`[Memory] Loaded ${this.episodes.length} episodes, ${this.facts.length} facts`);
             return;
         }
@@ -127,17 +154,46 @@ export class MemoryStore {
 
     /** 追加一条情节，超出上限丢最旧；不落盘（调用方 scheduleSave） */
     addEpisode({ text, embedding = null, embeddingModel = null, emotionSnapshot = null }) {
-        this.episodes.push({
+        const episode = {
             id: uuidv4(),
             text,
-            embedding,
+            // 向量入库即压缩（B8-2）：磁盘上是 base64(Float32LE)，读取一律走 toVector()
+            embedding: encodeVector(embedding),
             embeddingModel,
             emotionSnapshot: emotionSnapshot || null,
             timestamp: Date.now() / 1000,
-        });
+        };
+        this.episodes.push(episode);
         if (this.episodes.length > config.memory.maxEpisodes) {
             this.episodes = this.episodes.slice(-config.memory.maxEpisodes);
         }
+        this._markIndexChanged();
+        return episode;
+    }
+
+    /** 删除一条情节（B8-1：删除也必须过索引世代号，否则 df 里留着已删文档的词项） */
+    removeEpisode(id) {
+        const idx = this.episodes.findIndex((e) => e.id === id);
+        if (idx === -1) return false;
+        this.episodes.splice(idx, 1);
+        this._markIndexChanged();
+        return true;
+    }
+
+    /** 删除一条事实 */
+    removeFact(id) {
+        const idx = this.facts.findIndex((f) => f.id === id);
+        if (idx === -1) return false;
+        this.facts.splice(idx, 1);
+        return true;
+    }
+
+    /** 全清（「完全重置」语义）：索引也必须一起作废 */
+    clearAll() {
+        this.episodes = [];
+        this.facts = [];
+        this.keywordIndex = new KeywordIndex('memory');
+        this._markIndexChanged();
     }
 
     /** 追加事实；超出上限先丢重要度最低、再丢最旧。返回新建的事实对象（若它自己就被裁掉了则返回 null） */
@@ -150,7 +206,7 @@ export class MemoryStore {
             category: clipText(category, config.textLimits.factCategory) || 'other',
             importance,
             source,
-            embedding,
+            embedding: encodeVector(embedding),
             embeddingModel,
             createdAt: Date.now() / 1000,
             updatedAt: Date.now() / 1000,
@@ -182,6 +238,10 @@ export class MemoryStore {
      * B0-6 后半：返回**写盘结果**。以前 flush 什么都不回，于是
      * 「磁盘满了 / 目录不可写」在整条去抖写盘链路上是完全不可观测的 ——
      * 用户以为对话记忆存下来了，其实每次写都在静默失败。
+     *
+     * B8-2：memory.json 走 `compact` 写盘（不缩进）。这个文件的体积由向量主导，
+     * `JSON.stringify(data, null, 2)` 会让 1024 维向量的每个浮点各占一行
+     * —— 500 条实测 14.6 MB，缩进本身就占了大半。其余数据文件保持原形状不变。
      * @returns {boolean}
      */
     flush() {
@@ -195,7 +255,7 @@ export class MemoryStore {
             version: 2,
             episodes: this.episodes,
             facts: this.facts,
-        });
+        }, { compact: true });
         if (!ok) this._dirty = true;      // 没写成功就仍然算脏，下次继续尝试
         return ok;
     }

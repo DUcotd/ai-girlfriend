@@ -10,6 +10,7 @@
 import { config } from '../../config.js';
 import { EmbeddingClient } from './EmbeddingClient.js';
 import { scoreEpisodes, isNearDuplicateText } from './KeywordScorer.js';
+import { toVector } from './vectorCodec.js';
 
 export class MemoryRetriever {
     /**
@@ -29,8 +30,8 @@ export class MemoryRetriever {
         const mode = config.memory.retrieval.mode;
         if (mode === 'keyword') return 'keyword';
         if (mode === 'embedding') return 'embedding';
-        // auto：嵌入客户端可用且库里至少有一条向量，语义检索才有意义
-        const hasVectors = this.store.episodes.some((e) => e.embedding);
+        // auto：嵌入客户端**配了且健康**（B1-4 的 available 语义）且库里至少有一条向量
+        const hasVectors = this.store.episodes.some((e) => !!toVector(e.embedding));
         return this.embedding.available && hasVectors ? 'embedding' : 'keyword';
     }
 
@@ -88,8 +89,10 @@ export class MemoryRetriever {
 
         const scored = [];
         for (const mem of this.store.episodes) {
-            if (!mem.embedding) continue;
-            const semanticScore = EmbeddingClient.cosineSimilarity(queryEmbedding, mem.embedding);
+            // B8-2：向量形状统一过 toVector（base64 / 数组 / Float32Array 都吃）
+            const vec = toVector(mem.embedding);
+            if (!vec) continue;
+            const semanticScore = EmbeddingClient.cosineSimilarity(queryEmbedding, vec);
             // 阈值含边界（与 NarrativeRetriever 的 `>= threshold` 同一把尺子）：
             // 两处一个用 > 一个用 >= 会让「同一套语义门槛」在不同层表现不一致（CORE-15）
             if (semanticScore < semanticThreshold) continue;
@@ -101,14 +104,14 @@ export class MemoryRetriever {
             const recency = recencyWeight * Math.pow(2, -(nowSec - (mem.timestamp || nowSec)) / halfLifeSec);
             // 排序与过滤用同一把尺子：先按语义门槛过滤，再按综合分排序
             const score = semanticScore + emotionScore * eWeight + recency;
-            scored.push({ id: mem.id, text: mem.text, score, semanticScore, embedding: mem.embedding });
+            scored.push({ id: mem.id, text: mem.text, score, semanticScore, embedding: vec });
         }
 
         scored.sort((a, b) => b.score - a.score);
         return scored.slice(0, MemoryRetriever._poolSize(topK));
     }
 
-    /** 方案 B：BM25 风格关键词打分 + recency */
+    /** 方案 B：BM25 风格关键词打分 + recency（打分实现与增量索引见 KeywordScorer/KeywordIndex） */
     _keywordSearch(query, topK) {
         const { keywordMinHits, recencyWeight, recencyHalfLifeDays } = config.memory.retrieval;
         return scoreEpisodes({
@@ -117,6 +120,10 @@ export class MemoryRetriever {
             minHits: keywordMinHits,
             recencyWeight,
             recencyHalfLifeDays,
+            // B8-1：把 store 持有的增量索引与世代号交给打分层 ——
+            // 文档没变就一个词都不重新分（旧写法每次查询重切整库）
+            index: this.store.keywordIndex,
+            indexVersion: this.store.indexVersion,
         }).slice(0, MemoryRetriever._poolSize(topK));
     }
 
@@ -128,9 +135,11 @@ export class MemoryRetriever {
         const threshold = config.memory.dedupSimilarity;
         const kept = [];
         for (const cand of selected) {
+            const candVec = toVector(cand.embedding);
             const dup = kept.some((k) => {
-                if (cand.embedding && k.embedding) {
-                    return EmbeddingClient.cosineSimilarity(cand.embedding, k.embedding) > threshold;
+                const kVec = toVector(k.embedding);
+                if (candVec && kVec) {
+                    return EmbeddingClient.cosineSimilarity(candVec, kVec) > threshold;
                 }
                 return isNearDuplicateText(cand.text, k.text, threshold);
             });

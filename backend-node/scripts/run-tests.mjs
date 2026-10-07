@@ -42,6 +42,7 @@ const SUITES = [
     'test-audit-b3.mjs',
     'test-audit-b5b.mjs',
     'test-audit-b7.mjs',
+    'test-audit-b8.mjs',
     'test-audit-qa.mjs',
 ];
 

@@ -5,36 +5,61 @@
  *   score = Σ_term idf(t) · tf·(k1+1) / (tf + k1·(1-b+b·dl/avgdl))
  * 命中词项数必须 ≥ minHits 才入选（中日韩 bigram 单词项命中的噪音太大），
  * 再叠加 recency 加分后参与统一排序。
+ *
+ * B8-1 之后这一层的形状：
+ *   - 分词与 df 来自 KeywordIndex 的**增量索引**（文档没变就不再分词，
+ *     见 memory/KeywordIndex.js 顶部说明与审计 CORE-07 的实测数据）；
+ *   - idf 在查询层**按词项算一次**，旧写法把它放在文档循环里（每篇 × 每词）；
+ *   - 查询词项数截断到 config.memory.retrieval.maxQueryTerms（只截查询、不截文档）。
+ * 记忆层与叙事层共用同一个索引与同一套查询预处理（单一事实源）。
  */
-import { tokenize, tokenizeToMap, jaccardSimilarity } from './textSim.js';
+import { jaccardSimilarity } from './textSim.js';
+import { KeywordIndex } from './KeywordIndex.js';
+import { config } from '../../config.js';
 
 const K1 = 1.2;
 const B = 0.75;
 
 /**
- * 分词结果缓存：按原文缓存词频表与长度。
- *
- * 旧实现每次查询都对整个情节库重新分词（500 条 × 每轮），叠加下面 df 在
- * 「每文档 × 每词」内层重算，构成 O(n²·T) —— 实测 500 条 + 91 词查询要 2.9 秒，
- * 而它是在请求路径上 await 的，等于一条长消息冻结整个进程（审计 CORE-07）。
- * 缓存只在模块内、按文本内容键（不写进 episode 对象，避免污染落盘 JSON）。
+ * 没显式传索引时的默认索引（按**文档数组身份**各存一份）。
+ * 用 WeakMap：数组被丢弃后索引随之可回收，不会变成第二份无界缓存
+ * （旧实现的模块级 docCache 按文本内容键，1000 条封顶，改一次文本就多一份）。
  */
-const DOC_CACHE_MAX = 2000;
-const docCache = new Map();
+const implicitIndexes = new WeakMap();
 
-function docStats(text) {
-    const cached = docCache.get(text);
-    if (cached) return cached;
-    const counts = tokenizeToMap(text);
-    let length = 0;
-    for (const n of counts.values()) length += n;
-    const stats = { counts, length, terms: [...counts.keys()] };
-    if (docCache.size >= DOC_CACHE_MAX) {
-        // 简单 FIFO 逐旧：分词是纯函数，丢缓存只损失时间不损失正确性
-        docCache.delete(docCache.keys().next().value);
+function resolveIndex(episodes, provided, version) {
+    if (provided instanceof KeywordIndex) {
+        provided.sync(episodes, { version });
+        return provided;
     }
-    docCache.set(text, stats);
-    return stats;
+    let idx = implicitIndexes.get(episodes);
+    if (!idx) {
+        idx = new KeywordIndex('keyword');
+        implicitIndexes.set(episodes, idx);
+    }
+    idx.sync(episodes, { version });
+    return idx;
+}
+
+/**
+ * 查询预处理：切词 + 截断 + 每个词项算一次 idf（记忆/叙事共用）。
+ * @param {KeywordIndex} index
+ * @param {string} query
+ * @param {number} [maxQueryTerms]
+ * @returns {Array<{term:string, idf:number}>}
+ */
+export function prepareKeywordQuery(index, query, maxQueryTerms = config.memory.retrieval.maxQueryTerms) {
+    return index.prepareQuery(query, maxQueryTerms, K1);
+}
+
+/** 词项在文档中的命中数（文档侧用索引里的词项集，不再重新分词/归一化） */
+export function countHits(queryTerms, stats) {
+    if (!stats) return 0;
+    let hits = 0;
+    for (const q of queryTerms) {
+        if (stats.counts.has(typeof q === 'string' ? q : q.term)) hits++;
+    }
+    return hits;
 }
 
 /**
@@ -46,44 +71,40 @@ function docStats(text) {
  * @param {number} opts.minHits 最少命中词项数
  * @param {number} opts.recencyWeight recency 加分上限
  * @param {number} opts.recencyHalfLifeDays recency 半衰期（天）
+ * @param {KeywordIndex} [opts.index] 该库的增量索引（调用方持有；缺省时按数组身份建一份）
+ * @param {number} [opts.indexVersion] 调用方的索引世代号（store 增删情节时自增，走 O(1) 快路径）
+ * @param {number} [opts.maxQueryTerms] 查询词项上限（默认 config.memory.retrieval.maxQueryTerms）
  * @returns {Array<{id, text, score, baseScore, hits}>} 按 score 降序
  */
-export function scoreEpisodes({ episodes, query, minHits, recencyWeight, recencyHalfLifeDays }) {
-    const terms = tokenize(query);
-    if (terms.length === 0 || !Array.isArray(episodes) || episodes.length === 0) return [];
+export function scoreEpisodes({
+    episodes,
+    query,
+    minHits,
+    recencyWeight,
+    recencyHalfLifeDays,
+    index = null,
+    indexVersion,
+    maxQueryTerms = config.memory.retrieval.maxQueryTerms,
+}) {
+    if (!Array.isArray(episodes) || episodes.length === 0) return [];
+    const idx = resolveIndex(episodes, index, indexVersion);
+    const terms = prepareKeywordQuery(idx, query, maxQueryTerms);
+    if (terms.length === 0) return [];
 
     const nowSec = Date.now() / 1000;
     const halfLifeSec = recencyHalfLifeDays * 86400;
-
-    const docs = episodes.map((ep) => {
-        const stats = docStats(ep.text || '');
-        return { ep, stats };
-    });
-    const avgdl = docs.reduce((s, d) => s + d.stats.length, 0) / docs.length || 1;
-
-    // df 一次预计算：旧写法在每篇文档的每个词上再 filter 一遍全库（O(n²·T)）
-    const df = new Map();
-    for (const term of terms) {
-        let count = 0;
-        for (const { stats } of docs) {
-            if (stats.counts.has(term)) count++;
-        }
-        df.set(term, count);
-    }
-    const idfOf = (term) => {
-        const d = df.get(term) || 0;
-        return Math.log(1 + (docs.length - d + 0.5) / (d + 0.5));
-    };
+    const avgdl = idx.avgdl;
+    // idf 已经按词项算过一次，这里只需要那个「全部命中满饱和」的理论峰值
+    const idfSum = terms.reduce((s, t) => s + t.idf, 0);
 
     const results = [];
-    for (const { ep, stats } of docs) {
+    for (const ep of episodes) {
+        const stats = idx.statsOf(String(ep?.id ?? ep?.text ?? ''));
+        if (!stats) continue;
         let baseScore = 0;
         let hits = 0;
-        let idfSum = 0;
-        for (const term of terms) {
+        for (const { term, idf } of terms) {
             const tf = stats.counts.get(term) || 0;      // 真词频（旧实现恒为 1）
-            const idf = idfOf(term);
-            idfSum += idf;
             if (tf === 0) continue;
             hits++;
             baseScore += idf * (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * (stats.length / avgdl)));
@@ -120,3 +141,5 @@ export function isNearDuplicateText(textA, textB, threshold) {
     if (a === b) return true;
     return jaccardSimilarity(a, b) > threshold;
 }
+
+export { KeywordIndex };

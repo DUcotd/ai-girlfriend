@@ -8,12 +8,18 @@
  *   - getRandomStory(excludeRecentN)：供主动消息「主动回顾共同经历」用（升级 memory_share）。
  *
  * 双模设计（与 MemoryRetriever 同思路，但此处刻意轻量）：
- *   嵌入可用时用余弦相似度入选；不可用（无 Key / 调用失败）时退化为关键词命中 + 重要度/新近加权。
- *   叙事池通常只有几十条，全量打分成本可忽略，无需索引。
+ *   嵌入可用且健康时用余弦相似度入选；不可用（无 Key / 熔断中 / 调用失败）时退化为关键词命中 + 重要度/新近加权。
+ *
+ * B8-1：关键词这条路的**实现**与记忆层共用同一份（KeywordIndex 增量索引 +
+ * KeywordScorer 的查询预处理）。旧写法在这里另写了三个小函数：query 每条叙事都重切一遍、
+ * 候选文本每次重 normalizeText 一遍、`_keywordScore` 内部又调一次 `_keywordHits`
+ * （同一件事做两遍）。叙事池只有几十条时看不出问题，但它与记忆层是**同一套语义**，
+ * 两处各写必然漂移 —— 所以收敛成单一实现，并把「不重复分词」这件事一次性做对。
  */
 import { config } from '../../config.js';
 import { EmbeddingClient } from '../memory/EmbeddingClient.js';
-import { tokenize, normalizeText } from '../memory/textSim.js';
+import { KeywordIndex, prepareKeywordQuery, countHits } from '../memory/KeywordScorer.js';
+import { toVector } from '../memory/vectorCodec.js';
 
 /** 从叙事文本里取检索用的拼接文本（title + summary + tags）。 */
 function narrativeText(n) {
@@ -84,6 +90,8 @@ export class NarrativeRetriever {
     constructor({ store, embedding = null } = {}) {
         this.store = store;
         this.embedding = embedding;
+        /** 叙事池的增量关键词索引（B8-1，与记忆层同一实现；对齐见 _syncIndex） */
+        this._keywordIndex = new KeywordIndex('narrative');
     }
 
     // ==================== 相关叙事检索（注入用） ====================
@@ -117,14 +125,17 @@ export class NarrativeRetriever {
     /** 语义检索：余弦超阈值入选，按相似度 + 重要度微调排序。 */
     _semanticSearch(query, queryEmbedding, topK) {
         const threshold = config.narrative.semanticThreshold;
+        // query 只切一次（旧写法每个候选都重切一遍 + 再 normalize 一遍候选文本）
+        const terms = this._prepareQuery(query);
         const scored = [];
         for (const n of this.store.narratives) {
+            const vec = toVector(n.embedding);
             let score = 0;
-            if (n.embedding) {
-                score = EmbeddingClient.cosineSimilarity(queryEmbedding, n.embedding);
+            if (vec) {
+                score = EmbeddingClient.cosineSimilarity(queryEmbedding, vec);
             } else {
                 // 该条无嵌入（历史遗留 / 嵌入失败）→ 退化为关键词贡献
-                score = this._keywordScore(query, n) * 0.5;
+                score = this._keywordScoreFor(terms, n) * 0.5;
             }
             if (score >= threshold) {
                 scored.push({ n, score: score + n.importance * 0.01 });
@@ -137,12 +148,17 @@ export class NarrativeRetriever {
     /** 关键词检索：命中词项数为主，重要度 + 新近微调。 */
     _keywordSearch(query, topK) {
         const minHits = config.narrative.keywordMinHits;
+        const terms = this._prepareQuery(query);
         const scored = [];
         for (const n of this.store.narratives) {
-            const hits = this._keywordHits(query, n);
-            if (hits >= minHits) {
-                scored.push({ n, score: hits + this._keywordScore(query, n) });
-            }
+            // 一次遍历同时得到 hits 与辅助分（旧写法 _keywordScore 里又调一次 _keywordHits）
+            const stats = this._statsOf(n);
+            if (!stats) continue;
+            const hits = countHits(terms, stats);
+            if (hits < minHits) continue;
+            const hitRatio = terms.length > 0 ? hits / terms.length : 0;
+            const importancePart = (n.importance || 3) / 5 * 0.3;
+            scored.push({ n, score: hits + hitRatio + importancePart });
         }
         // 命中相同（常见于短 query）时，以重要度→新近兜底排序，保证注入优先给重要事件
         scored.sort((a, b) =>
@@ -153,23 +169,41 @@ export class NarrativeRetriever {
         return scored.slice(0, Math.max(0, topK)).map((s) => s.n);
     }
 
-    /** query 词项在叙事文本里的命中数。 */
-    _keywordHits(query, n) {
-        const terms = tokenize(query);
-        if (terms.length === 0) return 0;
-        const norm = normalizeText(narrativeText(n));
-        let hits = 0;
-        for (const t of terms) {
-            if (norm.includes(t)) hits++;
-        }
-        return hits;
+    /** 取该条的分词统计（索引已由 _prepareQuery 对齐；文本没变的条目不重新分词）。 */
+    _statsOf(n) {
+        return this._keywordIndex.statsOf(String(n?.id ?? ''));
     }
 
-    /** 关键词辅助分：命中率 + 重要度 + 新近（0~1 量级，仅做二次排序）。 */
-    _keywordScore(query, n) {
-        const terms = tokenize(query);
+    /**
+     * 把索引对齐到当前叙事池。
+     * ⚠️ 每次检索只在 _prepareQuery 里对齐**一次**（逐条对齐会把成本变成 O(D²)）；
+     * 对齐本身只对「文本变了/新增/被删」的条目重新分词，其余是 Map 查找。
+     */
+    _syncIndex() {
+        this._keywordIndex.sync(this.store?.narratives || [], {
+            keyOf: (n) => String(n?.id ?? ''),
+            textOf: (n) => narrativeText(n),
+        });
+    }
+
+    /** query 切词 + 词项上限截断 + 每词一次 idf（与记忆层同一入口） */
+    _prepareQuery(query) {
+        this._syncIndex();
+        return prepareKeywordQuery(this._keywordIndex, query, config.memory.retrieval.maxQueryTerms);
+    }
+
+    /**
+     * 关键词辅助分（0~1 量级 + 重要度项）：命中率 + 重要度。
+     * ⚠️ 入参是**已经算好的查询词项**，本函数不再切词、也不再回头数命中次数。
+     * @param {Array<{term:string, idf:number}>} terms
+     * @param {object} n
+     */
+    _keywordScoreFor(terms, n) {
         if (terms.length === 0) return 0;
-        const hitRatio = this._keywordHits(query, n) / terms.length;
+        const stats = this._statsOf(n);
+        if (!stats) return 0;
+        const hits = countHits(terms, stats);
+        const hitRatio = hits / terms.length;
         const importancePart = (n.importance || 3) / 5 * 0.3;
         return hitRatio + importancePart;
     }

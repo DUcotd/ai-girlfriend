@@ -31,6 +31,9 @@ import { executeTaskAction } from './taskActions.js';
 import { dataPath, readJson, writeJson } from '../utils/jsonStore.js';
 import { config, REASONING_EFFORTS } from '../config.js';
 import { createStreamFilter, splitDelta, extractReasoning, parseFullText } from './streamFilter.js';
+import { trimHistoryPairAware, selectPromptWindow, enforceRequestBudget } from './historyWindow.js';
+import { buildBudgetedSystemContext, describeTrims } from './prompts/promptBudget.js';
+import { LLM_CHANNELS, record as recordCall, startTurn as startLlmTurn, snapshot as llmCallSnapshot } from '../utils/llmCalls.js';
 import { normalizeDelta, blendDeltas, coerceAffinityChange, PAD_AXES } from './emotionDelta.js';
 import { computeResonanceDelta, combineWithResonance } from './emotionResonance.js';
 import { getStageForAffinity, RELATIONSHIP_STAGES } from './relationshipStages.js';
@@ -43,7 +46,29 @@ import { createSnapshot } from './backup.js';
 dotenv.config();
 
 const STATE_FILE = 'state.json';
-const MAX_HISTORY = 200;
+/**
+ * 对话历史的持久化条数上限：来自 config.chat.maxHistoryEntries（B8-7）。
+ * 以前这是本文件里的常量 200，而设置页的 maxPromptHistory 能选到 500、
+ * 「无限上下文」的注释还声称受它约束 —— 用户调到 500 实际只有 199 生效。
+ * 现在两边对齐：默认 500，env 可调（CHAT_MAX_HISTORY_ENTRIES）。
+ */
+const maxHistoryEntries = () => Math.max(1, config.chat.maxHistoryEntries || 500);
+
+/**
+ * 入库前的字符上限（B8-4）：截断 + 一行只报长度的日志。
+ * 只在真的截到时才打日志（正常轮次一个字都不该多打）。
+ * @param {string} text
+ * @param {number} max
+ * @param {string} label 中文标签（进日志用，不含任何原文）
+ * @returns {string}
+ */
+function clipToConfig(text, max, label) {
+    const s = typeof text === 'string' ? text : String(text ?? '');
+    if (!Number.isFinite(max) || max <= 0 || s.length <= max) return s;
+    console.warn(`[State] ${label} 超出入库上限 ${max} 字符（实际 ${s.length}），已截断入库`);
+    return s.slice(0, max);
+}
+
 // 人设 prompt 长度上限：它会挂在每一条请求的 history[0] 上，不设上限等于
 // 允许一次输入永久抬高所有后续请求的 token 成本。
 const SYSTEM_PROMPT_MAX = 8000;
@@ -481,29 +506,41 @@ class AiGirlfriend {
     }
 
     /**
-     * 构造发送给 LLM 的消息：system prompt + 最近 N 条历史。
-     * 完整历史仍保留在 this.history 并落盘，这里只裁剪 prompt 以加快生成。
-     * 条数 N 即 config.chat.maxPromptHistory（设置页「高级选项」可改）；
-     * 开启「无限上下文」（config.chat.unlimitedContext）时带上全部保留的对话，
-     * 不再按条数裁剪（持久化上限 MAX_HISTORY 兜底，token 不会无界膨胀）。
+     * 模型调用计数快照（B1-2）。
+     *
+     * 只经 `utils/llmCalls.js` 这一个出口，路由与 /health 都调这里 ——
+     * 计数口径如果散成两份，「本轮到底调了几次」就又变成需要心算的东西了。
+     * 内容只有通道名与次数，不含任何文本（日志隐私规则同样适用于状态接口）。
+     */
+    getLlmCalls() {
+        return llmCallSnapshot();
+    }
+
+    /**
+     * 构造发送给 LLM 的「人设 + 对话窗口」部分（动态 system 块由 _prepare 插在两者之间）。
+     *
+     * B8-6：条数裁剪与字符预算都交给 historyWindow 的同一份实现（成对、确定性、
+     * 永不把 user 和它的回答拆开）。旧写法在这里另写一套 `slice(1).slice(-max)` +
+     * 「开头是 assistant 就再丢一条」，而主动消息会往历史里塞孤立 assistant，
+     * 那个补丁刚好会误删一条 user。
+     *
+     * unlimitedContext 现在也是**有界**的：条数受 chat.maxHistoryEntries、
+     * 字符受 prompt.budget.maxHistoryChars（审计 CORE-09：所谓「无限」等于无界 prefill）。
      */
     _buildPromptMessages() {
-        // history 里的 assistant 消息可能带 thought（内心独白），只对前端有意义，
-        // 这里统一剥成 { role, content }，避免多余字段打进 LLM 请求。
-        const toPromptMsg = (m) => ({ role: m.role, content: m.content });
-        if (config.chat.unlimitedContext) {
-            return this.history.map(toPromptMsg);
+        const budget = config.prompt.budget;
+        const { messages, droppedEntries, droppedChars, clipped } = selectPromptWindow(this.history, {
+            maxEntries: config.chat.maxPromptHistory,
+            unlimited: !!config.chat.unlimitedContext,
+            maxChars: budget.maxHistoryChars,
+            clipChars: budget.maxHistoryChars,
+        });
+        this._lastWindowStats = { droppedEntries, droppedChars, clipped, entries: messages.length };
+        if (droppedEntries > 0 || droppedChars > 0) {
+            // 只报长度与条数，不报内容（utils/log.js 的隐私规则）
+            console.log(`[Prompt] 历史窗口按预算收缩：丢 ${droppedEntries} 条 / ${droppedChars} 字，截断 ${clipped} 条（人设与本轮提问不参与裁剪）`);
         }
-        const max = config.chat.maxPromptHistory;
-        // history[0] 固定为 system prompt
-        if (this.history.length <= max + 1) return this.history.map(toPromptMsg);
-
-        let tail = this.history.slice(1).slice(-max);
-        // 保证上下文从 user 消息开始，避免出现孤立的 assistant 回复
-        if (tail.length > 0 && tail[0].role === 'assistant') {
-            tail = tail.slice(1);
-        }
-        return [toPromptMsg(this.history[0]), ...tail.map(toPromptMsg)];
+        return messages;
     }
 
     /**
@@ -518,15 +555,18 @@ class AiGirlfriend {
         // 快照要在当前 tick 取，避免后台执行时读到已被后续对话改动的状态
         const snapshot = this.emotionEngine.getSnapshot();
         const generation = this._stateGeneration;
-        setImmediate(() => {
+        setImmediate(async () => {
             // 期间发生过 resetAll()：这一轮的后台副作用全部作废，
             // 否则刚清空的记忆/用户情绪/叙事会被重置前那一轮的数据重新灌满。
             if (generation !== this._stateGeneration) {
                 console.log('[State] 后台收尾已作废（期间执行了完全重置）');
                 return;
             }
+            // 情节写入的 promise 要留着：叙事抽取需要拿它的 episodeId 当 sourceEpisodeId
+            // （B2-10 接线），不存下来就只能再等一次或干脆拿不到。
+            let turnPromise = null;
             if (this.memory) {
-                this.memory
+                turnPromise = this.memory
                     .recordTurn(userInput, replyText, { emotionSnapshot: snapshot })
                     .catch((e) => console.error(`[Chat] recordTurn failed: ${e.message}`));
             }
@@ -563,19 +603,36 @@ class AiGirlfriend {
                     ts: Date.now(),
                 });
             }
-            // 【REQ-04 / I16】叙事里程碑 → 发布 narrative_milestone 事件（纪念日 / 约定）。
-            // 放在抽取调度之后：里程碑从叙事库派生，emit 时读取的是当前已入库的叙事。
-            try {
-                this._publishNarrativeMilestones();
-            } catch (e) {
-                console.error(`[Chat] publishNarrativeMilestones failed: ${e.message}`);
-            }
+            // 【REQ-04 / I16】叙事里程碑（纪念日 / 约定）的发布点。
+            // B8-8：顺序必须是「先抽取、后发布」。旧写法把发布排在抽取**之前**，
+            // 而注释写的正好相反（「放在抽取调度之后」）—— 于是本轮刚抽出来的纪念日
+            // 在这一轮永远发不出去，而 anniversaryTrigger 按天去重，丢失窗口是 24 小时。
+            // 现在挂在叙事队列尾上：抽取跑完（或被节流跳过）之后才发布，同轮即可触发。
+            const publishMilestones = () => {
+                try {
+                    this._publishNarrativeMilestones();
+                } catch (e) {
+                    console.error(`[Chat] publishNarrativeMilestones failed: ${e.message}`);
+                }
+            };
             // 共同经历叙事抽取（REQ-03，I9）：三层节流命中才调 LLM，写入叙事库。
+            let episodeId = null;
             try {
-                this._scheduleNarrativeExtraction(userInput, replyText, { affinityDelta, userEmotionTurned });
+                // recordTurn 的返回里有本轮情节的 id —— 叙事要拿它当 sourceEpisodeId，
+                // 「我们的故事」才能回溯到当初那段对话（B2-10 接线）
+                const recorded = turnPromise ? await turnPromise : null;
+                episodeId = recorded?.episodeId || null;
+            } catch (e) {
+                console.error(`[Chat] recordTurn episodeId unavailable: ${e.message}`);
+            }
+            try {
+                this._scheduleNarrativeExtraction(userInput, replyText, {
+                    affinityDelta, userEmotionTurned, episodeId,
+                });
             } catch (e) {
                 console.error(`[Chat] narrative extraction schedule failed: ${e.message}`);
             }
+            this._afterNarrativeQueue(publishMilestones);
             try {
                 this._saveState();
             } catch (e) {
@@ -753,11 +810,19 @@ class AiGirlfriend {
         }
 
         // ========== 构建消息 ==========
-        // 只把最近若干条历史送进 prompt：上下文越短，prefill 与生成都越快。
-        // 完整历史仍持久化在 state.json，不受影响。
-        const messagesToSend = this._buildPromptMessages();
+        // 顺序固定为：人设 history[0] → 【本轮上下文】→ 对话窗口 → 本轮提问。
+        // ⚠️ 这条顺序是 B8-6 修的第二个问题：旧写法把动态 system 块 push 在**全部历史之后**，
+        // 而主动消息链路更是连发 4 条 system —— 要求「system 只能在开头、不得中途插入」的
+        // 严格服务商今天会直接 400（审计 CORE-21）。
+        const baseMessages = this._buildPromptMessages();
+        const hasPersona = baseMessages.length > 0 && baseMessages[0].role === 'system';
+        const personaMessages = hasPersona ? [baseMessages[0]] : [];
+        const windowMessages = baseMessages.slice(hasPersona ? 1 : 0);
 
-        const consolidatedSystemInfo = buildSystemContext({
+        // 一轮的调用计数从这里起算（B1-2：「本轮」= 最近一次对话轮 / 主动消息轮）
+        startLlmTurn();
+
+        const { text: consolidatedSystemInfo, trimmed } = buildBudgetedSystemContext(buildSystemContext, {
             nickname: this.nickname,
             taskText,
             contextStr,
@@ -769,8 +834,20 @@ class AiGirlfriend {
             narrativePrompt,
             taskActionText,
         });
-        messagesToSend.push({ role: "system", content: consolidatedSystemInfo });
-        messagesToSend.push({ role: "user", content: userInput });
+        if (trimmed.length > 0) {
+            // 一行、只有长度（隐私规则）：要能回答「她这轮为什么没提那条记忆」
+            console.log(`[Prompt] 注入预算裁剪: ${describeTrims(trimmed)}`);
+        }
+
+        const { messages: messagesToSend, droppedEntries: requestDropped } = enforceRequestBudget(
+            personaMessages,
+            windowMessages,
+            [{ role: "system", content: consolidatedSystemInfo }, { role: "user", content: userInput }],
+            config.prompt.budget.maxRequestChars
+        );
+        if (requestDropped > 0) {
+            console.log(`[Prompt] 请求总量超预算，对话窗口再让路 ${requestDropped} 条（人设/上下文/本轮提问保留）`);
+        }
 
         return { messagesToSend, nudgeTaskIds };
     }
@@ -811,11 +888,52 @@ class AiGirlfriend {
         }
     }
 
-    /** 裁剪历史：保留最近 MAX_HISTORY 条（含 system prompt），成对删除避免孤立 assistant */
+    /**
+     * 裁剪历史：保留最近 config.chat.maxHistoryEntries 条（含 history[0] 的人设），
+     * **按成对单元**丢弃（B8-6：三处裁剪收敛到 historyWindow 的同一份实现）。
+     *
+     * 旧写法是 `while (len > MAX) splice(1, 2)` —— 它假设历史严格 user/assistant 交替，
+     * 而 recordProactiveMessage 会 push 孤立的 assistant（她主动说话、用户还没回），
+     * 从那一刻起「每次砍两条」就错位，之后每轮都可能删掉一条 user、留下别的轮的回答。
+     */
     _trimHistory() {
-        while (this.history.length > MAX_HISTORY) {
-            this.history.splice(1, 2); // 跳过 [0]=system prompt
+        const { history, dropped } = trimHistoryPairAware(this.history, maxHistoryEntries());
+        this.history = history;
+        if (dropped > 0) {
+            console.log(`[State] 历史按单元裁剪丢弃 ${dropped} 条（上限 ${maxHistoryEntries()} 条，只丢整单元）`);
         }
+        return dropped;
+    }
+
+    /**
+     * 本轮收尾：把所有引擎去抖中的待写状态**一次性**落盘（B8-5）。
+     *
+     * 为什么是显式 flush 而不是只靠微任务：微任务保证「本轮结束就写」，但它写没写成、
+     * 哪几个失败，调用方拿不到 —— 而 B0-6 的语义要求「失败保持脏标记 + 计入日志」，
+     * resetAll / 档案导出前也必须能「等到全部落盘完成」这个确定答案。
+     *
+     * @returns {string[]} 落盘失败的引擎名（空数组 = 全部成功）
+     */
+    _flushEngines() {
+        const failed = [];
+        const targets = [
+            ['emotion', this.emotionEngine],
+            ['affinity', this.affinityEngine],
+            ['personality', this.personalityDrift],
+        ];
+        for (const [name, engine] of targets) {
+            if (!engine || typeof engine.flushSave !== 'function') continue;
+            try {
+                if (engine.flushSave() === false) failed.push(name);
+            } catch (e) {
+                failed.push(name);
+                console.error(`[Save] ${name} 落盘抛错：${e?.message || e}`);
+            }
+        }
+        if (failed.length > 0) {
+            console.error(`[Save] 本轮有 ${failed.length} 个引擎未持久化：${failed.join(', ')}`);
+        }
+        return failed;
     }
 
     /**
@@ -918,20 +1036,32 @@ class AiGirlfriend {
         this.history.push({ role: "user", content: userInput });
         // 内心独白随消息一起持久化，刷新后 hover 小图标仍可查看；
         // 送进 LLM 时会被 _buildPromptMessages 剥掉，不会污染上下文。
-        const assistantMsg = { role: "assistant", content: replyText };
-        if (innerThought) assistantMsg.thought = innerThought;
+        //
+        // ⚠️ 入库前**必须**截断（B8-4，审计 CORE-20）：max_tokens 默认不传，模型一口气
+        // 写 2 万字是完全可能的，而 HTTP 层的 thinkingMaxChars 只截响应、不截磁盘 ——
+        // 那条脏数据就会永久留在 state.json 里，之后每一轮都回灌进 prompt。
+        // 截断而不是丢弃：正文是用户要看的，截总比没有好。
+        const assistantMsg = {
+            role: "assistant",
+            content: clipToConfig(replyText, config.chat.maxAssistantChars, 'assistant 正文'),
+        };
+        if (innerThought) {
+            assistantMsg.thought = clipToConfig(innerThought, config.chat.maxThoughtChars, '内心独白');
+        }
         this.history.push(assistantMsg);
 
-        // 裁剪历史：保留最近 MAX_HISTORY 条消息（含 system prompt）
-        while (this.history.length > MAX_HISTORY) {
-            this.history.splice(1, 2); // 跳过 [0]=system prompt，成对删除
-        }
+        // 裁剪历史（与 _trimHistory / recordProactiveMessage 同一份成对实现）
+        this._trimHistory();
 
         // 回复已经生成完毕，记忆 embedding 与落盘不再阻塞响应
         // affinity 变化（change）同时传给叙事层做「好感度跃迁」关键信号判定（REQ-03）
         // userEmotionFused 复用上面共振算过的那一份：两个通道必须对「他此刻什么情绪」
         // 给出同一个答案，否则她感受到的和他被记录到的会是两笔账。
         this._persistAfterReply(userInput, replyText, llmUserEmotion, change, userEmotionFused);
+
+        // B8-5：本轮三个引擎的变更（emotion/affinity/personality）在这里一次落盘。
+        // 失败可见（B0-6 语义）：保持脏标记 + 记进返回值 + 计入日志，绝不当成功。
+        const engineFlushFailures = this._flushEngines();
 
         return {
             reply: replyText,
@@ -944,6 +1074,8 @@ class AiGirlfriend {
             innerThought,
             modelReasoning,
             taskResult: taskResult ?? null,
+            // 本轮未持久化的引擎名（内部观测/测试用；前端不需要也不该按它分支）
+            engineFlushFailures,
             // 本轮她因他而起的那部分情绪（REQ-02），null = 未启用或无信号。
             // 只给内部/测试观测，不进 HTTP 契约。
             emotionResonance: resonance,
@@ -961,6 +1093,7 @@ class AiGirlfriend {
         if (done) return done;
 
         try {
+            recordCall(LLM_CHANNELS.CHAT);      // B1-2：主对话（非流式）计数
             const completion = await this.openai.chat.completions.create(
                 this._buildChatParams(messagesToSend)
             );
@@ -1009,6 +1142,7 @@ class AiGirlfriend {
         let visibleText = "";
 
         try {
+            recordCall(LLM_CHANNELS.CHAT_STREAM);   // B1-2：主对话（流式）通道单独计
             const stream = await this.openai.chat.completions.create({
                 ...this._buildChatParams(messagesToSend),
                 stream: true
@@ -1242,28 +1376,40 @@ class AiGirlfriend {
         const contextInfo = await this._buildProactiveContext(reason, data);
         const scenarioPrompt = buildProactivePrompt(reason, data, this.affinity);
 
+        // B8-6：主动消息原来连发 **4 条 system**（人设 / 阶段+情绪+性格 / 场景指令 / 人设指令），
+        // 严格校验的服务商（要求 system 只在开头、不允许中途穿插）今天直接 400。
+        // 现在固定 2 条：① 人设（history[0] 那份，必须独立，它是「她是谁」的唯一答案）
+        //                ② 其余三段合并成一条动态上下文。
+        // 顺序也是修的：对话窗口排在两条 system **之后**（原来夹在人设与后两条 system 之间）。
+        const dynamicSystem = [
+            buildRelationshipContext(this.emotionEngine.getRelationshipContext(this.affinity)),
+            this.emotionEngine.getPromptInjection(),
+            this.personalityDrift.getPromptInjection(),
+            buildProactiveDirective(reason, this.affinity, contextInfo),
+            buildProactivePersonaDirective(scenarioPrompt, this.affinity),
+        ].filter(Boolean).join('\n\n');
+
+        // 人设 system prompt 固定带上：此前用 history.slice(-10)，历史短时才会
+        // 恰好包含它、历史长了就被挤掉，导致主动消息的人设时有时无。
+        const windowed = selectPromptWindow(
+            [{ role: 'system', content: this.systemPrompt }, ...this.history.filter((m) => m.role !== 'system')],
+            {
+                maxEntries: config.proactive.historyEntries,
+                maxChars: config.prompt.budget.maxHistoryChars,
+                clipChars: config.prompt.budget.maxHistoryChars,
+            }
+        ).messages;
+        // 输入数组的第一条就是我们自己放进去的人设 system，所以窗口结果恒为 [人设, ...对话]
         const messages = [
-            // 人设 system prompt 固定带上：此前用 history.slice(-10)，历史短时才会
-            // 恰好包含它、历史长了就被挤掉，导致主动消息的人设时有时无。
-            { role: "system", content: this.systemPrompt },
-            // 同样剥掉 thought 与 system，只把最近 10 条真实对话交给 LLM
-            ...this.history
-                .filter(m => m.role !== 'system')
-                .slice(-10)
-                .map(m => ({ role: m.role, content: m.content })),
-            // 动态上下文三件套与主对话 _prepare() 同源：此前主动消息只有阶段标签、
-            // 没有情绪/性格，愤怒冷暴力下照样生成友善搭话（docs/proactive-consistency/DIAGNOSIS.md P0-1）。
-            // 不带任务清单与记忆块——主动消息不需要「回应任务」的口吻，记忆走 memory_share 专属通道。
-            { role: "system", content: [
-                buildRelationshipContext(this.emotionEngine.getRelationshipContext(this.affinity)),
-                this.emotionEngine.getPromptInjection(),
-                this.personalityDrift.getPromptInjection(),
-            ].join('\n\n') },
-            { role: "system", content: buildProactiveDirective(reason, this.affinity, contextInfo) },
-            { role: "system", content: buildProactivePersonaDirective(scenarioPrompt, this.affinity) }
+            windowed[0],
+            { role: "system", content: dynamicSystem },
+            // 同样剥掉 thought 与 system，只把最近若干条真实对话交给 LLM
+            ...windowed.slice(1),
         ];
 
         try {
+            startLlmTurn();                         // 主动消息也是一「轮」，本轮计数从这里起算
+            recordCall(LLM_CHANNELS.PROACTIVE);      // B1-2：主动消息通道计数
             // ⚠️ 主动消息刻意不跟随设置页的 temperature：这是「小爱主动找你说话」的
             // 场景，需要比主对话（默认 0.75）更高的变化度才不显得复读，故固定 0.85。
             // 确认过语义：它不是记忆摘要之类的工具调用，而是另一条独立的人设链路，
@@ -1393,12 +1539,16 @@ class AiGirlfriend {
      */
     recordProactiveMessage(text, reason = 'random_chat') {
         if (!text) return;
-        this.history.push({ role: 'assistant', content: text });
+        // 入库上限同样生效（B8-4）：主动消息也是 assistant 正文
+        this.history.push({
+            role: 'assistant',
+            content: clipToConfig(text, config.chat.maxAssistantChars, '主动消息正文'),
+        });
 
-        const nonSystem = this.history.filter(m => m.role !== 'system');
-        if (nonSystem.length > MAX_HISTORY) {
-            this.history = [{ role: 'system', content: this.systemPrompt }, ...nonSystem.slice(-MAX_HISTORY)];
-        }
+        // B8-6：三处裁剪收敛到同一份成对实现。
+        // 旧写法这里是第三种语义（按非 system 条数取尾巴），而它 push 的正是**孤立 assistant** ——
+        // 那恰好让 `_trimHistory` 的「每次砍两条」从此错位，之后每轮都可能删掉一条 user。
+        this._trimHistory();
 
         try {
             this._saveState();
@@ -1915,6 +2065,24 @@ class AiGirlfriend {
      * @param {string} replyText
      * @param {{affinityDelta?:number, userEmotionTurned?:boolean}} ctx
      */
+    /**
+     * 把回调挂到叙事抽取队列的**尾巴**上（B8-8：里程碑必须在抽取之后发布）。
+     *
+     * 为什么不能直接同步调：抽取是异步的（要等 LLM），而 `anniversaryTrigger` 按天去重 ——
+     * 先发布就会把「本轮刚抽出来的纪念日」这一整天永久挡掉，丢失窗口 24 小时。
+     * 队列即使为空也走 `.then`（微任务里执行），顺序仍然是确定的、且不占用响应路径。
+     */
+    _afterNarrativeQueue(fn) {
+        this._narrativeQueue = this._narrativeQueue.then(() => {
+            try {
+                fn();
+            } catch (e) {
+                console.error(`[Narrative] 队列尾部回调失败: ${e.message}`);
+            }
+        });
+        return this._narrativeQueue;
+    }
+
     _scheduleNarrativeExtraction(userInput, replyText, ctx = {}) {
         if (!this._narrativeEnabled()) return;
         // 轮次节流在入队前先做一次快速判定，避免每轮都往队列塞任务
@@ -1930,6 +2098,9 @@ class AiGirlfriend {
                     turnCount,
                     affinityDelta: ctx.affinityDelta,
                     userEmotionTurned: ctx.userEmotionTurned,
+                    // B2-10：本轮情节记忆的 id 传下去 —— 叙事要写 sourceEpisodeId，
+                    // 「我们的故事」才能回溯到当初那段对话（以前这个字段永远没有写路径）
+                    sourceEpisodeId: ctx.episodeId ?? null,
                 });
                 if (!extracted) return;
                 const changed = ops.add.length + ops.update.length + ops.delete.length;
@@ -1940,6 +2111,13 @@ class AiGirlfriend {
                     return;
                 }
                 if (generation !== this._narrativeGeneration) return;
+                // B2-10：模型没给 sourceEpisodeId 时，用本轮情节 id 补上 ——
+                // 「我们的故事」从此能回溯到当初那段对话（这个字段以前永远为空）
+                if (ctx.episodeId) {
+                    for (const add of ops.add) {
+                        if (add && !add.sourceEpisodeId) add.sourceEpisodeId = ctx.episodeId;
+                    }
+                }
                 await this._applyNarrativeOps(ops, generation);
                 this.narrativeStore.setStats({ lastExtractTurn: turnCount, lastExtractAt: Date.now() });
                 this.narrativeStore.scheduleSave();
