@@ -100,6 +100,9 @@ export function createApp() {
             companion: aiGirlfriend.getCompanionStatus(),
             chatQueueDepth: aiGirlfriend._queueDepth ?? 0,
             proactiveQueueSize: proactiveEngine?.messageQueue?.length ?? 0,
+            // 模型调用计数（B1-2）：排障时「她这轮调了几次模型」要不用去翻设置页就能看见。
+            // 只有通道名与次数，不含任何文本；与 /config/status 共用同一个出口（getLlmCalls）
+            llmCalls: aiGirlfriend.getLlmCalls(),
         });
     });
 
