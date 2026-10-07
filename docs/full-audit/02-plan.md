@@ -214,8 +214,8 @@
 |---|---|---|
 | B0 | 0 | （B0-6 后半已随 B5-12 做掉：四个去抖 flush 现在都回传写盘结果，失败保持脏标记等下次重试） |
 | B1 | 0 | B1-2 调用计数可见、B1-4 嵌入熔断、B1-5 query 嵌入 memoize、B1-6 后台队列合并（不丢信息）—— 四项全部落地 |
-| B2 | 0 | B2-10 两个尾巴都已接线：`EmotionEngine.history` 有了消费者（REQ-10 情绪走势），narrative 的 `tags/jokeTrigger/sourceEpisodeId` 有了写路径 |
-| B3 | 0 | （已收完：baseUrl 分级在**输入时**就显示，`POST /config` 的 warnings 与保存失败的后端 `detail` 都进了界面。`error_code` 的全站消费留给 B7） |
+| B2 | 0 | B2-10 的三格分两种状态说清：`EmotionEngine.history` 有消费者（情绪走势面板）、`tags/jokeTrigger` 已成为召回信号（最后一轮 F-3）；`sourceEpisodeId` **只有写路径**，回溯展示零消费者，属下一轮 |
+| B3 | 0 | （已收完：baseUrl 分级在**输入时**就显示，`POST /config` 的 warnings 与保存失败的后端 `detail` 都进了界面。`error_code` 的全站消费随后已在 B7-① 收完） |
 | B5 | 0 | （依赖升级已于 2026-10-07 做完：multer 2.4 / openai 5.23 / express 5.2，逐个升、每步全绿。B5-3「全迁 node:test」有意收窄为 `scripts/lib/testKit.mjs`） |
 | B7 | 0 | 17 项全部落地（①~⑰ 见下面的会话日志与落地要点） |
 | B8 | 0 | 关键词索引、`memory.json` 向量瘦身、注入总预算、无界集合、每轮写盘次数、system 消息位置与历史裁剪、`maxPromptHistory` 诚实化、B8-8 四条小口径 |
