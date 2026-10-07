@@ -143,10 +143,32 @@ export function toBackendConfigPayload(cfg: UiChatConfig) {
 }
 
 /**
+ * 网络层失败的观察者：`useBackendWatcher` 挂载时注册、卸载时注销。
+ *
+ * 为什么用回调而不是让 api 直接 import store：那会形成 api → store → api 的循环依赖，
+ * 而且「谁在监听后端死活」变成隐式全局。这里只有一个明确的注册点。
+ */
+type NetworkObserver = () => void;
+let networkObserver: NetworkObserver | null = null;
+
+export function setNetworkObserver(fn: NetworkObserver | null): () => void {
+  networkObserver = fn;
+  return () => {
+    // 只注销自己那一份：后注册的把先注册的顶掉之后，别让旧的那次 cleanup 把新的清空
+    if (networkObserver === fn) networkObserver = null;
+  };
+}
+
+function noteNetworkFailure(): void {
+  networkObserver?.();
+}
+
+/**
  * 统一请求封装：
  * - 自动带 Content-Type 与鉴权 Authorization 头
  * - 业务 4xx/5xx 抛 `ApiError`（带 status / error_code / errors，界面按码分支）
- * - 连不上后端抛 `network_error` 的 ApiError（与「后端拒了」区分开，别再一起说「请检查后端连接」）
+ * - 连不上后端抛 `network_error` 的 ApiError（与「后端拒了」区分开，别再一起说「请检查后端连接」），
+ *   并顺手通知 watcher —— 用户撞上的那次失败比下一次定时探活更权威
  */
 async function request<T>(
   path: string,
@@ -166,6 +188,7 @@ async function request<T>(
   } catch (e) {
     // 主动中止（超时/用户取消）不是「网络故障」，原样抛给调用方判断
     if (e instanceof Error && e.name === "AbortError") throw e;
+    noteNetworkFailure();
     throw networkError(e);
   }
 
@@ -180,6 +203,37 @@ async function request<T>(
 export const api = {
   // ---------- 状态 / 历史 / 记忆 ----------
   getState: () => request<AppState>("/state"),
+
+  /** 服务健康详情（设置页/排障用；免鉴权） */
+  getHealth: () =>
+    request<{
+      ok: boolean;
+      version: string;
+      node: string;
+      uptimeSeconds: number;
+      llmConfigured: boolean;
+      model: string | null;
+      baseUrlHost: string | null;
+      dataDirWritable: boolean;
+      chatQueueDepth: number;
+      proactiveQueueSize: number;
+    }>("/health"),
+
+  /**
+   * 探活专用：只回答「后端在不在」，**不通知 watcher**。
+   * watcher 自己就是那个通知的接收方，让它的探针反过来通知它会形成多余的一跳；
+   * 任何异常一律折算成 false（探针不许把自己抛出去）。
+   */
+  async healthPing(): Promise<boolean> {
+    try {
+      const res = await fetch(`${BACKEND_URL}/health`);
+      if (!res.ok) return false;
+      const data = (await res.json().catch(() => null)) as { ok?: unknown } | null;
+      return data?.ok === true;
+    } catch {
+      return false;
+    }
+  },
 
   /** 好感度变更账本（时间升序，≤200 条）；路由挂根路径，无 /api 前缀 */
   getAffinityLedger: () => request<AffinityTraceEntry[]>("/affinity/ledger"),
@@ -349,12 +403,21 @@ export const api = {
     onDelta: (text: string) => void,
     signal?: AbortSignal
   ): Promise<ChatResponse> {
-    const res = await fetch(`${BACKEND_URL}/chat/stream`, {
-      method: "POST",
-      headers: withAuth({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ message }),
-      signal,
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${BACKEND_URL}/chat/stream`, {
+        method: "POST",
+        headers: withAuth({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ message }),
+        signal,
+      });
+    } catch (e) {
+      // 流式这条路自己拼 fetch，所以网络层失败也得在这里通知 watcher 并规整成 ApiError，
+      // 否则「后端被关掉」在这一条路径上永远是裸 TypeError，界面拿不到码
+      if (e instanceof Error && e.name === "AbortError") throw e;
+      noteNetworkFailure();
+      throw networkError(e);
+    }
 
     if (!res.ok) {
       const data = await res.json().catch(() => null);

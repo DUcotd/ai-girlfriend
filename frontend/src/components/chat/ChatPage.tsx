@@ -7,6 +7,7 @@ import { Menu, X } from "lucide-react";
 import ChatInput from "./ChatInput";
 import ChatMessage from "./ChatMessage";
 import ChatToolbar from "./ChatToolbar";
+import BackendOfflineBanner from "./BackendOfflineBanner";
 import { ProactiveTypingIndicator, TypingIndicator } from "./TypingIndicator";
 import CharacterPanel from "../character/CharacterPanel";
 import DialogLayer from "../dialogs/DialogLayer";
@@ -15,6 +16,7 @@ import WelcomeMessage from "./WelcomeMessage";
 
 import { useActivityPolling } from "@/hooks/useActivityPolling";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
+import { useBackendWatcher } from "@/hooks/useBackendWatcher";
 import { useBootstrap } from "@/hooks/useBootstrap";
 import { useProactivePolling } from "@/hooks/useProactivePolling";
 import { useSpeech } from "@/hooks/useSpeech";
@@ -42,6 +44,8 @@ export default function ChatPage() {
   const isTypingProactive = useUiStore((s) => s.isTypingProactive);
 
   const { isFirstRun, completeFirstRun } = useBootstrap();
+  // 后端可达性：离线时挂横幅并每 30 秒自动重试，恢复后自己重拉历史 + 回灌 Key
+  useBackendWatcher();
   const currentActivity = useActivityPolling();
   const { listRef, stickToBottom } = useAutoScroll();
   useSpeech(); // 注册 speakBus 全局朗读者
@@ -120,6 +124,7 @@ export default function ChatPage() {
       {/* 主区：工具栏全宽；消息流与输入 dock 收窄 max-w-3xl 居中，视线聚焦 */}
       <div className="flex-1 flex flex-col h-full relative z-10 min-w-0">
         <ChatToolbar />
+        <BackendOfflineBanner />
 
         <div ref={listRef} className="flex-1 overflow-y-auto p-4 md:p-6">
           <div className="mx-auto w-full max-w-3xl space-y-6">

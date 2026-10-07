@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { DialogName } from "@/app/dialogs";
+import type { BackendState } from "@/lib/backendWatcher";
 
 export type ToastType = "success" | "error" | "info";
 
@@ -17,6 +18,11 @@ interface UiState {
   autoSendVoice: boolean;
   isSidebarOpen: boolean;
   isTypingProactive: boolean;
+  /**
+   * 后端可达性（B7-3）。`unknown` 是「还没探过」，故意不与 `offline` 混为一谈：
+   * 页面刚打开就弹「后端未就绪」会在正常慢启动场景里骗人。
+   */
+  backendState: BackendState;
   toasts: ToastItem[];
   openDialog: (name: DialogName) => void;
   closeDialog: () => void;
@@ -24,6 +30,7 @@ interface UiState {
   toggleAutoSendVoice: () => void;
   setSidebarOpen: (open: boolean) => void;
   setTypingProactive: (value: boolean) => void;
+  setBackendState: (state: BackendState) => void;
   pushToast: (message: string, type?: ToastType) => void;
   dismissToast: (id: number) => void;
 }
@@ -35,6 +42,7 @@ export const useUiStore = create<UiState>()((set) => ({
   autoSendVoice: true,
   isSidebarOpen: false,
   isTypingProactive: false,
+  backendState: "unknown",
   toasts: [],
   openDialog: (name) => set({ dialog: name }),
   closeDialog: () => set({ dialog: null }),
@@ -42,6 +50,7 @@ export const useUiStore = create<UiState>()((set) => ({
   toggleAutoSendVoice: () => set((s) => ({ autoSendVoice: !s.autoSendVoice })),
   setSidebarOpen: (open) => set({ isSidebarOpen: open }),
   setTypingProactive: (value) => set({ isTypingProactive: value }),
+  setBackendState: (state) => set({ backendState: state }),
   pushToast: (message, type = "info") =>
     set((s) => ({ toasts: [...s.toasts, { id: ++toastSeq, message, type }] })),
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),

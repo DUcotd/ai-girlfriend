@@ -217,7 +217,7 @@
 | B2 | 0.5 | B2-10 尾巴：`EmotionEngine.history` 无消费者（留给 REQ-10）、narrative 的 `tags/jokeTrigger/sourceEpisodeId` 无写路径（REQ-05 前置） |
 | B3 | 0 | （已收完：baseUrl 分级在**输入时**就显示，`POST /config` 的 warnings 与保存失败的后端 `detail` 都进了界面。`error_code` 的全站消费留给 B7） |
 | B5 | 1.5 | 只剩依赖升级（`multer` 1.x→2.x、`openai` 4→5、`express` 4→5）：本机出网只有几十 KB/s，**留到有快网络时按下面的命令做**。B5-3「全迁 node:test」有意收窄为 `scripts/lib/testKit.mjs` |
-| B7 | 14 | 主动消息 FIFO 与串气泡、后端离线态与重试、乐观更新回滚、**401 时的 token 输入框**（码已能区分三种凭证失败，缺的是界面入口）、向导提前置完成、a11y 基线（焦点顺序/可见焦点/对比度，图标按钮的 `aria-label` 已补）、触屏 hover-only、类型收口、移动端视口与 safe-area |
+| B7 | 13 | 主动消息 FIFO 与串气泡、乐观更新回滚、**401 时的 token 输入框**（码已能区分三种凭证失败，缺的是界面入口）、向导提前置完成、a11y 基线（焦点顺序/可见焦点/对比度，图标按钮的 `aria-label` 已补）、触屏 hover-only、类型收口、移动端视口与 safe-area |
 | B8 | 6 | `memory.json` 15 MB 反复重写、总 prompt 预算裁剪、tasks/dedupeSeen/正文长度无界、每轮 9-13 次同步写盘、system 消息位置 |
 | B9 | 0 | （已随 B9 批次全部完成） |
 | B6 | β | α 已完成；β = REQ-05 话题闭环 / REQ-07 自适应节奏 / REQ-09 冷落分层，需 PRD §5 的 Q1~Q3 拍板 |
@@ -242,6 +242,7 @@
 | 2026-10-07 | **两份 QA 散件收编**（`_qa_w1_probe.mjs` / `_qa_w2_verify.mjs` 删除） / `_qa_w2_verify.mjs` 删除）：它们的断言是独立编写的、有价值，外壳有害（直接 import 真 container、直接读写 `data/user_emotion_state.json`、不带沙盒、不声明断言条数）。grep 核对后只把**其它套件都没覆盖**的行为搬进新套件 `test-audit-qa.mjs`（35 项：`fuse()` 对畸形 LLM 输出的容错、timeline 封顶与「去抖≠永不落盘」、EventBus 异常隔离与入参校验、叙事写入去重、词表极端输入、事件驱动类型规格），container 级的通电实证搬进 `test-boot-smoke.mjs`（+5 项 → 23）。顺带给 `run-tests.mjs` 加「清单 vs 磁盘对账」守卫（新写 `test-*.mjs` 忘了登记 → 退出码 2，已反向验证）。后端 **22 套**全绿 | `341a1b7` |
 | 2026-10-07 | **B7-①（全站稳定错误码）**：后端新增 `utils/errorCodes.js`（本机业务码表）并让 `fail/failWith` 按状态码兜底，鉴权/错误处理/8 个路由的每个非 2xx 都带 `error_code`；前端新增 `apiError.ts`（`ApiError.status/code/errors/action`）+ `errorCodes.ts`（码镜像 + 码→行动），`request`/`streamChat` 全部改抛 ApiError，`MemoryDialog` 的 `message.includes("409")`、`VoiceButton` 的英文文案匹配、`SettingsDialog` 的正则猜网络错误、`useChatStream` 万能的「连接中断」全部改成按码分支。语音模块的两条英文 detail 中文化（文案唯一来源在后端）。新增 `test-audit-b7.mjs`（112 项，逐路由）+ 前端 `errorCodes.test.ts`/`apiError.test.ts`（26 例，跨端逐值比对后端两张表）。实测：后端重启后发消息，气泡从「⚠️ 连接中断...」变成「请先配置 API Key 才能和小爱聊天哦~」。后端 **23 套**、前端 **12 文件 / 156 例**全绿 | `bb255d8` |
 | 2026-10-07 | **B7-②（回车误发）**：把「回车是否该发送」抽成纯函数 `lib/sendShortcut.ts`，判 `isComposing` + 老 WebKit 的 `keyCode === 229` 兜底；输入法组词中按回车是确认候选词，旧写法会把半截话直接发进历史（不可撤回、还会参与好感度与记忆）。顺带给纯图标按钮补 `aria-label`、给输入框补名字。新增 `sendShortcut.test.ts`（6 例）；**实测**：`isComposing:true` 的回车文字留在输入框没发出去，真回车才发。前端 **13 文件 / 162 例**全绿 | `666dad1` |
+| 2026-10-07 | **B7-③（后端离线态）**：新增 `lib/backendWatcher.ts` 纯状态机（在线 60 s 巡检 / 离线 30 s 重试 / 请求撞上网络失败立刻判离线并取消旧定时器 / 恢复只在 offline→online 跳变回调一次 / 探活带 generation 防旧回包写回新状态）；`uiStore.backendState` 三态（unknown 不弹横幅，免得每次刷新闪一下假故障）；`api.healthPing` 探活不反过来通知 watcher，`request/streamChat` 的网络层失败通过显式注册的 observer 上报；新增常驻横幅 `BackendOfflineBanner`（含「立即重试」，role=status + aria-live）与 `useBackendWatcher`（恢复时重做 syncConfig + syncState + fetchHistory 并提示，不再需要刷新页面）。新增 `backendWatcher.test.ts` 18 例（假定时器 + 可控 ping，零 sleep）；实测：把页面 fetch 打成失败后发消息，横幅立刻出现、气泡给「连不上后端」而不是「连接中断」，恢复后点「立即重试」横幅消失并弹出「后端已重新连上，对话历史已恢复」，同一个页面实例全程没刷新。前端 **14 文件 / 180 例**全绿 | `待提交` |
 
 **B7-① 落地要点（2026-10-07）**：
 
@@ -384,7 +385,7 @@ B6-β（REQ-05/07/09）与 PRD §5 的 Q1~Q5 一起等拍板。
 依赖升级（`multer`/`openai`/`express`）按上面的命令在有快网络时做。
 
 **开工前必做的健康检查**：`cd backend-node && npm run check && npm run lint && npm test`（**23 套**）与
-`cd frontend && npm run typecheck && npm run lint && npm run test`（**13 个文件 / 162 例**）；发版前再加 `npm run build`。
+`cd frontend && npm run typecheck && npm run lint && npm run test`（**14 个文件 / 180 例**）；发版前再加 `npm run build`。
 测试全程写沙盒目录，不会碰 `backend-node/data/`。
 判断服务活没活：`curl http://127.0.0.1:8000/health` 看 `ok` 与 `llmConfigured`。
 
