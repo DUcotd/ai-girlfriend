@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/cn";
 import type { PersonalityDimMeta } from "@/types";
@@ -41,6 +42,8 @@ export default function PersonalitySlider({
   // 端点先夹 0/100（与后端 clampCurrent 同口径）：baseline=95 时带的上界是 100 不是 110
   const lo = Math.max(0, baseline - band);
   const hi = Math.min(100, baseline + band);
+  // 低/高值含义那段说明是「这条轴在读什么」的关键信息，用 aria-describedby 挂到滑块上
+  const axisHintId = useId();
 
   return (
     <div className="space-y-1">
@@ -62,7 +65,13 @@ export default function PersonalitySlider({
             </div>
           </div>
 
-          {/* 原生 range：透明全覆盖，负责拖动 / 键盘 / 无障碍 */}
+          {/* 原生 range：透明全覆盖，负责拖动 / 键盘 / 无障碍。
+              type=range 自带 role="slider" 与 aria-valuenow/min/max，方向键/Home/End 全都白送，
+              所以这里不去手写 role，只补齐读屏需要的「值文本 + 名称 + 说明」：
+              · aria-valuetext：轴的含义（如「外向 70」）比裸数字好读；
+              · aria-describedby：把下面的低/高值含义一起念出来。
+              注意 opacity-0 只是让原生控件不可见，焦点环也随之消失 ——
+              可见焦点改由下面的把手承担（peer + peer-focus-visible）。 */}
           <input
             type="range"
             min={0}
@@ -70,13 +79,17 @@ export default function PersonalitySlider({
             step={1}
             value={Math.round(baseline)}
             onChange={(e) => onChange(Number.parseInt(e.target.value, 10))}
-            aria-label={`${meta.label}（当前基线 ${Math.round(baseline)}）`}
-            className="absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent opacity-0"
+            aria-label={meta.label}
+            aria-valuetext={`${meta.label} 基线 ${Math.round(baseline)}`}
+            aria-describedby={axisHintId}
+            className="peer absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent opacity-0"
           />
 
-          {/* current 小三角：外层 motion 只管 x，内层 Tailwind 管居中 */}
+          {/* current 小三角：外层 motion 只管 x，内层 Tailwind 管居中。
+              pointer-events-none：这两层只是画法，不能让它们盖住上面的 range 输入框
+              （把手正好压在输入框最常被按到的位置上） */}
           <motion.div
-            className="absolute left-0 top-[26px] w-full"
+            className="pointer-events-none absolute left-0 top-[26px] w-full"
             initial={false}
             animate={{ x: `${current}%` }}
             transition={{ duration: 0.2 }}
@@ -86,12 +99,29 @@ export default function PersonalitySlider({
 
           {/* baseline 把手（拖动对象；current 的跟随由后端按「保留相对偏移」计算） */}
           <motion.div
-            className="absolute left-0 top-3 w-full"
+            className="pointer-events-none absolute left-0 top-3 w-full"
             initial={false}
             animate={{ x: `${baseline}%` }}
             transition={{ duration: 0.2 }}
           >
             <div className="h-4 w-4 -translate-x-1/2 rounded-full border-2 border-accent-1 bg-white shadow" />
+          </motion.div>
+
+          {/* 键盘焦点环。为什么要多一层：
+              ① 输入框是 opacity-0 的，它自带的 focus ring 跟着一起看不见；
+              ② Tailwind 的 peer-* 只会作用到「peer 之后的兄弟节点」，
+                 而把手圆点被包在整宽（w-full）的 motion wrapper 里——百分比位移必须整宽，
+                 环画在 wrapper 上会横满整条轨道。
+              于是再来一个与把手同位移、同过渡的兄弟层，只在 focus-visible 时显出圆环，
+              hover 才可见的「可拖动」暗示从此对键盘同样可见。 */}
+          <motion.div
+            aria-hidden="true"
+            className="pointer-events-none absolute left-0 top-3 w-full opacity-0 peer-focus-visible:opacity-100"
+            initial={false}
+            animate={{ x: `${baseline}%` }}
+            transition={{ duration: 0.2 }}
+          >
+            <div className="h-4 w-4 -translate-x-1/2 rounded-full ring-2 ring-accent-strong ring-offset-2 ring-offset-surface-1 dark:ring-accent-1" />
           </motion.div>
         </div>
 
@@ -100,12 +130,13 @@ export default function PersonalitySlider({
           <span className="text-sm font-bold text-accent-strong dark:text-accent-1">
             {Math.round(current)}
           </span>
-          <span className="ml-1 text-[10px] text-content-muted">基线 {Math.round(baseline)}</span>
+          <span className="ml-1 text-[11px] text-content-muted">基线 {Math.round(baseline)}</span>
         </div>
       </div>
 
-      {/* 低值含义 ←→ 高值含义（来自后端 dims 的 low/high） */}
-      <p className="pl-1 text-[10px] text-content-muted">
+      {/* 低值含义 ←→ 高值含义（来自后端 dims 的 low/high）。
+          10px 的说明文字是正文信息，不是装饰，提到 11px 后手机上也读得动。 */}
+      <p id={axisHintId} className="pl-1 text-[11px] text-content-muted">
         {meta.low} ←→ {meta.high}
       </p>
     </div>

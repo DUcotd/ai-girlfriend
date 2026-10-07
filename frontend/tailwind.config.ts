@@ -84,6 +84,11 @@ const config: Config = {
     plugins: [
         plugin(({ addVariant }) => {
             addVariant("dark", '[data-mode="dark"] &');
+            /* 触屏档：设备「没有 hover 能力」时（手机/平板）用得到。
+               触屏没有鼠标悬停，`hover:`/`group-hover:` 独占的可见性（opacity-0 → 100 之类）
+               在那儿永远不触发，操作就消失了。写法：`coarse:opacity-100`。
+               与 focus-visible 配对使用，键盘与触屏都能看到同一份本该只有鼠标能唤起的界面。 */
+            addVariant("coarse", "@media (hover: none)");
         }),
     ],
 };

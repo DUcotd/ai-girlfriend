@@ -5,95 +5,167 @@
    明度变量通过 var(--hue) 派生，天然适配所有主题。
    ====================================== */
 
-/* ---------- 主题层：只管色相与 accent ---------- */
-:root,
-[data-theme="sakura"] {
-  --hue: 330;
-  --bg-end-hue: 280;
-  --accent-1: 330 81% 72%;
-  --accent-strong: 330 70% 55%;
-  --accent-2: 280 60% 70%;
-  --accent-pop: 340 82% 65%;
-}
+/* ---------- 为什么用 @layer + 提权，而不是靠 import 顺序 ----------
+   这套变量以前是「裸规则」：谁能生效完全取决于 layout.tsx 里
+   `:root` / `[data-mode="dark"]` / Tailwind utilities 的**出现先后**
+   （同特异性时后写的赢）。调一下 import 顺序，暗色就会被浅色盖掉、
+   装饰类会被 Tailwind 原子类翻转——这是个静默的配色炸弹。
+   现在两层防护：
+   ① 本文件全部规则收进原生 cascade layer `theme`，并在两个文件（themes.css /
+      utilities.css）头部各写一次 `@layer theme, decor;` 声明层序。
+      层序由「文档里第一次出现的 @layer 语句」决定，两份声明内容一致，
+      所以谁先 import 都得到同一个层序，结果不再依赖顺序。
+      （注意：这里不能用 @layer base/components/utilities —— 那是 Tailwind 的
+       指令名，只有含 @tailwind 的 globals.css 才能用，独立文件里会被 Tailwind
+       v3 直接报错。）
+   ② 层内仍要决出「主题回退 vs 主题指定」「浅色回退 vs 暗色」的胜负，
+      于是把带属性的选择器写成 `:root[data-*="x"]`（0,2,0）而非 `[data-*="x"]`（0,1,0）：
+      回退值留在 `:root`（0,1,0）。特异性天然高于书写顺序，
+      即使同一层内的规则被重排也不会翻转。
+   utilities.css 走的是另一条路（见该文件头部注释）：裸规则 + 提权。
+   ------------------------------------------------------------- */
 
-[data-theme="starry"] {
-  --hue: 270;
-  --bg-end-hue: 280;
-  --accent-1: 270 70% 65%;
-  --accent-strong: 270 60% 50%;
-  --accent-2: 240 60% 70%;
-  --accent-pop: 290 70% 60%;
-}
+@layer theme, decor;
 
-[data-theme="ocean"] {
-  --hue: 200;
-  --bg-end-hue: 190;
-  --accent-1: 200 80% 60%;
-  --accent-strong: 200 70% 45%;
-  --accent-2: 180 60% 55%;
-  --accent-pop: 210 75% 65%;
-}
+@layer theme {
+  /* ---------- 主题层：只管色相与 accent ---------- */
+  /* :root 同时是「未知主题」的兜底：值与 sakura 完全一致，
+     所以无论谁写在后面、也无论 data-theme 有没有被防 FOUC 脚本设上，结果都一样 */
+  :root,
+  :root[data-theme="sakura"] {
+    --hue: 330;
+    --bg-end-hue: 280;
+    --accent-1: 330 81% 72%;
+    --accent-strong: 330 70% 55%;
+    --accent-2: 280 60% 70%;
+    --accent-pop: 340 82% 65%;
+  }
 
-[data-theme="forest"] {
-  --hue: 140;
-  --bg-end-hue: 110;
-  --accent-1: 140 50% 55%;
-  --accent-strong: 140 45% 40%;
-  --accent-2: 100 40% 60%;
-  --accent-pop: 160 55% 50%;
-}
+  :root[data-theme="starry"] {
+    --hue: 270;
+    --bg-end-hue: 280;
+    --accent-1: 270 70% 65%;
+    --accent-strong: 270 60% 50%;
+    --accent-2: 240 60% 70%;
+    --accent-pop: 290 70% 60%;
+  }
 
-/* ---------- 模式层：只管明度 ---------- */
-/* 浅色（默认兜底也走这里，防 FOUC 脚本失败时仍是浅色） */
-:root,
-[data-mode="light"] {
-  --bg-start: var(--hue) 30% 95%;
-  --bg-end: var(--bg-end-hue) 30% 92%;
-  --surface-1: 0 0% 100%;
-  --surface-2: var(--hue) 30% 97%;
-  --text-primary: var(--hue) 30% 25%;
-  --text-secondary: var(--hue) 22% 40%;
-  --text-muted: var(--hue) 15% 55%;
-  --border-subtle: var(--hue) 30% 88%;
+  :root[data-theme="ocean"] {
+    --hue: 200;
+    --bg-end-hue: 190;
+    --accent-1: 200 80% 60%;
+    --accent-strong: 200 70% 45%;
+    --accent-2: 180 60% 55%;
+    --accent-pop: 210 75% 65%;
+  }
 
-  /* 状态色：语义状态（成功/危险/信息/警告），与主题色相无关 */
-  --status-success: 150 60% 42%;
-  --status-danger: 355 72% 55%;
-  --status-info: 210 82% 55%;
-  --status-warning: 28 88% 52%;
+  :root[data-theme="forest"] {
+    --hue: 140;
+    --bg-end-hue: 110;
+    --accent-1: 140 50% 55%;
+    --accent-strong: 140 45% 40%;
+    --accent-2: 100 40% 60%;
+    --accent-pop: 160 55% 50%;
+  }
 
-  /* 表面阴影：随模式调整深浅 */
-  --shadow-card: 0 4px 20px -5px hsl(var(--accent-1) / 0.15),
-    inset 0 0 0 1px hsl(0 0% 100% / 0.08);
-  --shadow-modal: 0 25px 50px -12px hsl(0 0% 0% / 0.15),
-    inset 0 0 0 1px hsl(0 0% 100% / 0.06);
+  /* 渐变文字专用端点（只在浅色下被选用，见模式层）：
+     --accent-1/2/pop 在浅底上只有 1.6-2.6:1，标题根本看不清；
+     而它们同时是按钮底色/描边/光晕的原料，不能为了文字去动它们。
+     所以这里按主题另给一组「同色相、更深」的端点，明度取到刚好 ≥3:1
+     （大字号文本 AA 门槛），饱和度保持各主题原本的鲜艳度，pastel 观感不变。 */
+  :root,
+  :root[data-theme="sakura"] {
+    --gradient-text-light-1: 330 66% 54%;
+    --gradient-text-light-2: 280 58% 54%;
+    --gradient-text-light-3: 345 68% 54%;
+  }
 
-  /* 樱花瓣不透明度：浅色下正常 */
-  --sakura-opacity: 0.7;
-}
+  :root[data-theme="starry"] {
+    --gradient-text-light-1: 270 74% 60%;
+    --gradient-text-light-2: 245 62% 60%;
+    --gradient-text-light-3: 285 74% 58%;
+  }
 
-/* 深色：表面亮度层级比背景高 6-7%，与原星空紫的观感一致 */
-[data-mode="dark"] {
-  --bg-start: var(--hue) 26% 10%;
-  --bg-end: var(--bg-end-hue) 30% 7%;
-  --surface-1: var(--hue) 22% 16%;
-  --surface-2: var(--hue) 20% 21%;
-  --text-primary: var(--hue) 24% 92%;
-  --text-secondary: var(--hue) 18% 76%;
-  --text-muted: var(--hue) 14% 62%;
-  --border-subtle: var(--hue) 18% 28%;
+  :root[data-theme="ocean"] {
+    --gradient-text-light-1: 200 62% 42%;
+    --gradient-text-light-2: 185 50% 39%;
+    --gradient-text-light-3: 215 72% 44%;
+  }
 
-  /* 状态色：暗底上提高明度保证可辨 */
-  --status-success: 150 55% 62%;
-  --status-danger: 355 75% 66%;
-  --status-info: 210 88% 68%;
-  --status-warning: 32 92% 62%;
+  :root[data-theme="forest"] {
+    --gradient-text-light-1: 140 45% 40%;
+    --gradient-text-light-2: 110 42% 40%;
+    --gradient-text-light-3: 155 48% 39%;
+  }
 
-  --shadow-card: 0 4px 20px -5px hsl(0 0% 0% / 0.45),
-    inset 0 0 0 1px hsl(0 0% 100% / 0.05);
-  --shadow-modal: 0 25px 50px -12px hsl(0 0% 0% / 0.5),
-    inset 0 0 0 1px hsl(0 0% 100% / 0.04);
+  /* ---------- 模式层：只管明度 ---------- */
+  /* 浅色（默认兜底也走这里，防 FOUC 脚本失败时仍是浅色） */
+  :root,
+  :root[data-mode="light"] {
+    --bg-start: var(--hue) 30% 95%;
+    --bg-end: var(--bg-end-hue) 30% 92%;
+    --surface-1: 0 0% 100%;
+    --surface-2: var(--hue) 30% 97%;
+    --text-primary: var(--hue) 30% 25%;
+    --text-secondary: var(--hue) 22% 40%;
+    /* 10-12px 的小字全靠这一档撑可读性：55% 明度在白底只有 2.98-3.86:1，
+       在表面 2 / 页面渐变底上低到 2.56-3.44:1（AA 小字要 4.5:1）。
+       压到 40% 后：对 surface-1 5.08-6.61、对 surface-2 4.80-6.11、
+       对页面渐变底 4.37-5.79（最差是森林主题的深一端）。 */
+    --text-muted: var(--hue) 15% 40%;
+    --border-subtle: var(--hue) 30% 88%;
 
-  /* 樱花瓣不透明度：暗色下压低避免抢眼 */
-  --sakura-opacity: 0.4;
+    /* 状态色：语义状态（成功/危险/信息/警告），与主题色相无关 */
+    --status-success: 150 60% 42%;
+    --status-danger: 355 72% 55%;
+    --status-info: 210 82% 55%;
+    --status-warning: 28 88% 52%;
+
+    /* 表面阴影：随模式调整深浅 */
+    --shadow-card: 0 4px 20px -5px hsl(var(--accent-1) / 0.15),
+      inset 0 0 0 1px hsl(0 0% 100% / 0.08);
+    --shadow-modal: 0 25px 50px -12px hsl(0 0% 0% / 0.15),
+      inset 0 0 0 1px hsl(0 0% 100% / 0.06);
+
+    /* 樱花瓣不透明度：浅色下正常 */
+    --sakura-opacity: 0.7;
+
+    /* 渐变文字：浅底走主题层那组深色端点 */
+    --gradient-text-1: var(--gradient-text-light-1);
+    --gradient-text-2: var(--gradient-text-light-2);
+    --gradient-text-3: var(--gradient-text-light-3);
+  }
+
+  /* 深色：表面亮度层级比背景高 6-7%，与原星空紫的观感一致 */
+  :root[data-mode="dark"] {
+    --bg-start: var(--hue) 26% 10%;
+    --bg-end: var(--bg-end-hue) 30% 7%;
+    --surface-1: var(--hue) 22% 16%;
+    --surface-2: var(--hue) 20% 21%;
+    --text-primary: var(--hue) 24% 92%;
+    --text-secondary: var(--hue) 18% 76%;
+    /* 62% 在最亮的表面（surface-2）上只剩 4.50-4.53:1，是压线过关：
+       提到 66% 后四个主题都是 5.08-5.12:1，小字号不再靠运气。 */
+    --text-muted: var(--hue) 16% 66%;
+    --border-subtle: var(--hue) 18% 28%;
+
+    /* 状态色：暗底上提高明度保证可辨 */
+    --status-success: 150 55% 62%;
+    --status-danger: 355 75% 66%;
+    --status-info: 210 88% 68%;
+    --status-warning: 32 92% 62%;
+
+    --shadow-card: 0 4px 20px -5px hsl(0 0% 0% / 0.45),
+      inset 0 0 0 1px hsl(0 0% 100% / 0.05);
+    --shadow-modal: 0 25px 50px -12px hsl(0 0% 0% / 0.5),
+      inset 0 0 0 1px hsl(0 0% 100% / 0.04);
+
+    /* 樱花瓣不透明度：暗色下压低避免抢眼 */
+    --sakura-opacity: 0.4;
+
+    /* 渐变文字：暗底上 accent 三件套本身就有 3.6-6.4:1，继续沿用，观感不变 */
+    --gradient-text-1: var(--accent-1);
+    --gradient-text-2: var(--accent-2);
+    --gradient-text-3: var(--accent-pop);
+  }
 }

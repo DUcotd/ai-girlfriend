@@ -2,7 +2,21 @@
    动画与装饰类 · 全部吃语义 token，不写死颜色
    （按钮/输入框/卡片/弹窗/徽章等已组件化为 ui/ 原语，不再保留 CSS 类）
    注意：HSL 透明度统一用 hsl(var(--x) / α) 语法。
+
+   ---------- 为什么这里不用 @layer，而是把类名写两遍 ----------
+   Tailwind v3 的 @tailwind 产物是「裸规则」（不属于任何 cascade layer），
+   而 CSS 层叠的规则是：**裸规则永远压过带层规则**，与特异性无关。
+   所以本文件若收进 @layer，`.gradient-text` / `.pb-safe` 会被任意一个
+   Tailwind 原子类（bg-*、pb-*…）无条件翻掉，等于把「谁后来谁赢」换成
+   「Tailwind 恒赢」——同样是被顺序/层级外部因素决定，而且后者更没用。
+   这里改用「重复选择器」把特异性从 (0,1,0) 提到 (0,2,0)：
+   高于任何单个原子类、低于双类组合，胜负由特异性决定而非 import 顺序，
+   因此 layout.tsx 里把本文件放到 globals.css 之前或之后都不会变色。
+   （themes.css 走的是另一条路：变量不属于任何冲突属性，直接收进 @layer theme。）
    ====================================== */
+
+/* 层序声明与 themes.css 头部保持一致：两份内容相同，谁先被 import 都定出同一层序 */
+@layer theme, decor;
 
 /* ---------- 樱花飘落 ---------- */
 /* 注意：这里的 opacity 一律用 calc(模式系数 × 花瓣随机系数)——
@@ -29,7 +43,7 @@
   }
 }
 
-.sakura-petal {
+.sakura-petal.sakura-petal {
   position: fixed;
   width: 12px;
   height: 12px;
@@ -57,7 +71,7 @@
   }
 }
 
-.message-bubble {
+.message-bubble.message-bubble {
   animation: messagePop 0.3s ease-out forwards;
 }
 
@@ -93,7 +107,7 @@
   }
 }
 
-.star {
+.star.star {
   animation: twinkle 2s ease-in-out infinite;
 }
 
@@ -109,27 +123,60 @@
   }
 }
 
-.pulse-ring {
+.pulse-ring.pulse-ring {
   animation: pulse-ring 1.5s ease-out infinite;
 }
 
 /* ---------- 渐变文字 ---------- */
-.gradient-text {
+/* 端点由主题×模式两层共同给出（--gradient-text-1/2/3）：
+   accent 三件套铺在白底上只有 1.6-2.6:1，标题在大字号下也不达标（AA 要 3:1），
+   浅色模式改用主题层解算过的同色相深色端点，暗色模式仍走 accent 原色。 */
+.gradient-text.gradient-text {
   background: linear-gradient(
     135deg,
-    hsl(var(--accent-1)),
-    hsl(var(--accent-2)),
-    hsl(var(--accent-pop))
+    hsl(var(--gradient-text-1)),
+    hsl(var(--gradient-text-2)),
+    hsl(var(--gradient-text-3))
   );
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
+/* ---------- 移动端视口与安全区 ---------- */
+/* 应用外壳高度：h-screen(=100vh) 在手机上取的是「地址栏收起前」的视口高度，
+   结果底部输入区被浏览器工具条压掉一截、页面还能上下蹭一下。
+   100dvh 跟随动态视口；老浏览器不认第二条声明会自然回退到 100vh（CSS 层叠回退写法）。
+   TODO(ChatPage)：<main className="flex h-screen …"> 应换成 className="flex app-shell-height …"，
+   该改动属于 ChatPage 负责人，不在本次范围内，故先把可复用的工具类备好。 */
+.app-shell-height.app-shell-height {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* 刘海/圆角/Home 指示条安全区内边距：需要同时叠加原子类给的常规内边距时，
+   用 Tailwind 的任意属性 [--pad-b:1rem] 把常规值传进来，再让本类加上安全区。
+   （本类特异性 (0,2,0) 高于 pb-4 这类原子类，所以原子类不会覆盖它——这是有意的：
+     安全区必须落在最外层，否则又会被刘海吃掉。） */
+.pb-safe.pb-safe {
+  padding-bottom: calc(var(--pad-b, 0px) + env(safe-area-inset-bottom, 0px));
+}
+
+.pt-safe.pt-safe {
+  padding-top: calc(var(--pad-t, 0px) + env(safe-area-inset-top, 0px));
+}
+
+.ph-safe.ph-safe {
+  padding-left: calc(var(--pad-l, 0px) + env(safe-area-inset-left, 0px));
+  padding-right: calc(var(--pad-r, 0px) + env(safe-area-inset-right, 0px));
+}
+
 /* ---------- 动效偏好：用户系统开启「减少动态效果」时 ---------- */
 @media (prefers-reduced-motion: reduce) {
   /* 装饰动画直接禁：樱花 / 星星 / 录音脉冲 / 立绘呼吸与渐隐，
-     以及 Tailwind 内置的 pulse / bounce / spin-slow（思考提示、加载光斑、旋转图标等） */
+     以及 Tailwind 内置的 pulse / bounce / spin-slow（思考提示、加载光斑、旋转图标等）。
+     注意 .animate-avatar-fade-out 被禁掉后 animationend 不会再触发，
+     依赖它卸载覆盖层的组件（CharacterAvatar）必须自己走 reduced-motion 分支。 */
   .sakura-petal,
   .star,
   .pulse-ring,

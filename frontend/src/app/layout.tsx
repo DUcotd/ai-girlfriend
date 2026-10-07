@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import SakuraEffect from "@/components/effects/SakuraEffect";
 import MotionProvider from "@/components/ui/MotionProvider";
 import ToastViewport from "@/components/ui/ToastViewport";
@@ -10,6 +10,18 @@ import "../styles/utilities.css";
 export const metadata: Metadata = {
   title: "AI 女友 - 小爱",
   description: "情感陪伴型 AI 智能体",
+};
+
+/**
+ * 视口：viewport-fit="cover" 让内容延伸到刘海/圆角区，
+ * 配合 utilities.css 的 .pt-safe/.pb-safe/.ph-safe 把内容再收回安全区内
+ * ——不 cover 的话 env(safe-area-inset-*) 恒为 0，输入框底部会被 Home 指示条压住。
+ * 其余字段就是 Next 未导出 viewport 时的默认值，显式写出是为了能加 viewportFit。
+ */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 /**

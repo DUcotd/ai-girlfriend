@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Brain, ClipboardList, Download, Palette, MessageSquarePlus, Settings } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { DialogName } from "@/app/dialogs";
+import { cn } from "@/lib/cn";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
@@ -41,7 +42,15 @@ export default function ChatToolbar() {
               aria-label={label}
               title={label}
               onClick={() => (dialog ? openDialog(dialog) : setShowNewConfirm(true))}
-              className="rounded-full p-2 text-content-secondary transition-all hover:bg-surface-1/70 hover:text-accent-strong active:scale-95 dark:hover:text-accent-1"
+              className={cn(
+                "rounded-full p-2 text-content-secondary transition-all hover:bg-surface-1/70 hover:text-accent-strong active:scale-95 dark:hover:text-accent-1",
+                // 图标 20px + p-2 = 36px，低于触屏最小触达尺寸 44×44（WCAG 2.5.5）。
+                // 用 min-h/min-w 把可点区撑到 44 而不是加 padding：图标与视觉间距都不变，
+                // 只是手指按得更准（header 高 64px，装得下）。
+                "inline-flex min-h-11 min-w-11 items-center justify-center",
+                // 键盘焦点：这一排按钮 hover 才有底色，没有焦点环就看不出选中了谁
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-1/60"
+              )}
             >
               <Icon size={20} />
             </button>
