@@ -206,21 +206,21 @@
 
 ## 剩余清单（2026-10-07 复核；**总数以下面这张表为唯一口径**，别在别处抄一份数字）
 
-按表内条目计约 **25.5 项**，分布在 **5 个批次**：B7 14、B8 6、B1 3.5、B5 1.5（全是依赖升级）、B2 0.5。
+（历史口径，2026-10-07 已全部做完）开工时表内还剩 **25.5 项**，分布在 5 个批次：B7 14、B8 6、B1 3.5、B5 1.5、B2 0.5。
 （这里曾经写死过「共约 9 项 / 12 项」之类的总数，与表内加起来对不上 —— 手写第二份真相迟早漂移，
 改成只指口径不写总数。）
 
 | 批次 | 剩余 | 重点项 |
 |---|---|---|
 | B0 | 0 | （B0-6 后半已随 B5-12 做掉：四个去抖 flush 现在都回传写盘结果，失败保持脏标记等下次重试） |
-| B1 | 3.5 | B1-2 调用计数可见、B1-4 嵌入熔断、B1-5 query 嵌入 memoize、B1-6 后台队列合并（不丢信息） |
-| B2 | 0.5 | B2-10 尾巴：`EmotionEngine.history` 无消费者（留给 REQ-10）、narrative 的 `tags/jokeTrigger/sourceEpisodeId` 无写路径（REQ-05 前置） |
+| B1 | 0 | B1-2 调用计数可见、B1-4 嵌入熔断、B1-5 query 嵌入 memoize、B1-6 后台队列合并（不丢信息）—— 四项全部落地 |
+| B2 | 0 | B2-10 两个尾巴都已接线：`EmotionEngine.history` 有了消费者（REQ-10 情绪走势），narrative 的 `tags/jokeTrigger/sourceEpisodeId` 有了写路径 |
 | B3 | 0 | （已收完：baseUrl 分级在**输入时**就显示，`POST /config` 的 warnings 与保存失败的后端 `detail` 都进了界面。`error_code` 的全站消费留给 B7） |
-| B5 | 1.5 | 只剩依赖升级（`multer` 1.x→2.x、`openai` 4→5、`express` 4→5）：本机出网只有几十 KB/s，**留到有快网络时按下面的命令做**。B5-3「全迁 node:test」有意收窄为 `scripts/lib/testKit.mjs` |
-| B7 | 13 | 主动消息 FIFO 与串气泡、乐观更新回滚、**401 时的 token 输入框**（码已能区分三种凭证失败，缺的是界面入口）、向导提前置完成、a11y 基线（焦点顺序/可见焦点/对比度，图标按钮的 `aria-label` 已补）、触屏 hover-only、类型收口、移动端视口与 safe-area |
-| B8 | 6 | `memory.json` 15 MB 反复重写、总 prompt 预算裁剪、tasks/dedupeSeen/正文长度无界、每轮 9-13 次同步写盘、system 消息位置 |
+| B5 | 0 | （依赖升级已于 2026-10-07 做完：multer 2.4 / openai 5.23 / express 5.2，逐个升、每步全绿。B5-3「全迁 node:test」有意收窄为 `scripts/lib/testKit.mjs`） |
+| B7 | 0 | 17 项全部落地（①~⑰ 见下面的会话日志与落地要点） |
+| B8 | 0 | 关键词索引、`memory.json` 向量瘦身、注入总预算、无界集合、每轮写盘次数、system 消息位置与历史裁剪、`maxPromptHistory` 诚实化、B8-8 四条小口径 |
 | B9 | 0 | （已随 B9 批次全部完成） |
-| B6 | β | α 已完成；β = REQ-05 话题闭环 / REQ-07 自适应节奏 / REQ-09 冷落分层，需 PRD §5 的 Q1~Q3 拍板 |
+| B6 | β | α 已完成。**β 按 P10 的默认动作停在门口**：REQ-05/07/09 的优先级由 PRD §5 的 Q1~Q5 决定，用户没拍板就不动 B6（本文「需要用户拍板的事项」里 P10 写明的默认动作就是「不动 B6，只做 B0~B9」） |
 
 **已完成**：B0 **全部**、B2（除 2 个尾巴）、**B9 全部**、**B4 全部（除 B4-8 后半）**、**B6-α 全部**、**B3 全部**、**B5 除依赖升级全部（含 B5-12 档案导出/导入/快照）**、B1-3、**B7-①（全站稳定错误码：后端发码 + 前端按码分支）**、**B7-②（输入法回车误发 + 图标按钮 aria-label）**。
 **已取消**：B1-1（事实提取节流 / 省钱模式）—— 成本不作为削减理由。
@@ -243,6 +243,43 @@
 | 2026-10-07 | **B7-①（全站稳定错误码）**：后端新增 `utils/errorCodes.js`（本机业务码表）并让 `fail/failWith` 按状态码兜底，鉴权/错误处理/8 个路由的每个非 2xx 都带 `error_code`；前端新增 `apiError.ts`（`ApiError.status/code/errors/action`）+ `errorCodes.ts`（码镜像 + 码→行动），`request`/`streamChat` 全部改抛 ApiError，`MemoryDialog` 的 `message.includes("409")`、`VoiceButton` 的英文文案匹配、`SettingsDialog` 的正则猜网络错误、`useChatStream` 万能的「连接中断」全部改成按码分支。语音模块的两条英文 detail 中文化（文案唯一来源在后端）。新增 `test-audit-b7.mjs`（112 项，逐路由）+ 前端 `errorCodes.test.ts`/`apiError.test.ts`（26 例，跨端逐值比对后端两张表）。实测：后端重启后发消息，气泡从「⚠️ 连接中断...」变成「请先配置 API Key 才能和小爱聊天哦~」。后端 **23 套**、前端 **12 文件 / 156 例**全绿 | `bb255d8` |
 | 2026-10-07 | **B7-②（回车误发）**：把「回车是否该发送」抽成纯函数 `lib/sendShortcut.ts`，判 `isComposing` + 老 WebKit 的 `keyCode === 229` 兜底；输入法组词中按回车是确认候选词，旧写法会把半截话直接发进历史（不可撤回、还会参与好感度与记忆）。顺带给纯图标按钮补 `aria-label`、给输入框补名字。新增 `sendShortcut.test.ts`（6 例）；**实测**：`isComposing:true` 的回车文字留在输入框没发出去，真回车才发。前端 **13 文件 / 162 例**全绿 | `666dad1` |
 | 2026-10-07 | **B7-③（后端离线态）**：新增 `lib/backendWatcher.ts` 纯状态机（在线 60 s 巡检 / 离线 30 s 重试 / 请求撞上网络失败立刻判离线并取消旧定时器 / 恢复只在 offline→online 跳变回调一次 / 探活带 generation 防旧回包写回新状态）；`uiStore.backendState` 三态（unknown 不弹横幅，免得每次刷新闪一下假故障）；`api.healthPing` 探活不反过来通知 watcher，`request/streamChat` 的网络层失败通过显式注册的 observer 上报；新增常驻横幅 `BackendOfflineBanner`（含「立即重试」，role=status + aria-live）与 `useBackendWatcher`（恢复时重做 syncConfig + syncState + fetchHistory 并提示，不再需要刷新页面）。新增 `backendWatcher.test.ts` 18 例（假定时器 + 可控 ping，零 sleep）；实测：把页面 fetch 打成失败后发消息，横幅立刻出现、气泡给「连不上后端」而不是「连接中断」，恢复后点「立即重试」横幅消失并弹出「后端已重新连上，对话历史已恢复」，同一个页面实例全程没刷新。前端 **14 文件 / 180 例**全绿 | `5dd7e34` |
+| 2026-10-07 | **B7-④~⑰ 第一批（一次吃掉 9 格）**：主动消息改严格 FIFO 队列 `lib/proactiveQueue.ts`（旧写法 `clearTimeout` 顶掉上一条，200 ms 内连到 3 条只有最后一条上屏）；流式写入按 `streamingMessageId` 点名 + 流式期间挂起主动消息（FE-03 串气泡）；乐观更新统一回滚（好感度 / 性格 baseline / 保存配置**按失败的那一步**分别回滚本地镜像）+ 防抖改动卸载前 flush（`lib/optimisticTracker.ts`）；`lib/dialogGuard.ts` + `Modal` 焦点陷阱/滚动锁/焦点归还，X / Esc / 遮罩三条关闭路径共用「有未保存改动」闸门；设置→系统新增**访问令牌输入框**（`api.setAuthToken/hasAuthToken`），轮询撞 401 只提示一次；破坏性操作分级（删事实给 6 秒撤销条、删回忆与切预设改二次确认——后端没有重建回忆的入口，给做不到的撤销更糟）；向导在 `syncConfig` 真的成功后才写 `hasCompletedSetup`、`ApiConfigStep` 的「不会上传到任何服务器」改成准确表述、导出先向服务器要完整历史（`lib/chatExport.ts`）；PAD 读数走 `lib/padState.ts` 归一（缺字段/NaN 回落中性，展示组件不再有白屏能力）；录音单实例 + 失败分型 + `transcribe` 返回结果对象 + 计时移出页面级 state + 她说完自动聚焦；通知锁屏默认不露正文、主动消息朗读可单独关（`lib/notifyPrivacy.ts`/`proactiveDisplay.ts`）；**B2-10 那条「写了没接线」的 `EmotionEngine.history` 正式接上**：新增 `GET /state/emotion-history` + 面板「情绪走势」（`lib/emotionSeries.ts`，点数不足就不下结论）。**实测**：本机 24 条真实历史直接出图并显示「最近更有劲，也更爱动」，a11y 名字在 snapshot 里齐了（打开角色面板 / 想对小爱说的话 / 开始录音 / 发送 / 切换小爱的情绪）。新增 8 个用例文件，vitest **22 文件 / 233 例**、typecheck / eslint / `next build` 全绿 | `d665513` |
+| 2026-10-07 | **B7 a11y / 对比度 / 性能 / 移动端 / CSS 层序**：Modal 焦点陷阱 + 滚动锁 + 焦点归还、Dialog 标题 `useId` + `aria-labelledby`；`Field` 把 `htmlFor`/`aria-labelledby`/`aria-describedby` 注入第一个控件（radiogroup/slider 不是 labelable，光有 htmlFor 关联不上）；分段选择器与主题弹窗改 WAI-ARIA radio 语义（roving tabindex + 方向键），规则抽成纯函数 `lib/radioGroup.ts` + `hooks/useRadioGroup.ts`；hover-only 操作补 `focus-visible` / `coarse`（`@media (hover:none)`）变体；工具栏与开关命中区撑到 44×44（`min-h-11 min-w-11`，视觉尺寸不变）。对比度实测：`--text-muted` 亮色 2.82→4.56、暗色 4.50→5.08，`.gradient-text` 亮色 1.58→3.26（大字 ≥3:1）。`themes.css` 全量收进 `@layer theme` + `:root[data-*]` 提权，`utilities.css` 走「裸规则 + 双写类名」（原因写在文件头：非 layer 规则永远赢过 layer 内规则）——物理调换 import 顺序后 11 个 token × 8 种组合解析结果零差异。移动端 `viewport-fit=cover` + `.app-shell-height/.pb-safe/.pt-safe`，EmojiPicker 改 portal + 按触发元与视口边界动态锚定。打字指示器三个点：`delay-75` 是 **transition**-delay 工具类，对 `animate-bounce` 完全无效 → 改 `[animation-delay:*]`。性能：DialogLayer 不再订阅 messages、useAutoScroll 缓存 matchMedia、AudioVisualizer 渐变提到帧外 + 按 dpr 缩放、reduced-motion 下彻底停樱花 | `390e9f3` |
+| 2026-10-07 | **B1-2 前端半格 + 一处我自己引入的 a11y 错误**：`lib/llmCallsDisplay.ts` 把后端 `llmCalls` 快照渲染成「第 N 轮 · 本轮 x 次（主对话 1 · 事实提取 1 …）｜近 60 分钟共 y 次」，通道清单与中文标签**全部跟后端下发的一致**（前端不抄第二份），后端没这一段时整行不显示而不是排一列 0；设置→系统 顶部加「模型调用计数（排障用）」。⚠️ 上一格我给侧边栏无条件挂了 `role=dialog`/`aria-modal`，桌面端那是常驻静态栏，读屏会以为屏幕被模态挡住 —— 在浏览器查 aria 树时发现，改成只在窄屏抽屉展开时才挂 | `4d7cef4` |
+| 2026-10-07 | **B8 全部 6 项 + B1 剩余 3.5 项 + B2-10 两个尾巴**：新增 `memory/KeywordIndex.js`（分词与 df 增量、idf 提出文档循环、query 词数有界；叙事侧那份「每篇重切 query、还把 hits 再算一遍」的私有实现改共用同一套）、`memory/vectorCodec.js`（磁盘形状换成 base64(Float32LE)，读侧只留 `toVector()` 一个口径并同时吃旧数组；实测 500×1024 维 10.08 MB → 2.78 MB）、`utils/jsonStore.js` 加 `{compact}` 而**默认仍带缩进**（其余 10 个文件字节形状不变）、`prompts/promptBudget.js`（逐块额度 + 整条 system 上限 + 按 TRIM_ORDER 丢块，人设与阶段说明书永不进丢弃表；`clampBlock` 行级裁剪并补回围栏闭合标签）、`utils/microtaskSave.js`（情绪/好感度/性格装上与 MemoryStore 逐字同款的 scheduleSave/flushSave/saveNow 契约：写失败保持脏、无脏数据 flush 返回 true 不写盘）、`core/historyWindow.js`（成对裁剪与字符预算同一份实现，容忍孤立 assistant；动态 system 块移到人设之后、窗口之前）、TaskManager 容量闸门（未完成任务超出上限**转入 `tasks_archive.json` 而不是删除**，已完成只留最近 N 条；新数据文件登记进 `core/backup.js` 清单）、`TriggerRegistry._pruneDedupe` 从「全仓只有定义、零调用」变成开机 + 每次 _prune 都清、`utils/llmCalls.js`（8 通道计数，本轮 + 滚动窗口，缓冲有界，只记通道与时间戳不记文本；经 `getLlmCalls()` 一个出口进 `/config/status` 与 `/health`）、嵌入熔断（`available` 从「配了没」改成「配了且健康」，改配置立即复位）、嵌入 LRU memoize（同轮 query 只走一次网络 —— 这是首字延迟修复不是省钱）、后台事实提取**合并不丢弃**、里程碑发布挪到叙事抽取之后（`_afterNarrativeQueue`：旧写法排在抽取之前而注释写的正好相反，本轮刚抽出的纪念日按天去重挡 24 小时）、narrative 的 `tags/jokeTrigger/sourceEpisodeId` 三个字段补齐写路径（抽取 schema + normalizeAdd 放行 + store 落盘 + 用本轮情节 id 补 sourceEpisodeId）。新增 `scripts/test-audit-b8.mjs`（79 项，与时间无关：数 `_saveState` 调用次数 + 显式 await 微任务，不比耗时不 sleep） | `652e7a2` |
+| 2026-10-07 | **B5-13 依赖升级（最后半格）**：`multer` 1→2.4、`openai` 4→5.23、`express` 4→5.2，**逐个升、每步跑全套**（不混在一个提交里，任一步红就单独回退那一步）。multer 的 diskStorage/fileFilter/limits 不变；openai v5 没踩到流式 chunk 形状与错误类型（流式两条路径由 `test-stream-filter` + `test-audit-b0-http` 真起服务打 SSE 覆盖，错误分类走 `classifyUpstreamError` 读 status/code 不认类名）；express 5 没用到 req.query 赋值、`/static` 走 express.static 而非裸 `*` 通配，所以路由通配符与错误处理签名两条常见坑都没触发。缓存预热在临时目录里做（本机出网只有几十 KB/s，先把 tarball 全下进 npm 缓存再离线装），项目 `node_modules` 与 `package.json` 只在正式那一步动。装完真实进程由 nodemon 自动重启，`GET /health` 回 `ok:true` —— 是活进程验的，不只是测试里起的 | `ee1ade0` |
+| 2026-10-07 | **B4-8 后半（身份卡）**：新增 `core/prompts/identityCard.js` 作为「她是谁」的唯一真源（名字 / 自称 / 对用户的称呼 / 外观 / 三条不可谈判边界，全部 `Object.freeze`），人设段改为 `renderIdentityBlock()` 渲染，主动消息链的人设强化指令不再自带第二份定义（只说「以人设为准」）。审计 PROMPT-08 说的「身份漂移」在代码层的根因就是外观与名字散抄：改一处就出现两个版本的小爱。新增 `scripts/test-audit-b4b.mjs`（11 项，测**渲染出来的 prompt 文本**而不是源码字符串：整条人设里外观只出现 1 次、主动消息链不复述外观）。顺带修一处触屏缺陷：「查看内心独白」原来是 `tabIndex` 的 `<span>`，手机上点一下不会获得焦点 → popover 只有 hover 一条路；改成 `<button>` | 本次提交 |
+
+**B7-④~⑰ 落地要点（2026-10-07）**：
+
+| 点 | 做法与原因 |
+|---|---|
+| 丢消息的结构性原因是**一个共享 timer 变量** | 旧写法 `proactiveTimer` 全局唯一，新消息进来先 `clearTimeout` 上一条 → 「后到的把先到的取消掉」是写在结构里的。改成 `lib/proactiveQueue.ts` 严格 FIFO：**入队永不取消已排队条目**，挂起只是延后出队；正在「思考中」的那条在挂起时退回队首（不是丢弃）。溢出丢的必须是**还没出场的候选**，并回调上报 |
+| 「改最后一条」在并发写入下必错 | 流式增量、收尾、ghosting 全部按 `streamingMessageId` **点名**（FE-03）。点名不到时：增量**丢弃**，收尾允许退回到「最后一条 assistant」—— 少一段渲染能看见，把话写进别人气泡看不见 |
+| 回滚要按**失败的那一步**回滚 | 设置页保存 = `POST /config` + `POST /config/proactive` 两步。全量回滚本地镜像会把已经成功的 API Key 也抹掉，后果是「下次开机不再回灌 Key」——比原本的 bug 更难查。所以按 `configPushed` 分步回滚 |
+| 关闭路径永远不止一条 | X 按钮、Esc、点遮罩。闸门做成独立模块（`lib/dialogGuard.ts`）由 Modal 与调用方**共用一个判定**，而不是逐条传 props —— 传 props 一定会漏掉其中一条（本次实测：只守 X 按钮时 Esc 照样丢改动） |
+| 撤销只能给**真能撤销**的操作 | 删事实 → 6 秒撤销条（内容+重要度重新入库）；删回忆 → 二次确认（后端没有「写回一条回忆」的入口，给一个做不到的撤销比不给更糟：按了没反应会让用户怀疑整个界面） |
+| 「写了没接线」的残件按老规矩接上 | `EmotionEngine.history` 每次结算都落盘却从没被消费过 → 新增 `GET /state/emotion-history` + 面板「情绪走势」（`lib/emotionSeries.ts` 归一 + 早/近窗趋势）。同时定下规矩：**点数不足就不下结论**，趋势句的阈值写在一处 |
+| Tailwind 的 `delay-*` 是 **transition**-delay | `TypingIndicator` 三个点写的 `delay-75 / delay-150` 对 `animate-bounce` 这种 keyframes 动画完全无效，所以永远同步跳。要 `[animation-delay:150ms]` |
+| `@layer` 有两条路，不能混用 | 主题**变量**可以整份收进 `@layer theme`（不与原子类争同一属性）；**装饰类**（`.gradient-text` / `.pb-safe`）收进 layer 就会被任意一个 Tailwind 原子类翻转，只能「裸规则 + 双写类名」提权。另外独立 CSS 文件里不能用 `@layer base/components/utilities` —— 那是 Tailwind 的指令名，v3 会直接报错。层序由「文档里第一次出现的 `@layer` 语句」决定，所以两份声明内容必须一致 |
+| 触屏命中区用 `min-h/min-w` 撑，不用 padding | `min-h-11 min-w-11`（44×44，WCAG 2.5.5）能扩准度而**不改变视觉尺寸与间距**；加 padding 会把那一排按钮的间距一起顶开 |
+| `viewport-fit="cover"` 是 safe-area 生效的前提 | 不 cover 时 `env(safe-area-inset-bottom)` 恒为 0，Home 指示条照样压住输入框 —— 只加 `pb-safe` 不写 cover 是「修了等于没修」的经典一对 |
+| 每秒都变的展示值不能放页面级 state | 录音秒数从 `useVoiceRecorder`（挂在 ChatPage）挪到 `RecordButton` 内部自绘，页面只拿 `startedAt`。原来她每录一秒，整棵聊天树含全部历史气泡重渲染一次（FE-12） |
+| 权限弹窗的 await 窗口是并发入口 | `getUserMedia` 还没回来时 `isRecording` 仍是 `false`，再点一次就开出**第二路麦克风**、两个 `MediaRecorder` 互相覆盖。闸门要在 await **之前**置位（`startingRef`），不能靠 state |
+| B7-12 里 `types/index.ts` 的「可选性统一」**没有做类型大改**，如实记在这里 | 这一格的两条真实危害（老 payload 缺字段 → 白屏；脏 localStorage 值 → 一路带到后端）已经分别由 `lib/padState.ts` 归一与 `lib/storage.ts` 读取即归一消灭。剩下的「`AppState` 与 `ChatResponse` 字段可选性不一致」是两个接口**本来就不同的契约**（`/state` 一定给全、`/chat` 的 SSE 帧靠映射补默认值），把它们并成一个只会把必填项写成可选、然后在每个消费点多写一次判空。这一格按「危害已消除 + 口径写在文档」结案，不为了看起来整齐做类型搅动 |
+
+**B8 / B1 落地要点（2026-10-07）**：
+
+| 点 | 做法 |
+|---|---|
+| 理由只写「卡」不写「贵」 | B8/B1 每一条的注释都写成「一条消息冻结整个进程 / 首字变慢 / 磁盘形状失控」，**不出现省钱口径**。用户明确定过目标函数：最大程度拟人化，成本不作为削减功能的理由（B1-1 因此被取消而不是被实现） |
+| 合并写盘不能改语义 | 微任务去抖（`utils/microtaskSave.js`）而不是定时器去抖：引擎的落盘目标是「本轮结束即一致」，跨请求合并会让 `resetAll` / 档案导出读到中间态。契约逐字照抄 `MemoryStore`：写失败**保持脏标记**、无脏数据时 `flush()` 返回 true 且不产生写盘（B0-6 的可观测性不能在新抽象里丢掉） |
+| 向量压缩要双向兼容 | 读侧只留一个 `toVector()`，同时吃 `number[]` / `Float32Array` / base64 / 脏值→null。老用户磁盘上的 `memory.json` 不改写也能检索，写回时才顺带压缩。**新增读取点禁止再写 `Array.isArray(e.embedding)`** —— 那 8 处各自为政的判定向导火索就在这条上 |
+| 默认写盘形状不许顺手改 | `writeJson` 新增 `{compact}`，但**默认仍是 `null,2` 缩进**：其余 10 个文件不动字节形状，改动面才可控（`test-audit-b8` 里直接断言默认写出来还带缩进） |
+| 「上限」必须同时决定「超了怎么办」 | `TASKS_MAX_ACTIVE` 这种旋钮单独存在就是自欺。未完成任务超出上限时**转入归档文件**（她的承诺不能因为一个数字就消失），已完成才真的清掉。新增数据文件必须登记进 `core/backup.js` 清单 —— b5b 的目录对账测试会替我们守着 |
+| 「写了没接线」的第四种形态 | `_pruneDedupe` 定义了、注释也写了、全仓零调用 —— 这类死代码不会报错，只会在长跑后把文件撑大。凡是「看起来有但没人调」的清理/计数器/字段，落地时都要在同一批里加**调用点 + 断言** |
+| 与时间无关的断言怎么写 | 数 `_saveState` 被调次数并显式 `await Promise.resolve()` 等微任务排空；验「有界」直接量长度/字节；验索引不改变结果就比对两次同样的库输出。绝不 sleep、绝不比耗时（本项目的 CI 是 2 核 runner，睡出来的断言必然假失败） |
+| 依赖升级的做法 | 逐个升、每步跑全套，各自一个提交（任一步红就回退那一步，不混）。慢网络下先在**临时目录**里把 tarball 全下进 npm 缓存，再在项目里离线安装 —— 中间态不污染项目的 `node_modules`。最后用真实进程 `GET /health` 复核，而不是只信测试里起的实例 |
 
 **B7-① 落地要点（2026-10-07）**：
 
