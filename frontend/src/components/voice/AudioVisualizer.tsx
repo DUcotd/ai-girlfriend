@@ -10,7 +10,7 @@ interface AudioVisualizerProps {
 /** 画布的逻辑（CSS）尺寸：改变它只会改清晰度，不会改版面 */
 const CSS_WIDTH = 120;
 const CSS_HEIGHT = 32;
-/** dpr 上限 2：3x 屏上按真实 dpr 铺Backing store 会让每帧代价再翻一倍，肉眼看不出差别 */
+/** dpr 上限 2：3x 屏上按真实 dpr 铺后备缓冲，每帧代价再翻一倍，肉眼看不出差别 */
 const MAX_DPR = 2;
 
 /**

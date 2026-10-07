@@ -416,7 +416,7 @@ export default function MemoryDialog({ onClose }: MemoryDialogProps) {
                                                                         )}
                                                                         <ImportancePicker value={fact.importance} onChange={() => {}} />
                                                                     </div>
-                                                                    <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                                                    <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 coarse:opacity-100">
                                                                         <button
                                                                             onClick={() => handleStartEdit(fact)}
                                                                             aria-label="编辑"

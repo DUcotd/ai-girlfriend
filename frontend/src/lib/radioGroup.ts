@@ -37,7 +37,7 @@ export function tabStopIndex(
     return selectable.length > 0 ? selectable[0] : -1;
 }
 
-/** 沿可选项循环走 dir 步；全组禁用时返回 null */
+/** 沿可选项循环走一步；全组禁用时返回 null */
 export function stepSelectable(
     index: number,
     dir: 1 | -1,
@@ -46,10 +46,12 @@ export function stepSelectable(
     const selectable = selectableIndexes(options);
     if (selectable.length === 0) return null;
     const pos = selectable.indexOf(index);
-    // 焦点落在被禁用的选中项上时，从它右侧的第一个可选项继续
-    const anchor = pos >= 0 ? pos : selectable.findIndex((i) => i > index);
-    if (anchor < 0) return selectable[selectable.length - 1];
-    return selectable[(anchor + dir + selectable.length) % selectable.length];
+    if (pos >= 0) return selectable[(pos + dir + selectable.length) % selectable.length];
+    // 焦点落在被禁用的选中项上（当前值被外部置灰）：直接落到相邻的可选项，
+    // 而不是「先站到禁用项再走一步」——那样会跳过本该去的那一项
+    const nextAfter = selectable.findIndex((i) => i > index);
+    if (dir === 1) return nextAfter >= 0 ? selectable[nextAfter] : selectable[0];
+    return nextAfter > 0 ? selectable[nextAfter - 1] : selectable[selectable.length - 1];
 }
 
 export type RadioKeyResult =

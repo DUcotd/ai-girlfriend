@@ -2,7 +2,6 @@
 
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { cn } from "@/lib/cn";
-import { tabStopIndex } from "@/lib/radioGroup";
 import { useRadioGroup } from "@/hooks/useRadioGroup";
 
 interface SegmentedOption<T extends string> {
@@ -41,13 +40,12 @@ export default function SegmentedControl<T extends string>({
     id,
     ...aria
 }: SegmentedControlProps<T>) {
-    const { refs, onKeyDown } = useRadioGroup({
+    const { refs, onKeyDown, tabIndexFor } = useRadioGroup({
         options,
         value,
         // useRadioGroup 的类型要求必传，这里保持 onChange 可选的对外契约
         onChange: (next) => onChange?.(next),
     });
-    const stop = tabStopIndex(options, value);
 
     return (
         <div
@@ -76,7 +74,7 @@ export default function SegmentedControl<T extends string>({
                         disabled={opt.disabled}
                         // roving tabindex：整组只占一个 Tab 停靠点（选中项），
                         // 其余项靠方向键到达
-                        tabIndex={index === stop ? 0 : -1}
+                        tabIndex={tabIndexFor(index)}
                         onClick={() => onChange?.(opt.value)}
                         onKeyDown={(event: ReactKeyboardEvent<HTMLButtonElement>) =>
                             onKeyDown(event, index)

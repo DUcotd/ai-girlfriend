@@ -79,7 +79,7 @@ export default function Field({ label, hint, error, controlId, children }: Field
                 </p>
             )}
             {error && (
-                <p id={errorId ?? undefined} className="pl-1 text-[10px] text-content-muted">
+                <p id={errorId ?? undefined} className="pl-1 text-[10px] text-status-danger">
                     {error}
                 </p>
             )}
