@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ShieldAlert } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Note from "@/components/ui/Note";
 import Switch from "@/components/ui/Switch";
 import DataBackupPanel from "@/components/settings/DataBackupPanel";
-import { hasAuthToken, setAuthToken } from "@/lib/api";
+import { api, hasAuthToken, setAuthToken } from "@/lib/api";
+import { formatLlmCallsLine } from "@/lib/llmCallsDisplay";
+import type { LlmCallsSnapshot } from "@/lib/llmCallsDisplay";
 import { useToast } from "@/components/ui/Toast";
 import type { CompanionConfig } from "@/lib/storage";
 
@@ -68,8 +70,46 @@ export default function SettingsAdvancedTab({
         }
     };
 
+    /**
+     * 模型调用计数（B1-2）：这轮到底调了几次模型，以前完全不可观测。
+     * 打开这一格时取一次快照即可（不是实时仪表盘），通道清单与中文名都跟后端下发的一致。
+     */
+    const [llmCalls, setLlmCalls] = useState<LlmCallsSnapshot | null>(null);
+    useEffect(() => {
+        let cancelled = false;
+        api.getConfigStatus()
+            .then((data) => {
+                if (!cancelled) setLlmCalls(data.llmCalls ?? null);
+            })
+            .catch(() => {
+                // 后端没起来：下面按「没有计数」如实说明，不显示一排 0
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+    const callsLine = formatLlmCallsLine(llmCalls);
+
     return (
         <div className="space-y-6">
+            <div className="space-y-3">
+                <h4 className="text-xs font-bold text-content-secondary">模型调用计数（排障用）</h4>
+                <div className="rounded-2xl border border-line-subtle bg-surface-2/50 p-4">
+                    {callsLine ? (
+                        <p role="status" className="text-[11px] leading-relaxed text-content-secondary">
+                            {callsLine}
+                        </p>
+                    ) : (
+                        <p className="text-[11px] text-content-muted">
+                            后端还没有下发调用计数（老进程或还没聊过天）。发一条消息后重开这个页签就能看到。
+                        </p>
+                    )}
+                    <p className="mt-1 text-[10px] text-content-muted">
+                        这是「她这轮做了多少事」的观测口，不是配额，也不是省钱开关。
+                    </p>
+                </div>
+            </div>
+
             <div className="space-y-3">
                 <h4 className="text-xs font-bold text-content-secondary">后端访问令牌</h4>
                 <div className="space-y-2 rounded-2xl border border-line-subtle bg-surface-2/50 p-4">

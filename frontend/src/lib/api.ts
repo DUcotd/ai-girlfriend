@@ -360,6 +360,13 @@ export const api = {
       baseUrl: string | null;
       chat?: Partial<import("./chatParams").AdvancedChatConfig>;
       memory?: { episodeCount: number; factCount: number; retrievalMode: string; factsEnabled: boolean };
+      /**
+       * 模型调用计数（B1-2）：本轮 + 滚动窗口内各通道次数。
+       * 后端老进程没这一段时为 undefined —— 界面据此**不显示这一行**，
+       * 而不是显示一排 0（那是谎话）。
+       */
+      llmCalls?: import("./llmCallsDisplay").LlmCallsSnapshot;
+      capacity?: Record<string, unknown>;
       companion?: {
         userEmotionEnabled: boolean;
         narrativeEnabled: boolean;

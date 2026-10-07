@@ -122,9 +122,11 @@ export default function ChatPage() {
 
       {/* 侧边栏：角色面板（玻璃卡片悬浮，桌面 360px） */}
       <div
-        role="dialog"
-        aria-modal={isSidebarOpen || undefined}
-        aria-label="小爱的状态"
+        // role/aria-modal 只在它**真的是抽屉**（窄屏且展开）时才挂：
+        // 桌面端这块是常驻静态栏，标成 dialog 会让读屏以为屏幕被模态挡住了
+        role={isSidebarOpen ? "dialog" : undefined}
+        aria-modal={isSidebarOpen ? true : undefined}
+        aria-label={isSidebarOpen ? "小爱的状态" : undefined}
         className={`fixed md:static inset-y-0 left-0 z-40 w-full md:w-[360px] md:shrink-0 bg-surface-1/80 md:bg-transparent backdrop-blur-xl md:backdrop-blur-none transition-transform duration-300 transform ${
           isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         } p-4 pt-[calc(1rem+env(safe-area-inset-top))] md:p-6 md:pr-0 flex flex-col`}
