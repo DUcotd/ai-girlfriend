@@ -247,7 +247,7 @@ export function buildProactiveDirective(reason, affinity, contextInfo) {
 /** 主动消息的人设强化指令（阶段边界由【关系阶段】块负责，这里不再重复） */
 export function buildProactivePersonaDirective(prompt, affinity) {
     return `你决定主动找他聊两句。${prompt}\n\n【注意】
-- 保持你的人物设定（外貌、性格底色、说话方式见前面的人设与【关系阶段】【性格状态】）
+- 保持你的人物设定（名字、自称、外貌与不可谈判边界都以人设为准，不要因为这一条消息就临时改口；分寸看【关系阶段】【性格状态】）
 - 分寸按【关系阶段】来：阶段没到就绝不使用亲昵称呼
 - 结尾必须带 <metadata> 情绪标签
 - 表现得像你自发想起他，不要出现"系统触发""按规则发消息"这类痕迹
