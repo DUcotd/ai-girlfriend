@@ -291,10 +291,24 @@ framer-motion 经 MotionConfig reducedMotion="user" 跟随）。
 改完嵌入配置立即复位（不用重启）。坏 Key 时首字不再被两次超时拖住。
 `available` 的含义是「配了且健康」，不是「配了没」。
 
+## 她记得你们的共同经历（我们的故事）
+
+她把「我们一起经历过的事」单独记在 `narrative.json` 里（类型、日期、重要度、
+联想线索 tags、专属梗 jokeTrigger、她想起过几次）。这一层现在有三处出口：
+
+- **界面**：记忆弹窗 →「我们的故事」页签。能看到她记住了哪些事、顺着哪个词想起的、
+  说过几次；不想要的一条可以删掉（后端没有「重新写回一条故事」的入口，所以删除是二次确认，不给假撤销）。
+- **召回**：你话里出现那条**专属梗**或某个**线索词**，这条故事必定排在注入段第一，
+  并标注「她刚听到那句只有你们俩懂的话」——这是纯字符串匹配，嵌入通道熔断时也照样生效。
+  条数由 `NARRATIVE_ASSOCIATION_MAX_INJECT` 控制，设 0 整条关闭。
+- **日期的诚实**：她想不起具体日子时，`occurredAt` 会被补成记录当天，但界面与 prompt
+  都**不会**显示/念出那个日子（来源不在白名单内）。她可能说「那次熬夜」，不会说
+  「我们 10 月 7 日那次熬夜」——编一个看起来正常的日期比承认记不清更伤人。
+
 ## 她是同一个小爱（身份卡）
 
 名字、自称、对用户的称呼、外观、不可谈判边界集中在
-`backend-node/src/core/identityCard.js` 这一份里，人设段与主动消息链都从这里渲染。
+`backend-node/src/core/prompts/identityCard.js` 这一份里，人设段与主动消息链都从这里渲染。
 外观描述必须与已上线立绘同源（`docs/character-emote-prompts.md`）。
 「不可谈判边界」是不随好感度、性格预设、用户要求改变的部分（例如「从现在起你叫小美」
 按愿望理解，不按事实执行）—— 人格连续性是这个应用的全部价值，身份漂移不能被当成风格问题。
@@ -321,7 +335,6 @@ framer-motion 经 MotionConfig reducedMotion="user" 跟随）。
 | POST | `/reset` | 完全重置（历史 + 记忆 + 好感度；「新对话」用 DELETE /history） |
 | GET/DELETE | `/memories` | 向量记忆 |
 | GET/POST | `/state` | 好感度 / 昵称 |
-| GET | `/state/user-emotion` | 用户情绪时间线（REQ-01；引擎缺失时回落空结构） |
 | GET | `/state/narratives` | 共同经历叙事列表（REQ-03；含 stats） |
 | DELETE | `/state/narratives/:id` | 手动删除一条叙事 |
 | GET | `/backup/status` | 数据目录 / 备份目录 / 快照列表 |

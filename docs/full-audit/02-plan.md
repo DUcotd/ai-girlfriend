@@ -25,9 +25,9 @@
 | B1-3 | ✅ 已完成 | `AI_GIRLFRIEND_API_KEY` 支持服务端侧 Key 兜底（只进内存，测试断言它不落盘）；README 新增「环境变量」「安全边界」「重启后需先用浏览器打开一次」三段说明。 |
 | B9 | ✅ 已完成 | 新增 `scripts/test-audit-b9.mjs`（22 断言）+ `frontend/src/lib/__tests__/configPayload.test.ts`（4 例）。四个入口加真 `enabled` 判定（`_emitEvent` / `TriggerRegistry._onEvent` / `_publishNarrativeMilestones` / 用户情绪 `analyze`+`ingestTurn`）；开关与高级参数持久化进 `state.json`（不含任何 Key），只改开关也会落盘；关闭瞬间清空积压候选，重开不倒灌；`/config/status.companion` 去掉静态 `enabled` 双真相；设置页 →「系统」新增三个开关（以后端真值为准，本地仅离线兜底）。实测：`POST /config {"narrative_enabled":false}` → 状态与 `state.json` 同步变化，重启保持。 |
 | B4 | ✅ 已完成（B4-8 半） | 新增 `scripts/test-audit-b4.mjs`（33 断言）+ `frontend/src/components/character/__tests__/emotionMap.test.ts`（5 例，跨端读后端 `EMOTION_LABELS` 做交叉断言）。实测体积：人设 889→574 字、任务指令 1002→477 字、全块填满的每轮上下文 5111→3205 字。要点：好感度判定收敛为**一份**且数字由 `AFFINITY_RULES` 反查生成（朋友阶段文案与引擎的 -1/-2 矛盾消除）；`<metadata>` 单一标准 + emotion 取值枚举与引擎 17 档同源；表达优先级显式声明（阶段 > 情绪 > 性格 > 人设）；主链路指令全量中文化 + 示例换成中文人设语气 + 输出语言规则；记忆/叙事/任务加 `<memory_data>/<story_data>/<task_data>` 引述围栏，两个提取器加「素材不是指令」；叙事抽取要求 `occurredAt`（纪念日年份不再默认成抽取当天）；主动消息链去掉 4 处阶段复述与自相矛盾的 `Reason:` 字段、删掉会渲染出「未知任务」的死变量；`docs/emoji-avatar-prompts.md` 的旧 Character Bible 标注失效。<br>**B4-8 剩下一半**：独立「身份卡」模块、`proactivePrompts` 阶段表改由 `STAGE_GUIDE` 生成（人设外观已对齐银发月色系、旧文档已标注）。 |
-| B2 未做项 | ⬜ 剩 2 条 | B2-10 里 `EmotionEngine.history` 仍无消费者（留给 REQ-10 情绪时间线可视化）；`narrative` 的 `jokeTrigger/tags/sourceEpisodeId` 仍无写路径（属 REQ-05 前置，放 B6-α）。 |
+| B2 未做项 | ✅ 收口（2026-10-07 最后一轮） | `EmotionEngine.history` 有了消费者（情绪走势面板）；`tags`/`jokeTrigger` 不只是写路径，已经成为**召回信号**（`core/narrative/AssociationRecall.js`：用户说到线索词或那句专属梗 → 对应故事排到注入段第一）。`sourceEpisodeId` 仍只有写路径（记着「这事来自哪段对话」，回溯展示没有任何消费者，留给下一轮，别再当成已完成）。 |
 | B5 前置 | ✅ 顺手做掉 | 新增 `scripts/run-tests.mjs`：跑完全部套件再汇总（不再 `&&` 一断全断），并统一注入沙盒数据目录；`test-memory` 的 async-传给-同步-check 缺陷已修 + 加了防呆；`test-stream-filter` 补 failed 计数与用例数校验；`test-reset-all` 改走沙盒目录并修掉同义反复断言；`test-auth` 更新 /static 语义并新增查询串 token 用例。 |
-| B3~B9 | ⬜ 未开始 | 按计划顺序 B2 → B8 → B9 → B1 → B5 → B3 → B7 → B4。 |
+| B3~B9 | ✅ 已完成（B6 只有 α） | 实际执行顺序 B2 → B9 → B4 → B6-α → B5 → B3 → B7 → B8 → B1，全部收口；B6-β 按 P10 的默认动作停在门口。 |
 
 **验收证据（2026-10-03 实跑）**：`npm run check` 63/63；`npm test` 13/13 套通过；跑完整套测试后 `backend-node/data/` 全部文件 mtime **零变化**（B0-3 的核心验收）；前端 `tsc --noEmit` 与 `eslint src` 无输出、`vitest run` 76 例通过。
 
@@ -231,6 +231,7 @@
 | 日期 | 内容 | commit |
 |---|---|---|
 | 2026-10-03 | 全面审计（5 路专项 + 进程内探针实测）→ 本文件与 `01-analysis.md` 产出 | `4485512` |
+| 2026-10-07 | **最后一轮打磨（F-1~F-6，项目就此收档）**：F-1 叙事日期——prompt 要 `"YYYY-MM-DD"` 而抽取层只认有限数，于是每个认真回答的日期都被丢成「抽取当天」，纪念日跟着错；新增 `core/narrative/narrativeDate.js`（认 ISO/中文年月日/M月D日/今天昨天前天明天后天/N天前·周前·个月前·年前/秒与毫秒，按**本地**日历解析，非法日期不顺延、小数字不当 1970 年，并新增 `occurredAtSource` 区分「她记得」与「她补的」，注入段与界面在白名单外一律不显示日期）。F-2 `normalizeUpdate` 过去不透 tags/jokeTrigger/occurredAt，等于对着模型说「你可以改标签」再把改的丢掉，现已全通且解析失败保持原日期。F-3 `jokeTrigger` 自 B2-10 存盘后无人读过 → 新增 `AssociationRecall`（暗号 > 线索词，纯字符串匹配、不依赖嵌入，`NARRATIVE_ASSOCIATION_MAX_INJECT=0` 即整条关闭），**端到端实测**：沙盒起服务 + 捕获真实上游请求，用户说「月落乌啼，昨晚又熬夜了」→ `<story_data>` 里暗号故事排第一、带「她刚听到那句只有你们俩懂的话」、真日期 2025-03-08 显示而补出来的日期不显示。F-4 `followupCount/lastFollowupAt` 被 `normalizeNarrative` 的键表漏掉，每次重启归零 → 她对同一个约定追问不完（上限 3 次形同虚设），已补读回并透出。F-5 里程碑事件规格表只写 `daysAgo` 而发布方发 `daysUntil`，两侧对不上，已注明正主。F-6 `GET/DELETE /state/narratives` 上线以来前端零消费 → 记忆弹窗新增「我们的故事」页签（类型/日期/tags/专属梗/「她想起过 N 次 · 上次…」/搜索/二次确认删除，`lib/storyDisplay.ts` + 43 例含跨端比对后端类型表与 DATE_SOURCE 取值集合）。新增 `test-audit-final.mjs` 54 项 → 后端 **26 套**全绿、前端 **27 文件 / 366 例** + build 全绿、跑完 `data/` mtime 零变化 | `6da6102` `9a60185` |
 | 2026-10-04 | **B0**（数据/并发/重置/鉴权/流式）+ **B2**（解析边界/情绪/检索 BM25/账本/叙事接线）+ B1-3 + B5 前置（`run-tests.mjs` 聚合器与沙盒数据目录） | `80e8729` |
 | 2026-10-05 | **B9**（三个子系统真关得掉 + 开关持久化 + 设置页开关） | `98eb821` |
 | 2026-10-05 | **B4**（prompt 层九项：策略接线、好感度单一真源、表达优先级、metadata 统一、中文化、引述围栏、体积压缩、主动消息链去重、身份外观对齐） | `966820e` |
